@@ -1,0 +1,16 @@
+[package]
+name = "era"
+description = "ERA archive format parser for Halo Wars"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ecf.workspace = true
+byteorder.workspace = true
+flate2.workspace = true
+thiserror.workspace = true
+sha1.workspace = true
+

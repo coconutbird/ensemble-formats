@@ -1,0 +1,16 @@
+[package]
+name = "era-cli"
+description = "CLI tool for ERA archives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "era"
+path = "src/main.rs"
+
+[dependencies]
+era.workspace = true
+
