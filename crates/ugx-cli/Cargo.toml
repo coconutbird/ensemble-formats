@@ -1,0 +1,17 @@
+[package]
+name = "ugx-cli"
+description = "Command-line tool for UGX (Unit Graphics) model files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ugx"
+path = "src/main.rs"
+
+[dependencies]
+ugx = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }

@@ -4,8 +4,10 @@ members = [
     "crates/ecf",
     "crates/era",
     "crates/xmb",
+    "crates/ugx",
     "crates/era-cli",
     "crates/xmb-cli",
+    "crates/ugx-cli",
 ]
 
 [workspace.package]
@@ -20,6 +22,8 @@ authors = ["coconutbird"]
 ecf = { path = "crates/ecf" }
 era = { path = "crates/era" }
 xmb = { path = "crates/xmb" }
+ugx = { path = "crates/ugx" }
+ugx-cli = { path = "crates/ugx-cli" }
 
 # External dependencies
 byteorder = "1.5"
@@ -28,4 +32,5 @@ thiserror = "2.0"
 sha1 = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 quick-xml = "0.37"
+half = "2.4"
 

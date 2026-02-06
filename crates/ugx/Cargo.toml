@@ -1,0 +1,19 @@
+[package]
+name = "ugx"
+description = "UGX (Unit Graphics) model format parser for Halo Wars"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ecf = { workspace = true }
+byteorder = { workspace = true }
+thiserror = { workspace = true }
+half = { workspace = true }
+gltf-json = "1.4"
+serde_json = "1.0"
+base64 = "0.22"
+
+[dev-dependencies]
