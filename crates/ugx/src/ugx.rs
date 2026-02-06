@@ -23,6 +23,7 @@ use crate::vertex_element::VertexElementType;
 const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
 const ECF_IB_CHUNK_ID: u64 = 0x00000701;
 const ECF_VB_CHUNK_ID: u64 = 0x00000702;
+const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
 #[allow(dead_code)]
 const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 
@@ -38,8 +39,10 @@ pub struct UgxGeom {
     pub bounds: AABB,
     /// Materials.
     pub materials: Vec<Material>,
-    /// Bones.
+    /// Bones (from cached data chunk 0x700).
     pub bones: Vec<Bone>,
+    /// Granny bone data (from granny chunk 0x703) - contains inverse world matrices.
+    pub granny_bones: Vec<GrannyBone>,
     /// Per-bone bounding boxes.
     pub bone_bounds: Vec<AABB>,
     /// Mesh sections.
@@ -58,6 +61,19 @@ pub struct UgxGeom {
     pub all_sections_skinned: bool,
     /// Use global bones?
     pub global_bones: bool,
+}
+
+/// Bone data from granny chunk (0x703).
+/// This has the correct inverse world matrix for positioning bones.
+#[derive(Debug, Clone, Default)]
+pub struct GrannyBone {
+    /// Bone name.
+    pub name: String,
+    /// Parent bone index (-1 for root).
+    pub parent_index: i32,
+    /// Inverse world matrix (4x4) - read from offset 80 in granny bone struct.
+    /// To get world matrix: invert then transpose this matrix.
+    pub inverse_world_matrix: Matrix4x4,
 }
 
 impl UgxGeom {
@@ -87,6 +103,9 @@ impl UgxGeom {
             .read_chunk_data_by_id(ECF_IB_CHUNK_ID)
             .map_err(|_| Error::MissingChunk("index_buffer (0x701)"))?;
 
+        // Read granny chunk (optional - contains bone inverse world matrices)
+        let granny_data = ecf.read_chunk_data_by_id(ECF_GRANNY_CHUNK_ID).ok();
+
         // Convert index buffer from bytes to u16
         let mut ib_cursor = Cursor::new(&ib_data);
         let num_indices = ib_data.len() / 2;
@@ -96,12 +115,13 @@ impl UgxGeom {
         }
 
         // Parse cached data (pass the full slice for offset resolution)
-        Self::parse_cached_data(&cached_data, vertex_buffer, index_buffer)
+        Self::parse_cached_data(&cached_data, granny_data, vertex_buffer, index_buffer)
     }
 
     /// Parse the cached data chunk containing header, sections, bones, etc.
     fn parse_cached_data(
         data: &[u8],
+        granny_data: Option<Vec<u8>>,
         vertex_buffer: Vec<u8>,
         index_buffer: Vec<u16>,
     ) -> Result<Self> {
@@ -165,8 +185,15 @@ impl UgxGeom {
         // Sections array
         let sections = Self::read_packed_sections(data, &mut cursor)?;
 
-        // Bones array
+        // Bones array (from cached data)
         let bones = Self::read_packed_bones(data, &mut cursor)?;
+
+        // Parse granny bones if available (these have the correct inverse world matrices)
+        let granny_bones = if let Some(ref granny) = granny_data {
+            Self::parse_granny_bones(granny)?
+        } else {
+            Vec::new()
+        };
 
         // Accessories array (skip for now - complex format)
         let accessories_count = cursor.read_u32::<LittleEndian>()?;
@@ -192,6 +219,7 @@ impl UgxGeom {
             bounds,
             materials,
             bones,
+            granny_bones,
             bone_bounds,
             sections,
             vertex_buffer,
@@ -498,5 +526,84 @@ impl UgxGeom {
     /// Get total triangle count across all sections.
     pub fn total_triangles(&self) -> usize {
         self.sections.iter().map(|s| s.num_tris as usize).sum()
+    }
+
+    /// Parse granny bones from granny chunk (0x703).
+    ///
+    /// Granny skeleton format (from Python reference):
+    /// - Skeleton offset at granny[52:60] (uint64)
+    /// - At skelOffs + 24: bonesLen (uint32), then at skelOffs + 28: bonesOffs (uint64)
+    /// - Each bone is 164 bytes:
+    ///   - +0x00: nameOffs (uint64)
+    ///   - +0x08: parent (int32)
+    ///   - +0x50 (80): InverseWorld4x4 matrix (16 floats = 64 bytes)
+    fn parse_granny_bones(granny: &[u8]) -> Result<Vec<GrannyBone>> {
+        if granny.len() < 60 {
+            return Ok(Vec::new());
+        }
+
+        // Read skeleton offset from granny[52:60]
+        let mut cursor = Cursor::new(&granny[52..60]);
+        let skel_offs = cursor.read_u64::<LittleEndian>()? as usize;
+
+        if skel_offs + 36 > granny.len() {
+            return Ok(Vec::new());
+        }
+
+        // Read bonesLen and bonesOffs from skelOffs + 24
+        let mut cursor = Cursor::new(&granny[skel_offs + 24..skel_offs + 36]);
+        let bones_len = cursor.read_u32::<LittleEndian>()? as usize;
+        let bones_offs = cursor.read_u64::<LittleEndian>()? as usize;
+
+        if bones_len == 0 {
+            return Ok(Vec::new());
+        }
+
+        const GRANNY_BONE_SIZE: usize = 164;
+        let mut bones = Vec::with_capacity(bones_len);
+
+        for i in 0..bones_len {
+            let bone_start = bones_offs + (i * GRANNY_BONE_SIZE);
+            if bone_start + GRANNY_BONE_SIZE > granny.len() {
+                break;
+            }
+
+            // +0x00: nameOffs (uint64)
+            let mut cursor = Cursor::new(&granny[bone_start..bone_start + 12]);
+            let name_offs = cursor.read_u64::<LittleEndian>()? as usize;
+            // +0x08: parent (int32)
+            let parent_index = cursor.read_i32::<LittleEndian>()?;
+
+            // Read name from offset
+            let name = if name_offs < granny.len() {
+                Self::read_null_terminated_string(&granny[name_offs..])?
+            } else {
+                String::new()
+            };
+
+            // +0x50 (80): InverseWorld4x4 matrix (16 floats)
+            let matrix_start = bone_start + 80;
+            if matrix_start + 64 > granny.len() {
+                break;
+            }
+            let mut cursor = Cursor::new(&granny[matrix_start..matrix_start + 64]);
+
+            // Read 16 floats as row-major matrix (matches Python: matUnpack[0:4], [4:8], [8:12], [12:16])
+            let mut rows = [[0.0f32; 4]; 4];
+            for row in &mut rows {
+                for col in row {
+                    *col = cursor.read_f32::<LittleEndian>()?;
+                }
+            }
+            let inverse_world_matrix = Matrix4x4 { rows };
+
+            bones.push(GrannyBone {
+                name,
+                parent_index,
+                inverse_world_matrix,
+            });
+        }
+
+        Ok(bones)
     }
 }

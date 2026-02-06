@@ -106,6 +106,15 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             "root".to_string()
         };
         println!("  [{}] {} ({})", i, bone.name, parent);
+        // Print matrix for first 3 bones
+        if i < 3 {
+            let m = &bone.model_to_bone.rows;
+            println!("      Matrix (model_to_bone):");
+            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[0][0], m[0][1], m[0][2], m[0][3]);
+            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[1][0], m[1][1], m[1][2], m[1][3]);
+            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[2][0], m[2][1], m[2][2], m[2][3]);
+            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[3][0], m[3][1], m[3][2], m[3][3]);
+        }
     }
     println!();
 
@@ -125,13 +134,18 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         println!("       NormType: {:?}", section.base_vert_packer.normal_type);
         println!("       TangentType: {:?}", section.base_vert_packer.tangent_type);
         println!("       UV[0]Type: {:?}", section.base_vert_packer.uv_types[0]);
+        println!("       IndicesType: {:?}", section.base_vert_packer.indices_type);
+        println!("       WeightsType: {:?}", section.base_vert_packer.weights_type);
 
         // Print first 3 unpacked vertices for debugging
         if section.num_verts > 0 && !section.base_vert_packer.pack_order.is_empty() {
             if let Ok(verts) = geom.unpack_section_vertices(i) {
                 println!("       First 3 vertices:");
                 for (vi, v) in verts.iter().take(3).enumerate() {
-                    println!("         [{}] pos=[{:.3}, {:.3}, {:.3}]", vi, v.position[0], v.position[1], v.position[2]);
+                    println!("         [{}] pos=[{:.3}, {:.3}, {:.3}] bones=[{},{},{},{}] weights=[{:.3},{:.3},{:.3},{:.3}]",
+                        vi, v.position[0], v.position[1], v.position[2],
+                        v.bone_indices[0], v.bone_indices[1], v.bone_indices[2], v.bone_indices[3],
+                        v.bone_weights[0], v.bone_weights[1], v.bone_weights[2], v.bone_weights[3]);
                 }
             }
         }
