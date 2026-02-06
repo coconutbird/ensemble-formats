@@ -142,13 +142,41 @@ impl Material {
     }
 }
 
-/// Quaternion + translation transform.
+/// Quaternion + translation transform (used in non-packed format).
 #[derive(Debug, Clone, Default)]
 pub struct QForm {
     /// Quaternion [x, y, z, w].
     pub rotation: [f32; 4],
     /// Translation [x, y, z].
     pub translation: [f32; 3],
+}
+
+/// 4x4 transformation matrix (used in packed format).
+/// Row-major order: row[0] = [m00, m01, m02, m03], etc.
+#[derive(Debug, Clone)]
+pub struct Matrix4x4 {
+    /// Matrix rows.
+    pub rows: [[f32; 4]; 4],
+}
+
+impl Default for Matrix4x4 {
+    fn default() -> Self {
+        Self {
+            rows: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        }
+    }
+}
+
+impl Matrix4x4 {
+    /// Get translation from the matrix (row 3, columns 0-2).
+    pub fn translation(&self) -> [f32; 3] {
+        [self.rows[3][0], self.rows[3][1], self.rows[3][2]]
+    }
 }
 
 impl QForm {
@@ -175,17 +203,8 @@ pub struct Bone {
     pub name: String,
     /// Parent bone index (-1 for root).
     pub parent_index: i32,
-    /// Model-to-bone transform.
-    pub model_to_bone: QForm,
-}
-
-impl Bone {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
-        let name = read_string64(reader)?;
-        let parent_index = reader.read_i32::<LittleEndian>()?;
-        let model_to_bone = QForm::read(reader)?;
-        Ok(Self { name, parent_index, model_to_bone })
-    }
+    /// Model-to-bone transform (4x4 matrix in packed format).
+    pub model_to_bone: Matrix4x4,
 }
 
 /// Axis-aligned bounding box.

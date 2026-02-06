@@ -379,9 +379,15 @@ impl UgxGeom {
         Ok(bones)
     }
 
-    /// Read a single packed bone.
+    /// Read a single packed bone (80 bytes).
+    ///
+    /// Bone layout:
+    /// - +0x00: mName (uint64 offset to null-terminated string)
+    /// - +0x08: mModelToBone (4x4 matrix = 64 bytes)
+    /// - +0x48: mParentIndex (int32)
+    /// - +0x4C: padding (4 bytes)
     fn read_packed_bone(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Bone> {
-        // Packed string for name (uint64 offset)
+        // +0x00: Packed string for name (uint64 offset)
         let name_offset = cursor.read_u64::<LittleEndian>()? as usize;
         let name = if name_offset == 0xFFFFFFFFFFFFFFFF || name_offset >= data.len() {
             String::new()
@@ -389,23 +395,20 @@ impl UgxGeom {
             Self::read_null_terminated_string(&data[name_offset..])?
         };
 
-        let parent_index = cursor.read_i32::<LittleEndian>()?;
-        let _padding = cursor.read_u32::<LittleEndian>()?; // Alignment padding
+        // +0x08: Transform matrix (4x4 floats = 64 bytes)
+        let mut rows = [[0.0f32; 4]; 4];
+        for row in &mut rows {
+            for col in row {
+                *col = cursor.read_f32::<LittleEndian>()?;
+            }
+        }
+        let model_to_bone = Matrix4x4 { rows };
 
-        // QForm: quaternion (4 floats) + translation (3 floats)
-        let model_to_bone = QForm {
-            rotation: [
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-            ],
-            translation: [
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-            ],
-        };
+        // +0x48: Parent index (int32)
+        let parent_index = cursor.read_i32::<LittleEndian>()?;
+
+        // +0x4C: Padding (4 bytes)
+        let _padding = cursor.read_u32::<LittleEndian>()?;
 
         Ok(Bone {
             name,
