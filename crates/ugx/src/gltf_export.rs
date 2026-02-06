@@ -1,12 +1,13 @@
 //! glTF export for UGX models.
 //!
-//! Converts UGX geometry to glTF 2.0 format.
+//! Converts UGX geometry to glTF 2.0 format with skeleton support.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use gltf_json as json;
 use json::validation::Checked::Valid;
 
 use crate::error::Result;
+use crate::types::Bone;
 use crate::ugx::UgxGeom;
 use crate::univert_packer::UnpackedVertex;
 
@@ -86,6 +87,9 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
         }
     }
 
+    // Check if we have bones and should include skeleton
+    let has_skeleton = options.include_skeleton && !geom.bones.is_empty();
+
     // Process each section as a mesh primitive
     for (section_idx, section) in geom.sections.iter().enumerate() {
         let vertices = geom.unpack_section_vertices(section_idx)?;
@@ -103,6 +107,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
             &mut accessors,
             &mut buffer_views,
             options.include_materials && !materials_json.is_empty(),
+            has_skeleton,
         );
 
         meshes.push(json::Mesh {
@@ -132,24 +137,82 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
         }
     };
 
-    // Create scene with all meshes
+    // Create skeleton nodes and skin if we have bones
     let mut nodes = Vec::new();
-    for (i, _mesh) in meshes.iter().enumerate() {
-        nodes.push(json::Node {
-            camera: None,
-            children: None,
+    let mut skins = Vec::new();
+    let skin_index: Option<json::Index<json::Skin>>;
+
+    if has_skeleton {
+        // Create bone nodes first (they come before mesh nodes)
+        let bone_node_start = 0u32;
+        let (bone_nodes, ibm_accessor_idx) = create_skeleton_nodes(
+            &geom.bones,
+            &mut buffer_data,
+            &mut accessors,
+            &mut buffer_views,
+        );
+        nodes.extend(bone_nodes);
+
+        // Find root bones (bones with parent_index == -1)
+        let root_bones: Vec<u32> = geom
+            .bones
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.parent_index < 0)
+            .map(|(i, _)| bone_node_start + i as u32)
+            .collect();
+
+        // Create skin
+        let joint_indices: Vec<json::Index<json::Node>> = (0..geom.bones.len() as u32)
+            .map(|i| json::Index::new(bone_node_start + i))
+            .collect();
+
+        skins.push(json::Skin {
             extensions: None,
             extras: json::Extras::default(),
-            matrix: None,
-            mesh: Some(json::Index::new(i as u32)),
-            rotation: None,
-            scale: None,
-            translation: None,
-            skin: None,
-            weights: None,
+            inverse_bind_matrices: Some(json::Index::new(ibm_accessor_idx)),
+            joints: joint_indices,
+            skeleton: root_bones.first().map(|&i| json::Index::new(i)),
         });
+        skin_index = Some(json::Index::new(0));
+
+        // Create mesh nodes (after bone nodes)
+        for (i, _mesh) in meshes.iter().enumerate() {
+            nodes.push(json::Node {
+                camera: None,
+                children: None,
+                extensions: None,
+                extras: json::Extras::default(),
+                matrix: None,
+                mesh: Some(json::Index::new(i as u32)),
+                rotation: None,
+                scale: None,
+                translation: None,
+                skin: skin_index.clone(),
+                weights: None,
+            });
+        }
+    } else {
+        skin_index = None;
+        // No skeleton - just create mesh nodes
+        for (i, _mesh) in meshes.iter().enumerate() {
+            nodes.push(json::Node {
+                camera: None,
+                children: None,
+                extensions: None,
+                extras: json::Extras::default(),
+                matrix: None,
+                mesh: Some(json::Index::new(i as u32)),
+                rotation: None,
+                scale: None,
+                translation: None,
+                skin: None,
+                weights: None,
+            });
+        }
     }
 
+    // Scene includes all nodes
     let node_indices: Vec<_> = (0..nodes.len() as u32).map(json::Index::new).collect();
 
     let scene = json::Scene {
@@ -166,6 +229,10 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
     root.nodes = nodes;
     root.scenes = vec![scene];
     root.scene = Some(json::Index::new(0));
+
+    if !skins.is_empty() {
+        root.skins = skins;
+    }
 
     if options.include_materials && !materials_json.is_empty() {
         root.materials = materials_json;
@@ -203,6 +270,7 @@ fn create_primitive(
     accessors: &mut Vec<json::Accessor>,
     buffer_views: &mut Vec<json::buffer::View>,
     has_materials: bool,
+    has_skeleton: bool,
 ) -> json::mesh::Primitive {
     let mut attributes = std::collections::BTreeMap::new();
 
@@ -341,6 +409,90 @@ fn create_primitive(
         );
     }
 
+    // Write bone indices and weights if we have a skeleton
+    if has_skeleton {
+        // JOINTS_0 - bone indices as unsigned bytes
+        let joints_view_idx = buffer_views.len() as u32;
+        let joints_offset = buffer_data.len();
+        for v in vertices {
+            buffer_data.extend_from_slice(&v.bone_indices);
+        }
+        let joints_byte_length = buffer_data.len() - joints_offset;
+
+        buffer_views.push(json::buffer::View {
+            buffer: json::Index::new(0),
+            byte_length: json::validation::USize64(joints_byte_length as u64),
+            byte_offset: Some(json::validation::USize64(joints_offset as u64)),
+            byte_stride: Some(json::buffer::Stride(4)),
+            extensions: None,
+            extras: json::Extras::default(),
+            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
+        });
+
+        let joints_accessor_idx = accessors.len() as u32;
+        accessors.push(json::Accessor {
+            buffer_view: Some(json::Index::new(joints_view_idx)),
+            byte_offset: Some(json::validation::USize64(0)),
+            count: json::validation::USize64(vertices.len() as u64),
+            component_type: Valid(json::accessor::GenericComponentType(
+                json::accessor::ComponentType::U8,
+            )),
+            extensions: None,
+            extras: json::Extras::default(),
+            type_: Valid(json::accessor::Type::Vec4),
+            min: None,
+            max: None,
+            normalized: false,
+            sparse: None,
+        });
+        attributes.insert(
+            Valid(json::mesh::Semantic::Joints(0)),
+            json::Index::new(joints_accessor_idx),
+        );
+
+        // WEIGHTS_0 - bone weights as floats
+        let weights_view_idx = buffer_views.len() as u32;
+        let weights_offset = buffer_data.len();
+        for v in vertices {
+            buffer_data.extend_from_slice(&v.bone_weights[0].to_le_bytes());
+            buffer_data.extend_from_slice(&v.bone_weights[1].to_le_bytes());
+            buffer_data.extend_from_slice(&v.bone_weights[2].to_le_bytes());
+            buffer_data.extend_from_slice(&v.bone_weights[3].to_le_bytes());
+        }
+        let weights_byte_length = buffer_data.len() - weights_offset;
+
+        buffer_views.push(json::buffer::View {
+            buffer: json::Index::new(0),
+            byte_length: json::validation::USize64(weights_byte_length as u64),
+            byte_offset: Some(json::validation::USize64(weights_offset as u64)),
+            byte_stride: Some(json::buffer::Stride(16)),
+            extensions: None,
+            extras: json::Extras::default(),
+            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
+        });
+
+        let weights_accessor_idx = accessors.len() as u32;
+        accessors.push(json::Accessor {
+            buffer_view: Some(json::Index::new(weights_view_idx)),
+            byte_offset: Some(json::validation::USize64(0)),
+            count: json::validation::USize64(vertices.len() as u64),
+            component_type: Valid(json::accessor::GenericComponentType(
+                json::accessor::ComponentType::F32,
+            )),
+            extensions: None,
+            extras: json::Extras::default(),
+            type_: Valid(json::accessor::Type::Vec4),
+            min: None,
+            max: None,
+            normalized: false,
+            sparse: None,
+        });
+        attributes.insert(
+            Valid(json::mesh::Semantic::Weights(0)),
+            json::Index::new(weights_accessor_idx),
+        );
+    }
+
     // Write indices
     let idx_view_idx = buffer_views.len() as u32;
     let idx_offset = buffer_data.len();
@@ -391,6 +543,108 @@ fn create_primitive(
         mode: Valid(json::mesh::Mode::Triangles),
         targets: None,
     }
+}
+
+/// Create skeleton nodes and inverse bind matrices accessor.
+/// Returns (bone_nodes, inverse_bind_matrices_accessor_index).
+fn create_skeleton_nodes(
+    bones: &[Bone],
+    buffer_data: &mut Vec<u8>,
+    accessors: &mut Vec<json::Accessor>,
+    buffer_views: &mut Vec<json::buffer::View>,
+) -> (Vec<json::Node>, u32) {
+    let mut nodes = Vec::with_capacity(bones.len());
+
+    // Build child lists for each bone
+    let mut children_map: std::collections::HashMap<i32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for (i, bone) in bones.iter().enumerate() {
+        if bone.parent_index >= 0 {
+            children_map
+                .entry(bone.parent_index)
+                .or_default()
+                .push(i as u32);
+        }
+    }
+
+    // Create nodes for each bone
+    for (i, bone) in bones.iter().enumerate() {
+        let children = children_map.get(&(i as i32)).map(|c| {
+            c.iter()
+                .map(|&idx| json::Index::new(idx))
+                .collect::<Vec<_>>()
+        });
+
+        // Extract translation from the model-to-bone matrix
+        // The matrix is model-to-bone, but for glTF we need bone-to-model (local transform)
+        // For now, just use translation from the matrix
+        let translation = bone.model_to_bone.translation();
+
+        nodes.push(json::Node {
+            camera: None,
+            children: if children.as_ref().map_or(true, |c| c.is_empty()) {
+                None
+            } else {
+                children
+            },
+            extensions: None,
+            extras: json::Extras::default(),
+            matrix: None,
+            mesh: None,
+            rotation: None,
+            scale: None,
+            translation: Some(translation),
+            skin: None,
+            weights: None,
+        });
+    }
+
+    // Write inverse bind matrices
+    let ibm_view_idx = buffer_views.len() as u32;
+    let ibm_offset = buffer_data.len();
+
+    for bone in bones {
+        // The model_to_bone matrix IS the inverse bind matrix
+        // glTF expects column-major, but we store row-major, so transpose
+        let m = &bone.model_to_bone.rows;
+        // Write as column-major (transpose)
+        for col in 0..4 {
+            for row in 0..4 {
+                buffer_data.extend_from_slice(&m[row][col].to_le_bytes());
+            }
+        }
+    }
+
+    let ibm_byte_length = buffer_data.len() - ibm_offset;
+
+    buffer_views.push(json::buffer::View {
+        buffer: json::Index::new(0),
+        byte_length: json::validation::USize64(ibm_byte_length as u64),
+        byte_offset: Some(json::validation::USize64(ibm_offset as u64)),
+        byte_stride: None,
+        extensions: None,
+        extras: json::Extras::default(),
+        target: None,
+    });
+
+    let ibm_accessor_idx = accessors.len() as u32;
+    accessors.push(json::Accessor {
+        buffer_view: Some(json::Index::new(ibm_view_idx)),
+        byte_offset: Some(json::validation::USize64(0)),
+        count: json::validation::USize64(bones.len() as u64),
+        component_type: Valid(json::accessor::GenericComponentType(
+            json::accessor::ComponentType::F32,
+        )),
+        extensions: None,
+        extras: json::Extras::default(),
+        type_: Valid(json::accessor::Type::Mat4),
+        min: None,
+        max: None,
+        normalized: false,
+        sparse: None,
+    });
+
+    (nodes, ibm_accessor_idx)
 }
 
 #[cfg(test)]
