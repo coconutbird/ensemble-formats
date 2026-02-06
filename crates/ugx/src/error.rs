@@ -44,6 +44,10 @@ pub enum Error {
     /// Invalid UTF-8 string.
     #[error("Invalid UTF-8 string: {0}")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
+
+    /// Unsupported format.
+    #[error("Unsupported format: {0}")]
+    UnsupportedFormat(String),
 }
 
 /// Result type for UGX operations.

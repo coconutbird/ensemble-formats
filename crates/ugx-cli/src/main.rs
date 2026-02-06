@@ -1,9 +1,11 @@
 //! UGX CLI - Command-line tool for UGX model files.
 
 use clap::{Parser, Subcommand};
+use std::fs::File;
 use std::fs;
 use std::path::PathBuf;
 use ugx::{export_to_gltf, GltfExportOptions, UgxGeom};
+use ecf::EcfReader;
 
 #[derive(Parser)]
 #[command(name = "ugx")]
@@ -34,6 +36,12 @@ enum Commands {
         #[arg(long)]
         external_buffer: bool,
     },
+    /// Dump ECF structure for debugging
+    Dump {
+        /// Input UGX file
+        #[arg(short, long)]
+        input: PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             external_buffer,
         } => cmd_to_gltf(&input, &output, external_buffer)?,
+        Commands::Dump { input } => cmd_dump(&input)?,
     }
 
     Ok(())
@@ -103,10 +112,29 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("Sections: {}", geom.sections.len());
     for (i, section) in geom.sections.iter().enumerate() {
         println!(
-            "  [{}] Material={}, Verts={}, Tris={}, VB={}bytes",
-            i, section.material_index, section.num_verts, section.num_tris, section.vb_bytes
+            "  [{}] Material={}, Verts={}, Tris={}, VB={}bytes, VertSize={}",
+            i, section.material_index, section.num_verts, section.num_tris, section.vb_bytes,
+            section.vert_size
+        );
+        println!(
+            "       MaxBones={}, RigidBoneIdx={}, RigidOnly={}, GlobalBones={}",
+            section.max_bones, section.rigid_bone_index, section.rigid_only, section.global_bones
         );
         println!("       PackOrder: {}", section.base_vert_packer.pack_order);
+        println!("       PosType: {:?}", section.base_vert_packer.pos_type);
+        println!("       NormType: {:?}", section.base_vert_packer.normal_type);
+        println!("       TangentType: {:?}", section.base_vert_packer.tangent_type);
+        println!("       UV[0]Type: {:?}", section.base_vert_packer.uv_types[0]);
+
+        // Print first 3 unpacked vertices for debugging
+        if section.num_verts > 0 && !section.base_vert_packer.pack_order.is_empty() {
+            if let Ok(verts) = geom.unpack_section_vertices(i) {
+                println!("       First 3 vertices:");
+                for (vi, v) in verts.iter().take(3).enumerate() {
+                    println!("         [{}] pos=[{:.3}, {:.3}, {:.3}]", vi, v.position[0], v.position[1], v.position[2]);
+                }
+            }
+        }
     }
     println!();
 
@@ -115,8 +143,9 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     println!("  Total Triangles: {}", geom.total_triangles());
     println!("  Vertex Buffer: {} bytes", geom.vertex_buffer.len());
     println!("  Index Buffer: {} indices", geom.index_buffer.len());
-    println!("  Shadow Geometry: {}", geom.shadow_geom);
     println!("  Rigid Only: {}", geom.rigid_only);
+    println!("  All Sections Rigid: {}", geom.all_sections_rigid);
+    println!("  All Sections Skinned: {}", geom.all_sections_skinned);
 
     Ok(())
 }
@@ -160,4 +189,75 @@ fn cmd_to_gltf(
     );
 
     Ok(())
+}
+
+fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = File::open(input)?;
+    let mut ecf = EcfReader::new(&mut file)?;
+
+    println!("=== ECF Header ===");
+    let header = ecf.header();
+    println!("  File ID: 0x{:08X}", header.id);
+    println!("  Num chunks: {}", header.num_chunks);
+    println!("  Flags: 0x{:04X}", header.flags);
+
+    println!("\n=== Chunks ===");
+    for (i, chunk) in ecf.chunks().iter().enumerate() {
+        println!("Chunk {}: ID=0x{:08X} offset=0x{:X} size=0x{:X} flags=0x{:02X}",
+            i, chunk.id, chunk.offset, chunk.size, chunk.flags);
+    }
+
+    // Read and dump cached data chunk (0x700)
+    if let Ok(cached_data) = ecf.read_chunk_data_by_id(0x700) {
+        println!("\n=== Cached Data (0x700) - {} bytes ===", cached_data.len());
+        hexdump(&cached_data, 768);  // Dump more to see section data
+    }
+
+    // Read IB chunk (0x701)
+    if let Ok(ib_data) = ecf.read_chunk_data_by_id(0x701) {
+        println!("\n=== Index Buffer (0x701) - {} bytes ===", ib_data.len());
+        println!("  {} indices", ib_data.len() / 2);
+        hexdump(&ib_data, 64);
+    }
+
+    // Read VB chunk (0x702)
+    if let Ok(vb_data) = ecf.read_chunk_data_by_id(0x702) {
+        println!("\n=== Vertex Buffer (0x702) - {} bytes ===", vb_data.len());
+        hexdump(&vb_data, 64);
+    }
+
+    // Read material chunk (0x704)
+    if let Ok(mat_data) = ecf.read_chunk_data_by_id(0x704) {
+        println!("\n=== Materials (0x704) - {} bytes ===", mat_data.len());
+        hexdump(&mat_data, 512);
+    }
+
+    Ok(())
+}
+
+fn hexdump(data: &[u8], max: usize) {
+    let show = data.len().min(max);
+    for (i, chunk) in data[..show].chunks(16).enumerate() {
+        print!("  {:04X}: ", i * 16);
+        for byte in chunk {
+            print!("{:02X} ", byte);
+        }
+        // Pad
+        for _ in chunk.len()..16 {
+            print!("   ");
+        }
+        print!(" |");
+        for byte in chunk {
+            let c = if *byte >= 0x20 && *byte < 0x7F {
+                *byte as char
+            } else {
+                '.'
+            };
+            print!("{}", c);
+        }
+        println!("|");
+    }
+    if data.len() > max {
+        println!("  ... ({} more bytes)", data.len() - max);
+    }
 }

@@ -57,6 +57,9 @@ pub struct UnpackedVertex {
     pub index: i16,
 }
 
+/// Maximum number of UV coordinate sets.
+pub const MAX_UV: usize = 8;
+
 /// UnivertPacker - describes vertex format and unpacks vertices.
 #[derive(Debug, Clone)]
 pub struct UnivertPacker {
@@ -66,10 +69,12 @@ pub struct UnivertPacker {
     pub basis_type: VertexElementType,
     /// Basis scale element type.
     pub basis_scale_type: VertexElementType,
+    /// Tangent element type.
+    pub tangent_type: VertexElementType,
     /// Normal element type.
     pub normal_type: VertexElementType,
-    /// UV element type.
-    pub uv_type: VertexElementType,
+    /// UV element types (up to 8 sets).
+    pub uv_types: [VertexElementType; MAX_UV],
     /// Bone indices element type.
     pub indices_type: VertexElementType,
     /// Bone weights element type.
@@ -90,8 +95,9 @@ impl Default for UnivertPacker {
             pos_type: VertexElementType::Float3,
             basis_type: VertexElementType::Float4,
             basis_scale_type: VertexElementType::Float2,
+            tangent_type: VertexElementType::Ignore,
             normal_type: VertexElementType::Float3,
-            uv_type: VertexElementType::Float2,
+            uv_types: [VertexElementType::Float2; MAX_UV],
             indices_type: VertexElementType::UByte4,
             weights_type: VertexElementType::Float4,
             diffuse_type: VertexElementType::Float4,
@@ -103,7 +109,9 @@ impl Default for UnivertPacker {
 }
 
 impl UnivertPacker {
-    /// Read a UnivertPacker from a stream.
+    /// Read a UnivertPacker from a stream (legacy unpacked format).
+    /// Note: The packed format is read differently in ugx.rs.
+    #[allow(dead_code)]
     pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
         let pos_type = VertexElementType::try_from(reader.read_u8()?)?;
         let basis_type = VertexElementType::try_from(reader.read_u8()?)?;
@@ -122,8 +130,9 @@ impl UnivertPacker {
             pos_type,
             basis_type,
             basis_scale_type,
+            tangent_type: VertexElementType::Ignore,
             normal_type,
-            uv_type,
+            uv_types: [uv_type; MAX_UV],
             indices_type,
             weights_type,
             diffuse_type,
@@ -147,14 +156,21 @@ impl UnivertPacker {
                     // Basis has tangent + binormal
                     size += self.basis_type.size() * 2;
                 }
+                'A' => {
+                    // Tangent only (unlike B which has tangent+binormal)
+                    chars.next();
+                    size += self.tangent_type.size();
+                }
                 'X' => {
                     chars.next();
                     size += self.basis_scale_type.size();
                 }
                 'N' => size += self.normal_type.size(),
                 'T' => {
-                    chars.next();
-                    size += self.uv_type.size();
+                    let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+                    if idx < MAX_UV {
+                        size += self.uv_types[idx].size();
+                    }
                 }
                 'S' => {
                     size += self.indices_type.size();
@@ -189,6 +205,13 @@ impl UnivertPacker {
                     vertex.tangent = tangent;
                     vertex.binormal = binormal;
                 }
+                'A' => {
+                    // Get tangent set index
+                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    // Read tangent only (A is tangent-only, unlike B which has tangent+binormal)
+                    let tangent = self.tangent_type.unpack(reader)?;
+                    vertex.tangent = tangent;
+                }
                 'X' => {
                     // Basis scale
                     let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
@@ -203,11 +226,13 @@ impl UnivertPacker {
                 }
                 'T' => {
                     let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
-                    let v = self.uv_type.unpack(reader)?;
-                    if idx < 4 {
-                        vertex.texcoords[idx] = [v[0], v[1]];
-                        if idx >= vertex.num_texcoords {
-                            vertex.num_texcoords = idx + 1;
+                    if idx < MAX_UV {
+                        let v = self.uv_types[idx].unpack(reader)?;
+                        if idx < 4 {
+                            vertex.texcoords[idx] = [v[0], v[1]];
+                            if idx >= vertex.num_texcoords {
+                                vertex.num_texcoords = idx + 1;
+                            }
                         }
                     }
                 }

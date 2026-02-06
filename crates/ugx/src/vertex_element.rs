@@ -9,10 +9,11 @@ use std::io::Read;
 use crate::error::{Error, Result};
 
 /// Vertex element data types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum VertexElementType {
     /// Ignored/unused element.
+    #[default]
     Ignore = 0,
     /// Single float (4 bytes).
     Float1 = 1,
@@ -52,6 +53,8 @@ pub enum VertexElementType {
     HalfFloat1 = 18,
     /// Three 10-bit unsigned values, normalized (4 bytes).
     UDec3N = 19,
+    /// Invalid/unknown type.
+    Invalid = 255,
 }
 
 impl TryFrom<u8> for VertexElementType {
@@ -85,10 +88,19 @@ impl TryFrom<u8> for VertexElementType {
 }
 
 impl VertexElementType {
+    /// Convert from u32 (for packed format reading).
+    pub fn from_u32(value: u32) -> Self {
+        if value <= 19 {
+            Self::try_from(value as u8).unwrap_or(Self::Invalid)
+        } else {
+            Self::Invalid
+        }
+    }
+
     /// Returns the size in bytes of this element type.
     pub fn size(self) -> usize {
         match self {
-            Self::Ignore => 0,
+            Self::Ignore | Self::Invalid => 0,
             Self::Float1 => 4,
             Self::Float2 => 8,
             Self::Float3 => 12,
@@ -256,6 +268,11 @@ impl VertexElementType {
                 let y = ((packed >> 10) & 0x3FF) as f32 / 1023.0;
                 let z = ((packed >> 20) & 0x3FF) as f32 / 1023.0;
                 Ok([x, y, z, 1.0])
+            }
+
+            Self::Invalid => {
+                // Invalid type - return zeros
+                Ok([0.0, 0.0, 0.0, 0.0])
             }
         }
     }

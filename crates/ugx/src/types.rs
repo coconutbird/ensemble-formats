@@ -235,18 +235,37 @@ impl Sphere {
 }
 
 /// Mesh section - a submesh with its own material and vertex format.
+///
+/// DE packed format is 152 bytes (0x98):
+/// - +0x00: mMaterialIndex (i32)
+/// - +0x04: mAccessoryIndex (i32)
+/// - +0x08: mMaxBones (i32)
+/// - +0x0C: mRigidBoneIndex (i32)
+/// - +0x10: mIBOfs (i32, in indices not bytes)
+/// - +0x14: mNumTris (i32)
+/// - +0x18: mVBOfs (i32)
+/// - +0x1C: mVBBytes (i32)
+/// - +0x20: mVertSize (i32)
+/// - +0x24: mNumVerts (i32)
+/// - +0x28: BoneRemap packed array (16 bytes)
+/// - +0x38: UnivertPacker (84 bytes)
+/// - +0x8C: mRigidOnly (i32)
+/// - +0x90: mGlobalBones (i32) - not in 2008 source!
+/// - +0x94: mPadding (i32)
 #[derive(Debug, Clone)]
 pub struct Section {
     /// Material index.
     pub material_index: i32,
+    /// Accessory index.
+    pub accessory_index: i32,
     /// Maximum bones influencing this section.
     pub max_bones: i32,
-    /// Is this section rigid (no skinning)?
-    pub rigid_only: bool,
     /// Rigid bone index (if rigid_only).
     pub rigid_bone_index: i32,
     /// Index buffer offset (in indices, not bytes).
     pub ib_offset: i32,
+    /// Number of triangles.
+    pub num_tris: i32,
     /// Vertex buffer offset (in bytes).
     pub vb_offset: i32,
     /// Vertex buffer size in bytes.
@@ -255,57 +274,16 @@ pub struct Section {
     pub vert_size: i32,
     /// Number of vertices.
     pub num_verts: i32,
-    /// Morph vertex buffer offset.
-    pub morph_vb_offset: i32,
-    /// Morph vertex buffer size.
-    pub morph_vb_bytes: i32,
-    /// Morph vertex stride.
-    pub morph_vert_size: i32,
-    /// Number of triangles.
-    pub num_tris: i32,
     /// Base vertex packer.
     pub base_vert_packer: UnivertPacker,
-    /// Morph vertex packer.
-    pub morph_vert_packer: UnivertPacker,
+    /// Is this section rigid (no skinning)?
+    pub rigid_only: bool,
+    /// Uses global bone indices (DE-specific field).
+    pub global_bones: bool,
 }
 
-impl Section {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
-        let material_index = reader.read_i32::<LittleEndian>()?;
-        let max_bones = reader.read_i32::<LittleEndian>()?;
-        let rigid_only = reader.read_u8()? != 0;
-        let rigid_bone_index = reader.read_i32::<LittleEndian>()?;
-        let ib_offset = reader.read_i32::<LittleEndian>()?;
-        let vb_offset = reader.read_i32::<LittleEndian>()?;
-        let vb_bytes = reader.read_i32::<LittleEndian>()?;
-        let vert_size = reader.read_i32::<LittleEndian>()?;
-        let num_verts = reader.read_i32::<LittleEndian>()?;
-        let morph_vb_offset = reader.read_i32::<LittleEndian>()?;
-        let morph_vb_bytes = reader.read_i32::<LittleEndian>()?;
-        let morph_vert_size = reader.read_i32::<LittleEndian>()?;
-        let num_tris = reader.read_i32::<LittleEndian>()?;
-        let base_vert_packer = UnivertPacker::read(reader)?;
-        let morph_vert_packer = UnivertPacker::read(reader)?;
-
-        Ok(Self {
-            material_index,
-            max_bones,
-            rigid_only,
-            rigid_bone_index,
-            ib_offset,
-            vb_offset,
-            vb_bytes,
-            vert_size,
-            num_verts,
-            morph_vb_offset,
-            morph_vb_bytes,
-            morph_vert_size,
-            num_tris,
-            base_vert_packer,
-            morph_vert_packer,
-        })
-    }
-}
+// Note: Section is read via UgxGeom::read_packed_section() in ugx.rs
+// The packed DE format (152 bytes) is different from the original Xbox 360 format.
 
 /// Morph target keyframe.
 #[derive(Debug, Clone, Default)]
