@@ -325,8 +325,9 @@ impl XmbReader {
             });
         }
 
-        // Build parent-child relationships
-        for (i, pn) in packed_nodes.iter().enumerate() {
+        // Build parent-child relationships in REVERSE order so that leaf nodes
+        // are fully built before their parents clone them
+        for (i, pn) in packed_nodes.iter().enumerate().rev() {
             let child_indices: Vec<usize> = pn.children.iter().map(|&c| c as usize).collect();
             for &child_idx in &child_indices {
                 if child_idx < nodes.len() {
@@ -377,7 +378,9 @@ impl XmbReader {
             });
         }
 
-        for (i, pn) in packed_nodes.iter().enumerate() {
+        // Build parent-child relationships in REVERSE order so that leaf nodes
+        // are fully built before their parents clone them
+        for (i, pn) in packed_nodes.iter().enumerate().rev() {
             let child_indices: Vec<usize> = pn.children.iter().map(|&c| c as usize).collect();
             for &child_idx in &child_indices {
                 if child_idx < nodes.len() {
