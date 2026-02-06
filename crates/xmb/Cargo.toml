@@ -1,0 +1,11 @@
+[package]
+name = "xmb"
+version.workspace = true
+edition.workspace = true
+description = "XMB binary XML format reader/writer for Halo Wars (Ensemble Studios)"
+
+[dependencies]
+ecf.workspace = true
+byteorder.workspace = true
+thiserror.workspace = true
+quick-xml.workspace = true

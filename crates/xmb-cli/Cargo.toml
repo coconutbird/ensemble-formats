@@ -1,0 +1,16 @@
+[package]
+name = "xmb-cli"
+description = "CLI tool for XMB binary XML format conversion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "xmb"
+path = "src/main.rs"
+
+[dependencies]
+xmb.workspace = true
+clap.workspace = true

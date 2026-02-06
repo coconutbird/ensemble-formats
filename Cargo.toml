@@ -3,9 +3,9 @@ resolver = "2"
 members = [
     "crates/ecf",
     "crates/era",
-    # "crates/xmb",
+    "crates/xmb",
     "crates/era-cli",
-    # "crates/xmb-cli",
+    "crates/xmb-cli",
 ]
 
 [workspace.package]
