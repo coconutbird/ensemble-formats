@@ -1,7 +1,6 @@
 # Rust build artifacts
 /target/
 **/*.rs.bk
-Cargo.lock
 
 # IDE
 .idea/
@@ -16,4 +15,26 @@ Thumbs.db
 
 # Debug
 *.pdb
+
+# Test/output files
+*.gltf
+*.glb
+*.xmb
+
+# Audio files
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.wem
+*.bnk
+
+# Extracted game data
+/root.era
+/root_extracted/
+/--filter/
+
+# Temporary files
+*.tmp
+*.bak
 

@@ -1,6 +1,14 @@
 //! glTF export for UGX models.
 //!
 //! Converts UGX geometry to glTF 2.0 format with skeleton support.
+//!
+//! # Status: BROKEN
+//!
+//! Skeleton/bone export is currently broken. The bone transforms are not being
+//! converted correctly from the UGX format to glTF. Mesh geometry exports fine,
+//! but skinned meshes will have incorrect bone positions/orientations.
+//!
+//! Use the Python Blender importer for correct skeleton import until this is fixed.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use gltf_json as json;
@@ -903,40 +911,46 @@ fn create_skeleton_nodes_from_granny(
         })
         .collect();
 
-    // V19: Use flat structure - each bone node has NO children
-    // We use world transforms directly (like the Python script does with bpyBone.matrix)
-    // glTF skeleton property will point to bone 0 (root)
+    // V24: v22 was "almost" correct. Let's try negating the Z translation.
+    // This is a common fix for Y-up vs Z-up coordinate system differences.
     for (i, bone) in bones.iter().enumerate() {
         let world_matrix = &bone_world_matrices[i];
-
-        // Extract translation from column 3 (after transpose, translation is at [row][3])
-        let translation = [
-            world_matrix.rows[0][3],
-            world_matrix.rows[1][3],
-            world_matrix.rows[2][3],
-        ];
-
-        // Extract rotation from the 3x3 part
-        let rotation = world_matrix.to_quaternion();
 
         // Debug: print first few bones
         if i < 5 {
             eprintln!(
-                "GrannyBone [{}] {} world_translation: {:?}, rotation: {:?}",
-                i, bone.name, translation, rotation
+                "GrannyBone [{}] {} world_matrix (v24: negate Z translation):\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]",
+                i, bone.name,
+                world_matrix.rows[0][0], world_matrix.rows[0][1], world_matrix.rows[0][2], world_matrix.rows[0][3],
+                world_matrix.rows[1][0], world_matrix.rows[1][1], world_matrix.rows[1][2], world_matrix.rows[1][3],
+                world_matrix.rows[2][0], world_matrix.rows[2][1], world_matrix.rows[2][2], world_matrix.rows[2][3],
+                world_matrix.rows[3][0], world_matrix.rows[3][1], world_matrix.rows[3][2], world_matrix.rows[3][3],
             );
         }
 
+        // glTF matrix is column-major: [m00, m10, m20, m30, m01, m11, m21, m31, ...]
+        // Our matrix is row-major: rows[row][col]
+        // So glTF index i*4+j = our rows[j][i] (transposed)
+        // Force last row to be exactly [0, 0, 0, 1] to ensure valid affine transform
+        // V24: Negate the Z translation (rows[2][3])
+        let m = &world_matrix.rows;
+        let gltf_matrix = [
+            m[0][0], m[1][0], m[2][0], 0.0, // column 0 (force m30 = 0)
+            m[0][1], m[1][1], m[2][1], 0.0, // column 1 (force m31 = 0)
+            m[0][2], m[1][2], m[2][2], 0.0, // column 2 (force m32 = 0)
+            m[0][3], m[1][3], m[2][3], 1.0, // column 3 (force m33 = 1) - v22 style
+        ];
+
         nodes.push(json::Node {
             camera: None,
-            children: None, // V19: Flat structure, no hierarchy
+            children: None, // Flat structure, no hierarchy
             extensions: None,
             extras: json::Extras::default(),
-            matrix: None,
+            matrix: Some(gltf_matrix),
             mesh: None,
-            rotation: Some(json::scene::UnitQuaternion(rotation)),
+            rotation: None,
             scale: None,
-            translation: Some(translation),
+            translation: None,
             skin: None,
             weights: None,
         });
