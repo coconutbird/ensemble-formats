@@ -4,7 +4,7 @@
 //! Files are encrypted using TEA cipher and must be decrypted on read.
 
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use ecf::{CompressionMethod, EcfChunkHeader, EcfHeader};
@@ -31,6 +31,15 @@ impl EraArchiveHeader {
     /// Size of the archive header extension
     pub const SIZE: usize = 16;
 
+    /// Create a new archive header with default values
+    pub fn new() -> Self {
+        Self {
+            archive_magic: ARCHIVE_HEADER_MAGIC,
+            signature_size: 0,
+            reserved: [0, 0],
+        }
+    }
+
     /// Read archive header extension from reader
     pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
         let mut buf = [0u8; Self::SIZE];
@@ -53,6 +62,23 @@ impl EraArchiveHeader {
             ],
         })
     }
+
+    /// Write archive header extension to writer
+    pub fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..4].copy_from_slice(&self.archive_magic.to_be_bytes());
+        buf[4..8].copy_from_slice(&self.signature_size.to_be_bytes());
+        buf[8..12].copy_from_slice(&self.reserved[0].to_be_bytes());
+        buf[12..16].copy_from_slice(&self.reserved[1].to_be_bytes());
+        writer.write_all(&buf)?;
+        Ok(())
+    }
+}
+
+impl Default for EraArchiveHeader {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// ERA chunk header extra data (32 bytes total with base header)
@@ -72,6 +98,16 @@ impl EraChunkExtra {
     /// Size of the extra data (8 + 4 + 16 + 3 + 1 = 32 bytes)
     pub const SIZE: usize = 32;
 
+    /// Create a new chunk extra with given values
+    pub fn new(decomp_size: u32, name_offset: u32) -> Self {
+        Self {
+            date: 0,
+            decomp_size,
+            comp_tiger128: [0; 16],
+            name_offset,
+        }
+    }
+
     /// Read extra data from reader
     pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
         let mut buf = [0u8; Self::SIZE];
@@ -84,6 +120,22 @@ impl EraChunkExtra {
             // 3-byte big-endian offset at bytes 28, 29, 30
             name_offset: u32::from_be_bytes([0, buf[28], buf[29], buf[30]]),
         })
+    }
+
+    /// Write extra data to writer
+    pub fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..8].copy_from_slice(&self.date.to_be_bytes());
+        buf[8..12].copy_from_slice(&self.decomp_size.to_be_bytes());
+        buf[12..28].copy_from_slice(&self.comp_tiger128);
+        // 3-byte big-endian offset at bytes 28, 29, 30 (byte 31 is padding)
+        let offset_bytes = self.name_offset.to_be_bytes();
+        buf[28] = offset_bytes[1];
+        buf[29] = offset_bytes[2];
+        buf[30] = offset_bytes[3];
+        buf[31] = 0; // padding
+        writer.write_all(&buf)?;
+        Ok(())
     }
 }
 
