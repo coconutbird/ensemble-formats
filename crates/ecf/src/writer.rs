@@ -73,16 +73,6 @@ impl<W: Write + Seek> EcfWriter<W> {
         self.add_chunk_compressed_with_options(id, data, true, self.default_alignment_log2)
     }
 
-    /// Add a compressed chunk with specified endianness (deprecated, use add_chunk_compressed_with_options).
-    pub fn add_chunk_compressed_with_endian(
-        &mut self,
-        id: u64,
-        data: Vec<u8>,
-        big_endian: bool,
-    ) -> Result<()> {
-        self.add_chunk_compressed_with_options(id, data, big_endian, self.default_alignment_log2)
-    }
-
     /// Add a compressed chunk with specified endianness and alignment.
     pub fn add_chunk_compressed_with_options(
         &mut self,
