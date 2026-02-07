@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use std::fs::File;
 use std::fs;
 use std::path::PathBuf;
-use ugx::{export_to_gltf, GltfExportOptions, UgxGeom};
+use ugx::{export_to_gltf_with_buffer_name, GltfExportOptions, UgxGeom};
 use ecf::EcfReader;
 
 #[derive(Parser)]
@@ -183,7 +183,14 @@ fn cmd_to_gltf(
         include_skeleton: !no_skeleton,
     };
 
-    let export = export_to_gltf(&geom, &options)?;
+    // Derive buffer filename from output path for external buffer mode
+    let bin_name = output
+        .with_extension("bin")
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let export = export_to_gltf_with_buffer_name(&geom, &options, &bin_name)?;
 
     // Write the glTF JSON
     fs::write(output, &export.json)?;

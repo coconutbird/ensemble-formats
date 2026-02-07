@@ -53,7 +53,18 @@ pub struct GltfExport {
 }
 
 /// Export UGX geometry to glTF format.
+///
+/// Uses "buffer.bin" as the external buffer filename when `embed_buffers` is false.
 pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<GltfExport> {
+    export_to_gltf_with_buffer_name(geom, options, "buffer.bin")
+}
+
+/// Export UGX geometry to glTF format with a specific external buffer filename.
+pub fn export_to_gltf_with_buffer_name(
+    geom: &UgxGeom,
+    options: &GltfExportOptions,
+    buffer_name: &str,
+) -> Result<GltfExport> {
     let mut root = json::Root::default();
 
     // Build the binary buffer containing all vertex and index data
@@ -94,6 +105,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
                 emissive_factor: json::material::EmissiveFactor([0.0, 0.0, 0.0]),
                 extensions: None,
                 extras: json::Extras::default(),
+                name: None,
             });
         }
     }
@@ -133,6 +145,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
         meshes.push(json::Mesh {
             extensions: None,
             extras: json::Extras::default(),
+            name: None,
             primitives: vec![primitive],
             weights: None,
         });
@@ -196,6 +209,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
             extras: json::Extras::default(),
             inverse_bind_matrices: Some(json::Index::new(ibm_accessor_idx)),
             joints: joint_indices,
+            name: Some("Armature".to_string()),
             skeleton: skeleton_root,
         });
         skin_index = Some(json::Index::new(0));
@@ -209,6 +223,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
                 extras: json::Extras::default(),
                 matrix: None,
                 mesh: Some(json::Index::new(i as u32)),
+                name: Some(format!("mesh_{}", i)),
                 rotation: None,
                 scale: None,
                 translation: None,
@@ -227,6 +242,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
                 extras: json::Extras::default(),
                 matrix: None,
                 mesh: Some(json::Index::new(i as u32)),
+                name: Some(format!("mesh_{}", i)),
                 rotation: None,
                 scale: None,
                 translation: None,
@@ -256,6 +272,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
     let scene = json::Scene {
         extensions: None,
         extras: json::Extras::default(),
+        name: None,
         nodes: scene_node_indices,
     };
 
@@ -268,13 +285,15 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
             uri: Some(format!("data:application/octet-stream;base64,{}", encoded)),
             extensions: None,
             extras: json::Extras::default(),
+            name: None,
         }
     } else {
         json::Buffer {
             byte_length: json::validation::USize64(buffer_length),
-            uri: Some("model.bin".to_string()),
+            uri: Some(buffer_name.to_string()),
             extensions: None,
             extras: json::Extras::default(),
+            name: None,
         }
     };
 
@@ -364,6 +383,7 @@ fn create_primitive(
         byte_stride: Some(json::buffer::Stride(12)),
         extensions: None,
         extras: json::Extras::default(),
+        name: None,
         target: Some(Valid(json::buffer::Target::ArrayBuffer)),
     });
 
@@ -380,6 +400,7 @@ fn create_primitive(
         type_: Valid(json::accessor::Type::Vec3),
         min: Some(json::Value::from(min_pos.to_vec())),
         max: Some(json::Value::from(max_pos.to_vec())),
+        name: None,
         normalized: false,
         sparse: None,
     });
@@ -405,6 +426,7 @@ fn create_primitive(
         byte_stride: Some(json::buffer::Stride(12)),
         extensions: None,
         extras: json::Extras::default(),
+        name: None,
         target: Some(Valid(json::buffer::Target::ArrayBuffer)),
     });
 
@@ -421,6 +443,7 @@ fn create_primitive(
         type_: Valid(json::accessor::Type::Vec3),
         min: None,
         max: None,
+        name: None,
         normalized: false,
         sparse: None,
     });
@@ -434,9 +457,11 @@ fn create_primitive(
         let uv_view_idx = buffer_views.len() as u32;
         let uv_offset = buffer_data.len();
         for v in vertices {
-            // Flip V coordinate (glTF uses top-left origin)
+            // glTF and DirectX both use V=0 at top (no flip needed).
+            // Note: the Python Blender script flips V for Blender's convention,
+            // but that's Blender-specific — glTF matches DX convention already.
             buffer_data.extend_from_slice(&v.texcoords[0][0].to_le_bytes());
-            buffer_data.extend_from_slice(&(1.0 - v.texcoords[0][1]).to_le_bytes());
+            buffer_data.extend_from_slice(&v.texcoords[0][1].to_le_bytes());
         }
         let uv_byte_length = buffer_data.len() - uv_offset;
 
@@ -447,6 +472,7 @@ fn create_primitive(
             byte_stride: Some(json::buffer::Stride(8)),
             extensions: None,
             extras: json::Extras::default(),
+            name: None,
             target: Some(Valid(json::buffer::Target::ArrayBuffer)),
         });
 
@@ -463,6 +489,7 @@ fn create_primitive(
             type_: Valid(json::accessor::Type::Vec2),
             min: None,
             max: None,
+            name: None,
             normalized: false,
             sparse: None,
         });
@@ -475,7 +502,13 @@ fn create_primitive(
     // Write bone indices and weights if we have a skeleton
     if has_skeleton && bone_count > 0 {
         let max_bone_idx = (bone_count - 1) as u8;
-        let rigid_idx = (rigid_bone_index.max(0) as u8).min(max_bone_idx);
+        // rigid_bone_index can be INT_MAX (0x7FFFFFFF) meaning "no rigid bone".
+        // Default to bone 0 when invalid.
+        let rigid_idx = if rigid_bone_index >= 0 && (rigid_bone_index as usize) < bone_count {
+            rigid_bone_index as u8
+        } else {
+            0
+        };
 
         // JOINTS_0 - bone indices as unsigned bytes
         let joints_view_idx = buffer_views.len() as u32;
@@ -509,6 +542,7 @@ fn create_primitive(
             byte_stride: Some(json::buffer::Stride(4)),
             extensions: None,
             extras: json::Extras::default(),
+            name: None,
             target: Some(Valid(json::buffer::Target::ArrayBuffer)),
         });
 
@@ -525,6 +559,7 @@ fn create_primitive(
             type_: Valid(json::accessor::Type::Vec4),
             min: None,
             max: None,
+            name: None,
             normalized: false,
             sparse: None,
         });
@@ -565,6 +600,7 @@ fn create_primitive(
             byte_stride: Some(json::buffer::Stride(16)),
             extensions: None,
             extras: json::Extras::default(),
+            name: None,
             target: Some(Valid(json::buffer::Target::ArrayBuffer)),
         });
 
@@ -581,6 +617,7 @@ fn create_primitive(
             type_: Valid(json::accessor::Type::Vec4),
             min: None,
             max: None,
+            name: None,
             normalized: false,
             sparse: None,
         });
@@ -609,6 +646,7 @@ fn create_primitive(
         byte_stride: None,
         extensions: None,
         extras: json::Extras::default(),
+        name: None,
         target: Some(Valid(json::buffer::Target::ElementArrayBuffer)),
     });
 
@@ -625,6 +663,7 @@ fn create_primitive(
         type_: Valid(json::accessor::Type::Scalar),
         min: None,
         max: None,
+        name: None,
         normalized: false,
         sparse: None,
     });
@@ -670,7 +709,7 @@ fn create_skeleton_nodes(
     }
 
     // Compute world transforms in DX row-major convention.
-    // model_to_bone: model→bone (DX: v_bone = v_model * M)
+    // model_to_bone: model->bone (DX: v_bone = v_model * M)
     // Invert to get world transform (DX: v_model = v_bone * W_dx)
     let bone_world_dx: Vec<_> = bones
         .iter()
@@ -719,6 +758,7 @@ fn create_skeleton_nodes(
             extras: json::Extras::default(),
             matrix: Some(gltf_matrix),
             mesh: None,
+            name: Some(bone.name.clone()),
             rotation: None,
             scale: None,
             translation: None,
@@ -753,6 +793,7 @@ fn create_skeleton_nodes(
         byte_stride: None,
         extensions: None,
         extras: json::Extras::default(),
+        name: None,
         target: None,
     });
 
@@ -769,6 +810,7 @@ fn create_skeleton_nodes(
         type_: Valid(json::accessor::Type::Mat4),
         min: None,
         max: None,
+        name: None,
         normalized: false,
         sparse: None,
     });
@@ -800,8 +842,8 @@ fn create_skeleton_nodes_from_granny(
     }
 
     // Compute world transforms in DirectX row-major convention.
-    // inverse_world_matrix: model→bone (DX: v_bone = v_model * IWM)
-    // Invert to get: bone→model / world transform (DX: v_model = v_bone * W_dx)
+    // inverse_world_matrix: model->bone (DX: v_bone = v_model * IWM)
+    // Invert to get: bone->model / world transform (DX: v_model = v_bone * W_dx)
     let bone_world_dx: Vec<_> = bones
         .iter()
         .map(|b| {
@@ -854,6 +896,7 @@ fn create_skeleton_nodes_from_granny(
             extras: json::Extras::default(),
             matrix: Some(gltf_matrix),
             mesh: None,
+            name: Some(bone.name.clone()),
             rotation: None,
             scale: None,
             translation: None,
@@ -863,7 +906,7 @@ fn create_skeleton_nodes_from_granny(
     }
 
     // Write inverse bind matrices.
-    // IWM is the model→bone transform in DX convention.
+    // IWM is the model->bone transform in DX convention.
     // glTF IBM in GL convention = IWM^T.
     // column-major(IWM^T) = row-major(IWM), so just write IWM rows flat.
     while buffer_data.len() % 4 != 0 {
@@ -890,6 +933,7 @@ fn create_skeleton_nodes_from_granny(
         byte_stride: None,
         extensions: None,
         extras: json::Extras::default(),
+        name: None,
         target: None,
     });
 
@@ -906,6 +950,7 @@ fn create_skeleton_nodes_from_granny(
         type_: Valid(json::accessor::Type::Mat4),
         min: None,
         max: None,
+        name: None,
         normalized: false,
         sparse: None,
     });
