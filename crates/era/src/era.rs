@@ -172,6 +172,7 @@ pub struct EraArchive<R> {
     /// File entries
     pub entries: Vec<EraEntry>,
     /// Filename table (raw bytes)
+    #[allow(dead_code)]
     filename_table: Vec<u8>,
 }
 

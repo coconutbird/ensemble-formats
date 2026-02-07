@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 // ============================================================================
 
 /// Type mask for extracting the variant type (bits 0-4).
+#[allow(dead_code)]
 pub const TYPE_MASK: u8 = 0x1F;
 
 /// Flag indicating the value is stored as an offset (bit 7).
@@ -31,9 +32,11 @@ pub const OFFSET_FLAG: u8 = 0x80;
 pub const UNSIGNED_FLAG: u8 = 0x40;
 
 /// Mask for vector size bits (bits 5-6).
+#[allow(dead_code)]
 pub const VEC_SIZE_MASK: u8 = 0x60;
 
 /// Shift amount to extract vector size from type byte.
+#[allow(dead_code)]
 pub const VEC_SIZE_SHIFT: u8 = 5;
 
 // ============================================================================
@@ -43,6 +46,7 @@ pub const VEC_SIZE_SHIFT: u8 = 5;
 /// Variant type enumeration matching the XMB format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum VariantType {
     Null = 0,
     Float24 = 1,
@@ -58,6 +62,7 @@ pub enum VariantType {
 }
 
 impl VariantType {
+    #[allow(dead_code)]
     pub fn from_byte(byte: u8) -> Result<Self> {
         match byte & TYPE_MASK {
             0 => Ok(VariantType::Null),
@@ -75,6 +80,7 @@ impl VariantType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn always_offset(&self) -> bool {
         matches!(
             self,
@@ -82,6 +88,7 @@ impl VariantType {
         )
     }
 
+    #[allow(dead_code)]
     pub fn always_direct(&self) -> bool {
         matches!(
             self,
@@ -208,6 +215,7 @@ pub fn unpack_float24(packed: u32) -> f32 {
 }
 
 /// Pack a float as a 24-bit fixed-point fraction (value * 10,000).
+#[allow(dead_code)]
 pub fn pack_fract24(value: f32) -> u32 {
     let scaled = (value * 10000.0).round() as i32;
     if scaled >= 0 {
@@ -247,6 +255,7 @@ pub fn pack_uint24(value: u32) -> u32 {
 }
 
 /// Unpack a 24-bit unsigned integer.
+#[allow(dead_code)]
 pub fn unpack_uint24(packed: u32) -> u32 {
     packed & 0xFFFFFF
 }

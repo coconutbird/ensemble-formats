@@ -232,7 +232,6 @@ pub fn export_to_gltf_with_buffer_name(
             });
         }
     } else {
-        skin_index = None;
         // No skeleton - just create mesh nodes
         for (i, _mesh) in meshes.iter().enumerate() {
             nodes.push(json::Node {

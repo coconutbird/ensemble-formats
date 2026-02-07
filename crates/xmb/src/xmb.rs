@@ -21,6 +21,7 @@ pub const XMB_ECF_FILE_ID: u32 = 0xE43ABC00;
 pub const XMX_PACKED_DATA_CHUNK_ID: u64 = 0xA9C96500;
 
 /// XMX file info chunk ID.
+#[allow(dead_code)]
 pub const XMX_FILE_INFO_CHUNK_ID: u64 = 0xA9C96501;
 
 /// XMB file reader.
