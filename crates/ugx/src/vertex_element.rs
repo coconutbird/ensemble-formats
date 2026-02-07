@@ -276,6 +276,44 @@ impl VertexElementType {
             }
         }
     }
+
+    /// Unpack as raw integer indices (no normalization).
+    ///
+    /// Unlike `unpack()`, this always returns the raw integer values even for
+    /// normalized types like UByte4N or UShort4N. Use this for bone indices
+    /// where you need the actual index values, not normalized floats.
+    pub fn unpack_as_indices<R: Read>(self, reader: &mut R) -> Result<[u16; 4]> {
+        match self {
+            Self::UByte4 | Self::UByte4N => {
+                let packed = reader.read_u32::<LittleEndian>()?;
+                Ok([
+                    (packed & 0xFF) as u16,
+                    ((packed >> 8) & 0xFF) as u16,
+                    ((packed >> 16) & 0xFF) as u16,
+                    ((packed >> 24) & 0xFF) as u16,
+                ])
+            }
+            Self::Short4 | Self::Short4N => {
+                let x = reader.read_i16::<LittleEndian>()?.max(0) as u16;
+                let y = reader.read_i16::<LittleEndian>()?.max(0) as u16;
+                let z = reader.read_i16::<LittleEndian>()?.max(0) as u16;
+                let w = reader.read_i16::<LittleEndian>()?.max(0) as u16;
+                Ok([x, y, z, w])
+            }
+            Self::UShort4N => {
+                let x = reader.read_u16::<LittleEndian>()?;
+                let y = reader.read_u16::<LittleEndian>()?;
+                let z = reader.read_u16::<LittleEndian>()?;
+                let w = reader.read_u16::<LittleEndian>()?;
+                Ok([x, y, z, w])
+            }
+            // Fall back to unpack() and truncate for other types
+            other => {
+                let v = other.unpack(reader)?;
+                Ok([v[0] as u16, v[1] as u16, v[2] as u16, v[3] as u16])
+            }
+        }
+    }
 }
 
 /// Sign-extend a 10-bit value to i32.

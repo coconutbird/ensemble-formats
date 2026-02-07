@@ -48,7 +48,7 @@ pub struct UnpackedVertex {
     /// Number of texcoord sets.
     pub num_texcoords: usize,
     /// Bone indices [0-3].
-    pub bone_indices: [u8; 4],
+    pub bone_indices: [u16; 4],
     /// Bone weights [0-3].
     pub bone_weights: [f32; 4],
     /// Diffuse color [r, g, b, a].
@@ -237,14 +237,8 @@ impl UnivertPacker {
                     }
                 }
                 'S' => {
-                    // Bone indices
-                    let indices = self.indices_type.unpack(reader)?;
-                    vertex.bone_indices = [
-                        indices[0] as u8,
-                        indices[1] as u8,
-                        indices[2] as u8,
-                        indices[3] as u8,
-                    ];
+                    // Bone indices (raw integers, no normalization)
+                    vertex.bone_indices = self.indices_type.unpack_as_indices(reader)?;
                     // Bone weights
                     let weights = self.weights_type.unpack(reader)?;
                     vertex.bone_weights = weights;

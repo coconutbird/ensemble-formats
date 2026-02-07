@@ -409,13 +409,22 @@ fn create_primitive(
         json::Index::new(pos_accessor_idx),
     );
 
-    // Write normals
+    // Write normals (normalized to unit length for glTF compliance)
     let norm_view_idx = buffer_views.len() as u32;
     let norm_offset = buffer_data.len();
     for v in vertices {
-        buffer_data.extend_from_slice(&v.normal[0].to_le_bytes());
-        buffer_data.extend_from_slice(&v.normal[1].to_le_bytes());
-        buffer_data.extend_from_slice(&v.normal[2].to_le_bytes());
+        let len = (v.normal[0] * v.normal[0]
+            + v.normal[1] * v.normal[1]
+            + v.normal[2] * v.normal[2])
+            .sqrt();
+        let (nx, ny, nz) = if len > 1e-6 {
+            (v.normal[0] / len, v.normal[1] / len, v.normal[2] / len)
+        } else {
+            (0.0, 1.0, 0.0)
+        };
+        buffer_data.extend_from_slice(&nx.to_le_bytes());
+        buffer_data.extend_from_slice(&ny.to_le_bytes());
+        buffer_data.extend_from_slice(&nz.to_le_bytes());
     }
     let norm_byte_length = buffer_data.len() - norm_offset;
 
@@ -565,23 +574,29 @@ fn create_primitive(
 
     // Write bone indices and weights if we have a skeleton
     if has_skeleton && bone_count > 0 {
-        let max_bone_idx = (bone_count - 1) as u8;
+        let max_bone_idx = (bone_count - 1) as u16;
+        let use_u16_joints = bone_count > 256;
         // rigid_bone_index can be INT_MAX (0x7FFFFFFF) meaning "no rigid bone".
         // Default to bone 0 when invalid.
-        let rigid_idx = if rigid_bone_index >= 0 && (rigid_bone_index as usize) < bone_count {
-            rigid_bone_index as u8
-        } else {
-            0
-        };
+        let rigid_idx: u16 =
+            if rigid_bone_index >= 0 && (rigid_bone_index as usize) < bone_count {
+                rigid_bone_index as u16
+            } else {
+                0
+            };
 
-        // JOINTS_0 - bone indices as unsigned bytes
+        // JOINTS_0 - bone indices as u8 (<=256 bones) or u16 (>256 bones)
+        // Pad to 2-byte boundary if using u16
+        if use_u16_joints && buffer_data.len() % 2 != 0 {
+            buffer_data.push(0);
+        }
         let joints_view_idx = buffer_views.len() as u32;
         let joints_offset = buffer_data.len();
         for v in vertices {
             let weight_sum: f32 = v.bone_weights.iter().sum();
-            if weight_sum == 0.0 {
+            let joint_indices = if weight_sum == 0.0 {
                 // Rigid vertex (no skin data) - bind to section's rigid bone
-                buffer_data.extend_from_slice(&[rigid_idx, 0, 0, 0]);
+                [rigid_idx, 0, 0, 0]
             } else {
                 let mut indices = v.bone_indices;
                 for idx in &mut indices {
@@ -594,29 +609,44 @@ fn create_primitive(
                         *idx = 0;
                     }
                 }
-                buffer_data.extend_from_slice(&indices);
+                indices
+            };
+            if use_u16_joints {
+                for &idx in &joint_indices {
+                    buffer_data.extend_from_slice(&idx.to_le_bytes());
+                }
+            } else {
+                for &idx in &joint_indices {
+                    buffer_data.push(idx as u8);
+                }
             }
         }
         let joints_byte_length = buffer_data.len() - joints_offset;
+        let joints_stride = if use_u16_joints { 8 } else { 4 };
 
         buffer_views.push(json::buffer::View {
             buffer: json::Index::new(0),
             byte_length: json::validation::USize64(joints_byte_length as u64),
             byte_offset: Some(json::validation::USize64(joints_offset as u64)),
-            byte_stride: Some(json::buffer::Stride(4)),
+            byte_stride: Some(json::buffer::Stride(joints_stride)),
             extensions: None,
             extras: json::Extras::default(),
             name: None,
             target: Some(Valid(json::buffer::Target::ArrayBuffer)),
         });
 
+        let joints_component_type = if use_u16_joints {
+            json::accessor::ComponentType::U16
+        } else {
+            json::accessor::ComponentType::U8
+        };
         let joints_accessor_idx = accessors.len() as u32;
         accessors.push(json::Accessor {
             buffer_view: Some(json::Index::new(joints_view_idx)),
             byte_offset: Some(json::validation::USize64(0)),
             count: json::validation::USize64(vertices.len() as u64),
             component_type: Valid(json::accessor::GenericComponentType(
-                json::accessor::ComponentType::U8,
+                joints_component_type,
             )),
             extensions: None,
             extras: json::Extras::default(),
