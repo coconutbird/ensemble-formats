@@ -452,16 +452,17 @@ fn create_primitive(
         json::Index::new(norm_accessor_idx),
     );
 
-    // Write UVs (first set only)
-    if vertices.iter().any(|v| v.num_texcoords > 0) {
+    // Write UV sets (TEXCOORD_0, TEXCOORD_1, ...)
+    let max_texcoords = vertices.iter().map(|v| v.num_texcoords).max().unwrap_or(0);
+    for uv_set in 0..max_texcoords {
         let uv_view_idx = buffer_views.len() as u32;
         let uv_offset = buffer_data.len();
         for v in vertices {
             // glTF and DirectX both use V=0 at top (no flip needed).
             // Note: the Python Blender script flips V for Blender's convention,
             // but that's Blender-specific — glTF matches DX convention already.
-            buffer_data.extend_from_slice(&v.texcoords[0][0].to_le_bytes());
-            buffer_data.extend_from_slice(&v.texcoords[0][1].to_le_bytes());
+            buffer_data.extend_from_slice(&v.texcoords[uv_set][0].to_le_bytes());
+            buffer_data.extend_from_slice(&v.texcoords[uv_set][1].to_le_bytes());
         }
         let uv_byte_length = buffer_data.len() - uv_offset;
 
@@ -494,8 +495,71 @@ fn create_primitive(
             sparse: None,
         });
         attributes.insert(
-            Valid(json::mesh::Semantic::TexCoords(0)),
+            Valid(json::mesh::Semantic::TexCoords(uv_set as u32)),
             json::Index::new(uv_accessor_idx),
+        );
+    }
+
+    // Write tangents (vec4: xyz + handedness in w)
+    let has_tangents = vertices.iter().any(|v| {
+        v.tangent[0] != 0.0 || v.tangent[1] != 0.0 || v.tangent[2] != 0.0
+    });
+    if has_tangents {
+        let tangent_view_idx = buffer_views.len() as u32;
+        let tangent_offset = buffer_data.len();
+        for v in vertices {
+            // glTF requires unit-length tangent xyz. UGX tangents may not be
+            // normalized (e.g. HWDE stores them at length 0.5).
+            let len = (v.tangent[0] * v.tangent[0]
+                + v.tangent[1] * v.tangent[1]
+                + v.tangent[2] * v.tangent[2])
+                .sqrt();
+            let (tx, ty, tz) = if len > 1e-6 {
+                (v.tangent[0] / len, v.tangent[1] / len, v.tangent[2] / len)
+            } else {
+                (1.0, 0.0, 0.0)
+            };
+            buffer_data.extend_from_slice(&tx.to_le_bytes());
+            buffer_data.extend_from_slice(&ty.to_le_bytes());
+            buffer_data.extend_from_slice(&tz.to_le_bytes());
+            // glTF tangent.w is handedness: +1 or -1.
+            // UGX stores this in tangent[3]; default to 1.0 if unset.
+            let w = if v.tangent[3] == 0.0 { 1.0f32 } else { v.tangent[3] };
+            buffer_data.extend_from_slice(&w.to_le_bytes());
+        }
+        let tangent_byte_length = buffer_data.len() - tangent_offset;
+
+        buffer_views.push(json::buffer::View {
+            buffer: json::Index::new(0),
+            byte_length: json::validation::USize64(tangent_byte_length as u64),
+            byte_offset: Some(json::validation::USize64(tangent_offset as u64)),
+            byte_stride: Some(json::buffer::Stride(16)),
+            extensions: None,
+            extras: json::Extras::default(),
+            name: None,
+            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
+        });
+
+        let tangent_accessor_idx = accessors.len() as u32;
+        accessors.push(json::Accessor {
+            buffer_view: Some(json::Index::new(tangent_view_idx)),
+            byte_offset: Some(json::validation::USize64(0)),
+            count: json::validation::USize64(vertices.len() as u64),
+            component_type: Valid(json::accessor::GenericComponentType(
+                json::accessor::ComponentType::F32,
+            )),
+            extensions: None,
+            extras: json::Extras::default(),
+            type_: Valid(json::accessor::Type::Vec4),
+            min: None,
+            max: None,
+            name: None,
+            normalized: false,
+            sparse: None,
+        });
+        attributes.insert(
+            Valid(json::mesh::Semantic::Tangents),
+            json::Index::new(tangent_accessor_idx),
         );
     }
 

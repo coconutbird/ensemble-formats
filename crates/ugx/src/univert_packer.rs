@@ -297,7 +297,7 @@ mod tests {
         packer.pack_order = "PNT0".to_string();
         packer.pos_type = VertexElementType::Float3;
         packer.normal_type = VertexElementType::Float3;
-        packer.uv_type = VertexElementType::Float2;
+        packer.uv_types = [VertexElementType::Float2; MAX_UV];
 
         // Position (12) + Normal (12) + UV (8) = 32
         assert_eq!(packer.vertex_size(), 32);
@@ -309,7 +309,7 @@ mod tests {
         packer.pack_order = "PNT0S".to_string();
         packer.pos_type = VertexElementType::Float3;
         packer.normal_type = VertexElementType::Float3;
-        packer.uv_type = VertexElementType::Float2;
+        packer.uv_types = [VertexElementType::Float2; MAX_UV];
         packer.indices_type = VertexElementType::UByte4;
         packer.weights_type = VertexElementType::UByte4N;
 
