@@ -361,4 +361,63 @@ mod tests {
         assert_eq!(VertexElementType::Dec3N.size(), 4);
         assert_eq!(VertexElementType::UByte4.size(), 4);
     }
+
+    #[test]
+    fn test_unpack_as_indices_ubyte4() {
+        // Bytes: [5, 10, 200, 0] packed little-endian
+        let data: [u8; 4] = [5, 10, 200, 0];
+        let mut cursor = Cursor::new(&data);
+        let result = VertexElementType::UByte4.unpack_as_indices(&mut cursor).unwrap();
+        assert_eq!(result, [5, 10, 200, 0]);
+    }
+
+    #[test]
+    fn test_unpack_as_indices_ubyte4n_not_normalized() {
+        // UByte4N.unpack() would return [1.0, 0.5, 0.0, 1.0]
+        // unpack_as_indices() must return the raw byte values instead
+        let data: [u8; 4] = [255, 128, 0, 255];
+        let mut cursor = Cursor::new(&data);
+        let result = VertexElementType::UByte4N.unpack_as_indices(&mut cursor).unwrap();
+        assert_eq!(result, [255, 128, 0, 255]);
+    }
+
+    #[test]
+    fn test_unpack_as_indices_short4_positive() {
+        // Two positive i16 values: 300, 1
+        let mut data = Vec::new();
+        data.extend_from_slice(&300i16.to_le_bytes());
+        data.extend_from_slice(&1i16.to_le_bytes());
+        data.extend_from_slice(&0i16.to_le_bytes());
+        data.extend_from_slice(&0i16.to_le_bytes());
+        let mut cursor = Cursor::new(&data);
+        let result = VertexElementType::Short4.unpack_as_indices(&mut cursor).unwrap();
+        assert_eq!(result, [300, 1, 0, 0]);
+    }
+
+    #[test]
+    fn test_unpack_as_indices_short4_negative_clamped() {
+        // Negative i16 should clamp to 0
+        let mut data = Vec::new();
+        data.extend_from_slice(&(-1i16).to_le_bytes());
+        data.extend_from_slice(&5i16.to_le_bytes());
+        data.extend_from_slice(&(-100i16).to_le_bytes());
+        data.extend_from_slice(&0i16.to_le_bytes());
+        let mut cursor = Cursor::new(&data);
+        let result = VertexElementType::Short4.unpack_as_indices(&mut cursor).unwrap();
+        assert_eq!(result, [0, 5, 0, 0]);
+    }
+
+    #[test]
+    fn test_unpack_as_indices_ushort4n_not_normalized() {
+        // UShort4N.unpack() would normalize to 0.0-1.0
+        // unpack_as_indices() must return raw u16 values
+        let mut data = Vec::new();
+        data.extend_from_slice(&500u16.to_le_bytes());
+        data.extend_from_slice(&65535u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        let mut cursor = Cursor::new(&data);
+        let result = VertexElementType::UShort4N.unpack_as_indices(&mut cursor).unwrap();
+        assert_eq!(result, [500, 65535, 0, 1]);
+    }
 }
