@@ -2,13 +2,16 @@
 //!
 //! Converts UGX geometry to glTF 2.0 format with skeleton support.
 //!
-//! # Status: BROKEN
+//! # Matrix convention notes
 //!
-//! Skeleton/bone export is currently broken. The bone transforms are not being
-//! converted correctly from the UGX format to glTF. Mesh geometry exports fine,
-//! but skinned meshes will have incorrect bone positions/orientations.
+//! UGX/Granny stores matrices in DirectX row-major, row-vector convention:
+//!   `v_transformed = v * M` with translation in row 3.
 //!
-//! Use the Python Blender importer for correct skeleton import until this is fixed.
+//! glTF uses OpenGL column-major, column-vector convention:
+//!   `v_transformed = M * v` with translation in column 3.
+//!
+//! Key insight: column-major storage of `M_gl` = row-major storage of `M_dx`,
+//! because `M_gl = M_dx^T`. So we just write DX matrix rows flat for glTF.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use gltf_json as json;
@@ -124,6 +127,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
             options.include_materials && !materials_json.is_empty(),
             has_skeleton,
             bone_count,
+            section.rigid_bone_index,
         );
 
         meshes.push(json::Mesh {
@@ -138,6 +142,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
     let mut nodes = Vec::new();
     let mut skins = Vec::new();
     let skin_index: Option<json::Index<json::Skin>>;
+    let mut root_bone_indices: Vec<u32> = Vec::new();
 
     if has_skeleton {
         // Create bone nodes first (they come before mesh nodes)
@@ -162,7 +167,7 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
         nodes.extend(bone_nodes);
 
         // Find root bones (bones with parent_index == -1)
-        let root_bones: Vec<u32> = if use_granny_bones {
+        root_bone_indices = if use_granny_bones {
             geom.granny_bones
                 .iter()
                 .enumerate()
@@ -183,14 +188,15 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
             .map(|i| json::Index::new(bone_node_start + i))
             .collect();
 
-        // V19: With flat bone structure (no hierarchy), skeleton should be None
-        // since there's no common ancestor for all joints
+        // Set skeleton root to first root bone (if there is one)
+        let skeleton_root = root_bone_indices.first().copied().map(json::Index::new);
+
         skins.push(json::Skin {
             extensions: None,
             extras: json::Extras::default(),
             inverse_bind_matrices: Some(json::Index::new(ibm_accessor_idx)),
             joints: joint_indices,
-            skeleton: None, // No hierarchy = no common root
+            skeleton: skeleton_root,
         });
         skin_index = Some(json::Index::new(0));
 
@@ -230,13 +236,12 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
         }
     }
 
-    // V19: With flat bone structure (no children hierarchy), ALL bone nodes must be in the scene
-    // This fixes the NODE_SKIN_NO_SCENE validation error from v17
+    // Build scene: only root bones (children reached through hierarchy) + mesh nodes
     let mut scene_node_indices = Vec::new();
     if has_skeleton {
-        // Add ALL bone nodes to scene (since we're using flat structure with world transforms)
-        for i in 0..bone_count as u32 {
-            scene_node_indices.push(json::Index::new(i));
+        // Only root bones go in the scene (child bones are in parent.children)
+        for &root_idx in &root_bone_indices {
+            scene_node_indices.push(json::Index::new(root_idx));
         }
         // Add mesh nodes (they come after bone nodes)
         let mesh_node_start = bone_count as u32;
@@ -324,6 +329,7 @@ fn create_primitive(
     has_materials: bool,
     has_skeleton: bool,
     bone_count: usize,
+    rigid_bone_index: i32,
 ) -> json::mesh::Primitive {
     let mut attributes = std::collections::BTreeMap::new();
 
@@ -469,20 +475,30 @@ fn create_primitive(
     // Write bone indices and weights if we have a skeleton
     if has_skeleton && bone_count > 0 {
         let max_bone_idx = (bone_count - 1) as u8;
+        let rigid_idx = (rigid_bone_index.max(0) as u8).min(max_bone_idx);
 
         // JOINTS_0 - bone indices as unsigned bytes
-        // Clamp to valid range and fix vertices with no skinning
         let joints_view_idx = buffer_views.len() as u32;
         let joints_offset = buffer_data.len();
         for v in vertices {
-            // Clamp bone indices to valid range
-            let mut indices = v.bone_indices;
-            for idx in &mut indices {
-                if *idx > max_bone_idx {
-                    *idx = 0; // Bind to root bone if out of range
+            let weight_sum: f32 = v.bone_weights.iter().sum();
+            if weight_sum == 0.0 {
+                // Rigid vertex (no skin data) - bind to section's rigid bone
+                buffer_data.extend_from_slice(&[rigid_idx, 0, 0, 0]);
+            } else {
+                let mut indices = v.bone_indices;
+                for idx in &mut indices {
+                    // Vertex bone indices are 1-based in UGX data (0 = no bone);
+                    // convert to 0-based for glTF joint indices.
+                    if *idx > 0 {
+                        *idx -= 1;
+                    }
+                    if *idx > max_bone_idx {
+                        *idx = 0;
+                    }
                 }
+                buffer_data.extend_from_slice(&indices);
             }
-            buffer_data.extend_from_slice(&indices);
         }
         let joints_byte_length = buffer_data.len() - joints_offset;
 
@@ -518,7 +534,6 @@ fn create_primitive(
         );
 
         // WEIGHTS_0 - bone weights as floats
-        // Ensure weights sum to 1.0 (normalize or set default if all zero)
         // Pad to 4-byte boundary for float alignment
         while buffer_data.len() % 4 != 0 {
             buffer_data.push(0);
@@ -529,10 +544,9 @@ fn create_primitive(
             let mut weights = v.bone_weights;
             let sum: f32 = weights.iter().sum();
             if sum == 0.0 {
-                // No skinning data - bind 100% to first joint
+                // Rigid vertex - 100% weight on rigid bone
                 weights[0] = 1.0;
             } else if (sum - 1.0).abs() > 0.001 {
-                // Normalize weights to sum to 1.0
                 for w in &mut weights {
                     *w /= sum;
                 }
@@ -632,7 +646,8 @@ fn create_primitive(
     }
 }
 
-/// Create skeleton nodes and inverse bind matrices accessor.
+/// Create skeleton nodes from cached data bones (0x700 chunk).
+/// Fallback when granny bones aren't available.
 /// Returns (bone_nodes, inverse_bind_matrices_accessor_index).
 fn create_skeleton_nodes(
     bones: &[Bone],
@@ -642,7 +657,7 @@ fn create_skeleton_nodes(
 ) -> (Vec<json::Node>, u32) {
     let mut nodes = Vec::with_capacity(bones.len());
 
-    // Build child lists for each bone
+    // Build child lists for hierarchy
     let mut children_map: std::collections::HashMap<i32, Vec<u32>> =
         std::collections::HashMap::new();
     for (i, bone) in bones.iter().enumerate() {
@@ -654,58 +669,19 @@ fn create_skeleton_nodes(
         }
     }
 
-    // Following the Blender importer approach:
-    // 1. Invert the model_to_bone matrix to get bone_to_model (world transform)
-    // 2. Transpose the inverted matrix
-    // 3. Use this as the bone's matrix
-    //
-    // From the Blender script:
-    //   invWorldMat = Matrix(...)  # model_to_bone
-    //   invWorldMat.invert()       # -> bone_to_model
-    //   invWorldMat.transpose()    # transpose for Blender
-    //   bpyBone.matrix = invWorldMat
-
-    // Compute world transforms for all bones by inverting model_to_bone
-    // model_to_bone transforms from model space to bone space
-    // Inverting gives bone_to_model (bone's world transform)
-    let bone_world_matrices: Vec<_> = bones
+    // Compute world transforms in DX row-major convention.
+    // model_to_bone: model→bone (DX: v_bone = v_model * M)
+    // Invert to get world transform (DX: v_model = v_bone * W_dx)
+    let bone_world_dx: Vec<_> = bones
         .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            // Debug: print raw matrix for first few bones
-            if i < 3 {
-                eprintln!(
-                    "Bone [{}] {} raw model_to_bone:\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]",
-                    i, b.name,
-                    b.model_to_bone.rows[0][0], b.model_to_bone.rows[0][1], b.model_to_bone.rows[0][2], b.model_to_bone.rows[0][3],
-                    b.model_to_bone.rows[1][0], b.model_to_bone.rows[1][1], b.model_to_bone.rows[1][2], b.model_to_bone.rows[1][3],
-                    b.model_to_bone.rows[2][0], b.model_to_bone.rows[2][1], b.model_to_bone.rows[2][2], b.model_to_bone.rows[2][3],
-                    b.model_to_bone.rows[3][0], b.model_to_bone.rows[3][1], b.model_to_bone.rows[3][2], b.model_to_bone.rows[3][3],
-                );
-            }
-            // Just invert (no transpose) - translation stays in row 3
-            let world_mat = b
-                .model_to_bone
+        .map(|b| {
+            b.model_to_bone
                 .inverse()
-                .unwrap_or_else(crate::types::Matrix4x4::identity);
-            // Debug: print inverted matrix for first few bones
-            if i < 3 {
-                eprintln!(
-                    "Bone [{}] {} after invert (world pos):\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]",
-                    i, b.name,
-                    world_mat.rows[0][0], world_mat.rows[0][1], world_mat.rows[0][2], world_mat.rows[0][3],
-                    world_mat.rows[1][0], world_mat.rows[1][1], world_mat.rows[1][2], world_mat.rows[1][3],
-                    world_mat.rows[2][0], world_mat.rows[2][1], world_mat.rows[2][2], world_mat.rows[2][3],
-                    world_mat.rows[3][0], world_mat.rows[3][1], world_mat.rows[3][2], world_mat.rows[3][3],
-                );
-            }
-            world_mat
+                .unwrap_or_else(crate::types::Matrix4x4::identity)
         })
         .collect();
 
-    // Compute local transforms for each bone
-    // For root bones: local = world
-    // For child bones: local = parent_world^-1 * world
+    // Create nodes with local transforms and parent-child hierarchy.
     for (i, bone) in bones.iter().enumerate() {
         let children = children_map.get(&(i as i32)).map(|c| {
             c.iter()
@@ -713,33 +689,24 @@ fn create_skeleton_nodes(
                 .collect::<Vec<_>>()
         });
 
-        let local_matrix = if bone.parent_index < 0 {
-            // Root bone - use world matrix directly
-            bone_world_matrices[i].clone()
+        // DX: local = world * parent_world^{-1}
+        // Use model_to_bone[parent] directly (= parent_world^{-1}) to avoid
+        // double-inversion precision loss.
+        let local_dx = if bone.parent_index < 0 {
+            bone_world_dx[i].clone()
         } else {
-            // Child bone - compute local: parent_world^-1 * world
             let parent_idx = bone.parent_index as usize;
-            let parent_inv = bone_world_matrices[parent_idx]
-                .inverse()
-                .unwrap_or_else(crate::types::Matrix4x4::identity);
-            parent_inv.multiply(&bone_world_matrices[i])
+            bone_world_dx[i].multiply(&bones[parent_idx].model_to_bone)
         };
 
-        // Extract translation and rotation from local matrix
-        let local_translation = [
-            local_matrix.rows[3][0],
-            local_matrix.rows[3][1],
-            local_matrix.rows[3][2],
+        // Write DX rows flat = column-major of GL matrix
+        let m = &local_dx.rows;
+        let gltf_matrix = [
+            m[0][0], m[0][1], m[0][2], m[0][3],
+            m[1][0], m[1][1], m[1][2], m[1][3],
+            m[2][0], m[2][1], m[2][2], m[2][3],
+            m[3][0], m[3][1], m[3][2], m[3][3],
         ];
-        let local_rotation = local_matrix.to_quaternion();
-
-        // Debug: print first few bones
-        if i < 5 {
-            eprintln!(
-                "Bone [{}] {} local_translation: {:?}, rotation: {:?}",
-                i, bone.name, local_translation, local_rotation
-            );
-        }
 
         nodes.push(json::Node {
             camera: None,
@@ -750,18 +717,18 @@ fn create_skeleton_nodes(
             },
             extensions: None,
             extras: json::Extras::default(),
-            matrix: None,
+            matrix: Some(gltf_matrix),
             mesh: None,
-            rotation: Some(json::scene::UnitQuaternion(local_rotation)),
+            rotation: None,
             scale: None,
-            translation: Some(local_translation),
+            translation: None,
             skin: None,
             weights: None,
         });
     }
 
-    // Write inverse bind matrices
-    // Pad to 4-byte boundary for float alignment
+    // Write inverse bind matrices.
+    // model_to_bone rows flat = column-major of GL IBM (same derivation as granny path).
     while buffer_data.len() % 4 != 0 {
         buffer_data.push(0);
     }
@@ -769,46 +736,12 @@ fn create_skeleton_nodes(
     let ibm_offset = buffer_data.len();
 
     for bone in bones {
-        // The "transpose" version (column-by-column) looked better but had translation at wrong indices.
-        // Let's keep the rotation UNCHANGED (no transpose) and put translation at correct indices.
-        //
-        // Source matrix (DirectX row-major, rows[row][col]):
-        // | r00 r01 r02 0  |  row 0
-        // | r10 r11 r12 0  |  row 1
-        // | r20 r21 r22 0  |  row 2
-        // | tx  ty  tz  1  |  row 3
-        //
-        // Target: Write rotation as-is (no transpose), translation at indices 12-14
-        // glTF column-major storage:
-        // Column 0: r00, r10, r20, 0   -> indices 0-3
-        // Column 1: r01, r11, r21, 0   -> indices 4-7
-        // Column 2: r02, r12, r22, 0   -> indices 8-11
-        // Column 3: tx,  ty,  tz,  1   -> indices 12-15
         let m = &bone.model_to_bone.rows;
-
-        // Column 0: source column 0
-        buffer_data.extend_from_slice(&m[0][0].to_le_bytes()); // r00
-        buffer_data.extend_from_slice(&m[1][0].to_le_bytes()); // r10
-        buffer_data.extend_from_slice(&m[2][0].to_le_bytes()); // r20
-        buffer_data.extend_from_slice(&0.0f32.to_le_bytes());  // 0
-
-        // Column 1: source column 1
-        buffer_data.extend_from_slice(&m[0][1].to_le_bytes()); // r01
-        buffer_data.extend_from_slice(&m[1][1].to_le_bytes()); // r11
-        buffer_data.extend_from_slice(&m[2][1].to_le_bytes()); // r21
-        buffer_data.extend_from_slice(&0.0f32.to_le_bytes());  // 0
-
-        // Column 2: source column 2
-        buffer_data.extend_from_slice(&m[0][2].to_le_bytes()); // r02
-        buffer_data.extend_from_slice(&m[1][2].to_le_bytes()); // r12
-        buffer_data.extend_from_slice(&m[2][2].to_le_bytes()); // r22
-        buffer_data.extend_from_slice(&0.0f32.to_le_bytes());  // 0
-
-        // Column 3: translation (from source row 3)
-        buffer_data.extend_from_slice(&m[3][0].to_le_bytes()); // tx
-        buffer_data.extend_from_slice(&m[3][1].to_le_bytes()); // ty
-        buffer_data.extend_from_slice(&m[3][2].to_le_bytes()); // tz
-        buffer_data.extend_from_slice(&1.0f32.to_le_bytes());  // 1
+        for row in m {
+            for &val in row {
+                buffer_data.extend_from_slice(&val.to_le_bytes());
+            }
+        }
     }
 
     let ibm_byte_length = buffer_data.len() - ibm_offset;
@@ -843,8 +776,8 @@ fn create_skeleton_nodes(
     (nodes, ibm_accessor_idx)
 }
 
-/// Create skeleton nodes from granny bones (0x703 chunk) with correct inverse world matrices.
-/// This follows the exact same approach as the Python Blender importer.
+/// Create skeleton nodes from granny bones (0x703 chunk).
+/// Uses hierarchical structure with local transforms.
 /// Returns (bone_nodes, inverse_bind_matrices_accessor_index).
 fn create_skeleton_nodes_from_granny(
     bones: &[GrannyBone],
@@ -854,96 +787,69 @@ fn create_skeleton_nodes_from_granny(
 ) -> (Vec<json::Node>, u32) {
     let mut nodes = Vec::with_capacity(bones.len());
 
-    // V19: Use flat structure (no children hierarchy) with world transforms
-    // This is closer to v17 which worked visually but had validation errors.
-    // The Python script sets bpyBone.matrix = worldMatrix directly in Blender edit mode.
-    // Blender handles hierarchy internally, but glTF compounds transforms.
-    // To match, we use world transforms WITHOUT parent-child relationships.
+    // Build child lists for hierarchy
+    let mut children_map: std::collections::HashMap<i32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for (i, bone) in bones.iter().enumerate() {
+        if bone.parent_index >= 0 {
+            children_map
+                .entry(bone.parent_index)
+                .or_default()
+                .push(i as u32);
+        }
+    }
 
-    // Following the Python Blender importer EXACTLY:
-    //   matUnpack = struct.unpack("<ffffffffffffffff", granny[cur + 80 : cur + 80 + 64])
-    //   invWorldMat = mathutils.Matrix((matUnpack[0:4], matUnpack[4:8], matUnpack[8:12], matUnpack[12:16]))
-    //   invWorldMat.invert()
-    //   invWorldMat.transpose()
-    //   bpyBone.matrix = invWorldMat
-    //
-    // The Python script sets bpyBone.matrix which is the WORLD matrix in edit mode.
-    // But glTF node transforms are LOCAL (relative to parent).
-    // So we need to compute: local = parent_world^-1 * world
-    //
-    // After invert+transpose, translation is in column 3 (rows[0][3], rows[1][3], rows[2][3])
-
-    let bone_world_matrices: Vec<_> = bones
+    // Compute world transforms in DirectX row-major convention.
+    // inverse_world_matrix: model→bone (DX: v_bone = v_model * IWM)
+    // Invert to get: bone→model / world transform (DX: v_model = v_bone * W_dx)
+    let bone_world_dx: Vec<_> = bones
         .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            // Debug: print raw matrix for first few bones
-            if i < 3 {
-                eprintln!(
-                    "GrannyBone [{}] {} raw inverse_world_matrix:\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]",
-                    i, b.name,
-                    b.inverse_world_matrix.rows[0][0], b.inverse_world_matrix.rows[0][1], b.inverse_world_matrix.rows[0][2], b.inverse_world_matrix.rows[0][3],
-                    b.inverse_world_matrix.rows[1][0], b.inverse_world_matrix.rows[1][1], b.inverse_world_matrix.rows[1][2], b.inverse_world_matrix.rows[1][3],
-                    b.inverse_world_matrix.rows[2][0], b.inverse_world_matrix.rows[2][1], b.inverse_world_matrix.rows[2][2], b.inverse_world_matrix.rows[2][3],
-                    b.inverse_world_matrix.rows[3][0], b.inverse_world_matrix.rows[3][1], b.inverse_world_matrix.rows[3][2], b.inverse_world_matrix.rows[3][3],
-                );
-            }
-
-            // Python script does: invWorldMat.invert() then invWorldMat.transpose()
-            let world_mat = b
-                .inverse_world_matrix
+        .map(|b| {
+            b.inverse_world_matrix
                 .inverse()
                 .unwrap_or_else(crate::types::Matrix4x4::identity)
-                .transpose(); // Match Python: invert then transpose
-
-            if i < 3 {
-                eprintln!(
-                    "GrannyBone [{}] {} after invert+transpose (world matrix):\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]",
-                    i, b.name,
-                    world_mat.rows[0][0], world_mat.rows[0][1], world_mat.rows[0][2], world_mat.rows[0][3],
-                    world_mat.rows[1][0], world_mat.rows[1][1], world_mat.rows[1][2], world_mat.rows[1][3],
-                    world_mat.rows[2][0], world_mat.rows[2][1], world_mat.rows[2][2], world_mat.rows[2][3],
-                    world_mat.rows[3][0], world_mat.rows[3][1], world_mat.rows[3][2], world_mat.rows[3][3],
-                );
-            }
-
-            world_mat
         })
         .collect();
 
-    // V24: v22 was "almost" correct. Let's try negating the Z translation.
-    // This is a common fix for Y-up vs Z-up coordinate system differences.
+    // Create nodes with local transforms and parent-child hierarchy.
     for (i, bone) in bones.iter().enumerate() {
-        let world_matrix = &bone_world_matrices[i];
+        let children = children_map.get(&(i as i32)).map(|c| {
+            c.iter()
+                .map(|&idx| json::Index::new(idx))
+                .collect::<Vec<_>>()
+        });
 
-        // Debug: print first few bones
-        if i < 5 {
-            eprintln!(
-                "GrannyBone [{}] {} world_matrix (v24: negate Z translation):\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]\n  [{:.4}, {:.4}, {:.4}, {:.4}]",
-                i, bone.name,
-                world_matrix.rows[0][0], world_matrix.rows[0][1], world_matrix.rows[0][2], world_matrix.rows[0][3],
-                world_matrix.rows[1][0], world_matrix.rows[1][1], world_matrix.rows[1][2], world_matrix.rows[1][3],
-                world_matrix.rows[2][0], world_matrix.rows[2][1], world_matrix.rows[2][2], world_matrix.rows[2][3],
-                world_matrix.rows[3][0], world_matrix.rows[3][1], world_matrix.rows[3][2], world_matrix.rows[3][3],
-            );
-        }
+        // In DX row-vector convention: v_world = v_local * local_dx * parent_world_dx
+        // So: world_dx = local_dx * parent_world_dx
+        // Therefore: local_dx = world_dx * parent_world_dx^{-1}
+        //
+        // Optimization: parent_world_dx^{-1} = IWM[parent] (which we already have),
+        // avoiding double-inversion precision loss from (IWM.inverse()).inverse().
+        let local_dx = if bone.parent_index < 0 {
+            bone_world_dx[i].clone()
+        } else {
+            let parent_idx = bone.parent_index as usize;
+            bone_world_dx[i].multiply(&bones[parent_idx].inverse_world_matrix)
+        };
 
-        // glTF matrix is column-major: [m00, m10, m20, m30, m01, m11, m21, m31, ...]
-        // Our matrix is row-major: rows[row][col]
-        // So glTF index i*4+j = our rows[j][i] (transposed)
-        // Force last row to be exactly [0, 0, 0, 1] to ensure valid affine transform
-        // V24: Negate the Z translation (rows[2][3])
-        let m = &world_matrix.rows;
+        // glTF column-major storage of M_gl = row-major storage of M_dx
+        // (because M_gl = M_dx^T, and column-major(M^T) = row-major(M))
+        // So just write DX matrix rows flat.
+        let m = &local_dx.rows;
         let gltf_matrix = [
-            m[0][0], m[1][0], m[2][0], 0.0, // column 0 (force m30 = 0)
-            m[0][1], m[1][1], m[2][1], 0.0, // column 1 (force m31 = 0)
-            m[0][2], m[1][2], m[2][2], 0.0, // column 2 (force m32 = 0)
-            m[0][3], m[1][3], m[2][3], 1.0, // column 3 (force m33 = 1) - v22 style
+            m[0][0], m[0][1], m[0][2], m[0][3],
+            m[1][0], m[1][1], m[1][2], m[1][3],
+            m[2][0], m[2][1], m[2][2], m[2][3],
+            m[3][0], m[3][1], m[3][2], m[3][3],
         ];
 
         nodes.push(json::Node {
             camera: None,
-            children: None, // Flat structure, no hierarchy
+            children: if children.as_ref().map_or(true, |c| c.is_empty()) {
+                None
+            } else {
+                children
+            },
             extensions: None,
             extras: json::Extras::default(),
             matrix: Some(gltf_matrix),
@@ -956,9 +862,10 @@ fn create_skeleton_nodes_from_granny(
         });
     }
 
-    // Write inverse bind matrices
-    // The inverse bind matrix in glTF is the transform that takes a vertex from model space
-    // to bone space. This is exactly what inverse_world_matrix already is.
+    // Write inverse bind matrices.
+    // IWM is the model→bone transform in DX convention.
+    // glTF IBM in GL convention = IWM^T.
+    // column-major(IWM^T) = row-major(IWM), so just write IWM rows flat.
     while buffer_data.len() % 4 != 0 {
         buffer_data.push(0);
     }
@@ -966,37 +873,12 @@ fn create_skeleton_nodes_from_granny(
     let ibm_offset = buffer_data.len();
 
     for bone in bones {
-        // Write the inverse_world_matrix as glTF inverse bind matrix
-        // Our source matrix has translation in row 3: [tx, ty, tz, 1]
-        // glTF expects affine matrices with translation in column 3 (indices 12-14)
-        // and the last row (indices 3, 7, 11) must be [0, 0, 0, 1]
-        // So we need to transpose before writing column-major
-        let m = bone.inverse_world_matrix.transpose();
-        let m = &m.rows;
-
-        // Column 0: m[0][0], m[1][0], m[2][0], m[3][0] -> should be [r00, r10, r20, 0]
-        buffer_data.extend_from_slice(&m[0][0].to_le_bytes());
-        buffer_data.extend_from_slice(&m[1][0].to_le_bytes());
-        buffer_data.extend_from_slice(&m[2][0].to_le_bytes());
-        buffer_data.extend_from_slice(&m[3][0].to_le_bytes());
-
-        // Column 1: m[0][1], m[1][1], m[2][1], m[3][1] -> should be [r01, r11, r21, 0]
-        buffer_data.extend_from_slice(&m[0][1].to_le_bytes());
-        buffer_data.extend_from_slice(&m[1][1].to_le_bytes());
-        buffer_data.extend_from_slice(&m[2][1].to_le_bytes());
-        buffer_data.extend_from_slice(&m[3][1].to_le_bytes());
-
-        // Column 2: m[0][2], m[1][2], m[2][2], m[3][2] -> should be [r02, r12, r22, 0]
-        buffer_data.extend_from_slice(&m[0][2].to_le_bytes());
-        buffer_data.extend_from_slice(&m[1][2].to_le_bytes());
-        buffer_data.extend_from_slice(&m[2][2].to_le_bytes());
-        buffer_data.extend_from_slice(&m[3][2].to_le_bytes());
-
-        // Column 3: m[0][3], m[1][3], m[2][3], m[3][3] -> should be [tx, ty, tz, 1]
-        buffer_data.extend_from_slice(&m[0][3].to_le_bytes());
-        buffer_data.extend_from_slice(&m[1][3].to_le_bytes());
-        buffer_data.extend_from_slice(&m[2][3].to_le_bytes());
-        buffer_data.extend_from_slice(&m[3][3].to_le_bytes());
+        let m = &bone.inverse_world_matrix.rows;
+        for row in m {
+            for &val in row {
+                buffer_data.extend_from_slice(&val.to_le_bytes());
+            }
+        }
     }
 
     let ibm_byte_length = buffer_data.len() - ibm_offset;

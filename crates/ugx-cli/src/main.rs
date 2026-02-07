@@ -35,6 +35,9 @@ enum Commands {
         /// Create separate .bin file instead of embedding data
         #[arg(long)]
         external_buffer: bool,
+        /// Exclude skeleton/bones from the export
+        #[arg(long)]
+        no_skeleton: bool,
     },
     /// Dump ECF structure for debugging
     Dump {
@@ -53,7 +56,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             input,
             output,
             external_buffer,
-        } => cmd_to_gltf(&input, &output, external_buffer)?,
+            no_skeleton,
+        } => cmd_to_gltf(&input, &output, external_buffer, no_skeleton)?,
         Commands::Dump { input } => cmd_dump(&input)?,
     }
 
@@ -168,6 +172,7 @@ fn cmd_to_gltf(
     input: &PathBuf,
     output: &PathBuf,
     external_buffer: bool,
+    no_skeleton: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
     let geom = UgxGeom::read(&data)?;
@@ -175,7 +180,7 @@ fn cmd_to_gltf(
     let options = GltfExportOptions {
         embed_buffers: !external_buffer,
         include_materials: true,
-        include_skeleton: true,
+        include_skeleton: !no_skeleton,
     };
 
     let export = export_to_gltf(&geom, &options)?;
