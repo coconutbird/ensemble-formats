@@ -18,7 +18,7 @@ use gltf_json as json;
 use json::validation::Checked::Valid;
 
 use crate::error::Result;
-use crate::types::Bone;
+use crate::types::{Bone, MapType};
 use crate::ugx::{GrannyBone, UgxGeom};
 use crate::univert_packer::UnpackedVertex;
 
@@ -73,13 +73,106 @@ pub fn export_to_gltf_with_buffer_name(
     let mut buffer_views = Vec::new();
     let mut meshes = Vec::new();
     let mut materials_json = Vec::new();
+    let mut images_json: Vec<json::Image> = Vec::new();
+    let mut textures_json: Vec<json::Texture> = Vec::new();
 
-    // Create materials if requested
+    // Create materials with texture references if requested
     if options.include_materials {
+        // Pass 1: Build texture registry (deduplicated image/texture objects)
+        let mut texture_map: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
         for mat in &geom.materials {
+            for map_type in MapType::ALL {
+                for map in &mat.maps[map_type as usize] {
+                    if !map.name.is_empty() && !texture_map.contains_key(&map.name) {
+                        let image_idx = images_json.len() as u32;
+                        images_json.push(json::Image {
+                            buffer_view: None,
+                            mime_type: None,
+                            name: None,
+                            uri: Some(map.name.clone()),
+                            extensions: None,
+                            extras: json::Extras::default(),
+                        });
+                        let texture_idx = textures_json.len() as u32;
+                        textures_json.push(json::Texture {
+                            name: None,
+                            sampler: None,
+                            source: json::Index::new(image_idx),
+                            extensions: None,
+                            extras: json::Extras::default(),
+                        });
+                        texture_map.insert(map.name.clone(), texture_idx);
+                    }
+                }
+            }
+        }
+
+        // Pass 2: Create glTF materials with texture references
+        for mat in &geom.materials {
+            // Diffuse → baseColorTexture
+            let base_color_texture = mat.maps[MapType::Diffuse as usize]
+                .first()
+                .filter(|m| !m.name.is_empty())
+                .map(|m| json::texture::Info {
+                    index: json::Index::new(texture_map[&m.name]),
+                    tex_coord: m.channel as u32,
+                    extensions: None,
+                    extras: json::Extras::default(),
+                });
+
+            // Normal → normalTexture
+            let normal_texture = mat.maps[MapType::Normal as usize]
+                .first()
+                .filter(|m| !m.name.is_empty())
+                .map(|m| json::material::NormalTexture {
+                    index: json::Index::new(texture_map[&m.name]),
+                    scale: 1.0,
+                    tex_coord: m.channel as u32,
+                    extensions: None,
+                    extras: json::Extras::default(),
+                });
+
+            // AO → occlusionTexture
+            let occlusion_texture = mat.maps[MapType::AO as usize]
+                .first()
+                .filter(|m| !m.name.is_empty())
+                .map(|m| json::material::OcclusionTexture {
+                    index: json::Index::new(texture_map[&m.name]),
+                    strength: json::material::StrengthFactor(1.0),
+                    tex_coord: m.channel as u32,
+                    extensions: None,
+                    extras: json::Extras::default(),
+                });
+
+            // Emissive → emissiveTexture
+            let emissive_texture = mat.maps[MapType::Emissive as usize]
+                .first()
+                .filter(|m| !m.name.is_empty())
+                .map(|m| json::texture::Info {
+                    index: json::Index::new(texture_map[&m.name]),
+                    tex_coord: m.channel as u32,
+                    extensions: None,
+                    extras: json::Extras::default(),
+                });
+
+            // Emissive factor must be [1,1,1] for emissive texture to have effect
+            let emissive_factor = if emissive_texture.is_some() {
+                json::material::EmissiveFactor([1.0, 1.0, 1.0])
+            } else {
+                json::material::EmissiveFactor([0.0, 0.0, 0.0])
+            };
+
+            // Alpha mode: blend if blend_type > 0 or opacity < 1.0
+            let alpha_mode = if mat.blend_type > 0 || mat.opacity < 1.0 {
+                Valid(json::material::AlphaMode::Blend)
+            } else {
+                Valid(json::material::AlphaMode::Opaque)
+            };
+
             let pbr = json::material::PbrMetallicRoughness {
                 base_color_factor: json::material::PbrBaseColorFactor([1.0, 1.0, 1.0, mat.opacity]),
-                base_color_texture: None,
+                base_color_texture,
                 metallic_factor: json::material::StrengthFactor(0.0),
                 roughness_factor: json::material::StrengthFactor(
                     1.0 - (mat.spec_power / 100.0).clamp(0.0, 1.0),
@@ -91,16 +184,16 @@ pub fn export_to_gltf_with_buffer_name(
 
             materials_json.push(json::Material {
                 alpha_cutoff: None,
-                alpha_mode: Valid(json::material::AlphaMode::Opaque),
+                alpha_mode,
                 double_sided: false,
                 pbr_metallic_roughness: pbr,
-                normal_texture: None,
-                occlusion_texture: None,
-                emissive_texture: None,
-                emissive_factor: json::material::EmissiveFactor([0.0, 0.0, 0.0]),
+                normal_texture,
+                occlusion_texture,
+                emissive_texture,
+                emissive_factor,
                 extensions: None,
                 extras: json::Extras::default(),
-                name: None,
+                name: Some(mat.name.clone()),
             });
         }
     }
@@ -306,6 +399,12 @@ pub fn export_to_gltf_with_buffer_name(
 
     if options.include_materials && !materials_json.is_empty() {
         root.materials = materials_json;
+    }
+    if !images_json.is_empty() {
+        root.images = images_json;
+    }
+    if !textures_json.is_empty() {
+        root.textures = textures_json;
     }
 
     // Set asset info
@@ -1544,5 +1643,186 @@ mod tests {
         let offset = view.byte_offset.unwrap().0 as usize;
 
         assert_eq!(buf[offset], 5, "rigid vertex should use section rigid bone");
+    }
+
+    // ---- Material export ----
+
+    #[test]
+    fn test_material_names_and_textures_exported() {
+        use crate::types::*;
+        use crate::univert_packer::{UnivertPacker, MAX_UV};
+        use crate::vertex_element::VertexElementType;
+
+        // Build a minimal geometry with materials
+        let packer = UnivertPacker {
+            pack_order: "P".to_string(),
+            decl_order: "P".to_string(),
+            pos_type: VertexElementType::Float3,
+            basis_type: VertexElementType::Ignore,
+            basis_scale_type: VertexElementType::Ignore,
+            tangent_type: VertexElementType::Ignore,
+            normal_type: VertexElementType::Ignore,
+            uv_types: [VertexElementType::Ignore; MAX_UV],
+            indices_type: VertexElementType::Ignore,
+            weights_type: VertexElementType::Ignore,
+            diffuse_type: VertexElementType::Ignore,
+            index_type: VertexElementType::Ignore,
+        };
+
+        let mut vb = Vec::new();
+        for pos in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+            let v = UnpackedVertex {
+                position: pos,
+                ..Default::default()
+            };
+            packer.pack_vertex(&mut vb, &v).unwrap();
+        }
+
+        let geom = UgxGeom {
+            bounding_sphere: Sphere {
+                center: [0.0; 3],
+                radius: 1.0,
+            },
+            bounds: AABB {
+                min: [0.0; 3],
+                max: [1.0; 3],
+            },
+            materials: vec![
+                Material {
+                    name: "grass_mat".to_string(),
+                    spec_power: 40.0,
+                    flags: 0,
+                    blend_type: 0,
+                    opacity: 1.0,
+                    maps: {
+                        let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
+                        maps[MapType::Diffuse as usize] = vec![Map {
+                            name: "art/grass_diff.ddx".to_string(),
+                            channel: 0,
+                            flags: 7,
+                        }];
+                        maps[MapType::Normal as usize] = vec![Map {
+                            name: "art/grass_norm.ddx".to_string(),
+                            channel: 0,
+                            flags: 7,
+                        }];
+                        maps
+                    },
+                    uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
+                },
+                Material {
+                    name: "glass_mat".to_string(),
+                    spec_power: 80.0,
+                    flags: 0,
+                    blend_type: 1,
+                    opacity: 0.5,
+                    maps: {
+                        let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
+                        maps[MapType::Diffuse as usize] = vec![Map {
+                            name: "art/glass_diff.ddx".to_string(),
+                            channel: 0,
+                            flags: 7,
+                        }];
+                        maps[MapType::Emissive as usize] = vec![Map {
+                            name: "art/glass_emit.ddx".to_string(),
+                            channel: 1,
+                            flags: 3,
+                        }];
+                        maps
+                    },
+                    uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
+                },
+            ],
+            bones: Vec::new(),
+            granny_bones: Vec::new(),
+            bone_bounds: Vec::new(),
+            sections: vec![Section {
+                material_index: 0,
+                accessory_index: -1,
+                max_bones: 0,
+                rigid_bone_index: -1,
+                ib_offset: 0,
+                num_tris: 1,
+                vb_offset: 0,
+                vb_bytes: vb.len() as i32,
+                vert_size: packer.vertex_size() as i32,
+                num_verts: 3,
+                base_vert_packer: packer,
+                rigid_only: true,
+                global_bones: false,
+            }],
+            vertex_buffer: vb,
+            index_buffer: vec![0, 1, 2],
+            rigid_only: true,
+            rigid_bone_index: -1,
+            all_sections_rigid: true,
+            all_sections_skinned: false,
+            global_bones: false,
+        };
+
+        let options = GltfExportOptions {
+            embed_buffers: true,
+            include_materials: true,
+            include_skeleton: false,
+        };
+        let export = export_to_gltf(&geom, &options).unwrap();
+        let root: json::Root = serde_json::from_str(&export.json).unwrap();
+
+        // Verify material count and names
+        assert_eq!(root.materials.len(), 2);
+        assert_eq!(root.materials[0].name, Some("grass_mat".to_string()));
+        assert_eq!(root.materials[1].name, Some("glass_mat".to_string()));
+
+        // Verify first material is opaque
+        assert_eq!(
+            root.materials[0].alpha_mode,
+            Valid(json::material::AlphaMode::Opaque)
+        );
+
+        // Verify second material uses blend (blend_type=1, opacity=0.5)
+        assert_eq!(
+            root.materials[1].alpha_mode,
+            Valid(json::material::AlphaMode::Blend)
+        );
+
+        // Verify textures were created (4 unique textures)
+        assert_eq!(root.textures.len(), 4);
+        assert_eq!(root.images.len(), 4);
+
+        // Verify image URIs
+        let image_uris: Vec<_> = root
+            .images
+            .iter()
+            .map(|img| img.uri.as_deref().unwrap())
+            .collect();
+        assert!(image_uris.contains(&"art/grass_diff.ddx"));
+        assert!(image_uris.contains(&"art/grass_norm.ddx"));
+        assert!(image_uris.contains(&"art/glass_diff.ddx"));
+        assert!(image_uris.contains(&"art/glass_emit.ddx"));
+
+        // Verify first material has diffuse and normal textures
+        assert!(root.materials[0]
+            .pbr_metallic_roughness
+            .base_color_texture
+            .is_some());
+        assert!(root.materials[0].normal_texture.is_some());
+        assert!(root.materials[0].emissive_texture.is_none());
+
+        // Verify second material has diffuse and emissive textures
+        assert!(root.materials[1]
+            .pbr_metallic_roughness
+            .base_color_texture
+            .is_some());
+        assert!(root.materials[1].normal_texture.is_none());
+        assert!(root.materials[1].emissive_texture.is_some());
+
+        // Verify emissive factor is [1,1,1] when emissive texture present
+        assert_eq!(root.materials[1].emissive_factor.0, [1.0, 1.0, 1.0]);
+        // And [0,0,0] when no emissive texture
+        assert_eq!(root.materials[0].emissive_factor.0, [0.0, 0.0, 0.0]);
+
+        // Verify emissive texture uses UV channel 1
+        let emit_info = root.materials[1].emissive_texture.as_ref().unwrap();
+        assert_eq!(emit_info.tex_coord, 1);
     }
 }

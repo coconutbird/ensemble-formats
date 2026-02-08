@@ -652,10 +652,8 @@ fn build_material_node(mat: &Material) -> bdt::Node {
     let mut node = bdt::Node::new("Material");
     node.attributes
         .push(bdt::Attribute::with_string("Name", &mat.name));
-    node.attributes.push(bdt::Attribute::new(
-        "Ver",
-        bdt::Variant::Int(4),
-    ));
+    node.attributes
+        .push(bdt::Attribute::new("Ver", bdt::Variant::Int(4)));
 
     // NameValues child with material properties
     let mut nv = bdt::Node::new("NameValues");
@@ -693,10 +691,9 @@ fn build_material_node(mat: &Material) -> bdt::Node {
         }
 
         let mut type_node = bdt::Node::new(map_type.name());
-        type_node.attributes.push(bdt::Attribute::new(
-            "UVWVel",
-            bdt::Variant::Float(uvw[0]),
-        ));
+        type_node
+            .attributes
+            .push(bdt::Attribute::new("UVWVel", bdt::Variant::Float(uvw[0])));
 
         for map in &mat.maps[idx] {
             let mut map_node = bdt::Node::new("Map");
