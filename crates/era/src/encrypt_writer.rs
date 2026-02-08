@@ -155,16 +155,14 @@ impl<W: Write + Seek + Read> Seek for EncryptWriter<W> {
 
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset,
-            SeekFrom::Current(offset) => {
-                if offset >= 0 {
-                    self.position.checked_add(offset as u64)
-                } else {
-                    self.position.checked_sub((-offset) as u64)
-                }
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of bounds")
-                })?
+            SeekFrom::Current(offset) => if offset >= 0 {
+                self.position.checked_add(offset as u64)
+            } else {
+                self.position.checked_sub((-offset) as u64)
             }
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of bounds")
+            })?,
             SeekFrom::End(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
@@ -177,4 +175,3 @@ impl<W: Write + Seek + Read> Seek for EncryptWriter<W> {
         Ok(new_pos)
     }
 }
-

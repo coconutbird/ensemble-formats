@@ -90,92 +90,115 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // world[i] = inverse(inverse_world[i])
     // local[i] = inverse_world[parent] * world[i]   (for non-root bones)
     // local[i] = world[i]                            (for root bones)
-    let world_matrices: Vec<Matrix4x4> = geom.granny_bones.iter().map(|bone| {
-        bone.inverse_world_matrix.inverse().unwrap_or_default()
-    }).collect();
+    let world_matrices: Vec<Matrix4x4> = geom
+        .granny_bones
+        .iter()
+        .map(|bone| bone.inverse_world_matrix.inverse().unwrap_or_default())
+        .collect();
 
     struct LocalTransform {
         flags: u32,
         position: [f32; 3],
-        orientation: [f32; 4], // quaternion xyzw
+        orientation: [f32; 4],      // quaternion xyzw
         scale_shear: [[f32; 3]; 3], // 3×3 row-major
     }
 
-    let local_transforms: Vec<LocalTransform> = geom.granny_bones.iter().enumerate().map(|(i, bone)| {
-        let local_matrix = if bone.parent_index >= 0 && (bone.parent_index as usize) < bone_count {
-            let parent_idx = bone.parent_index as usize;
-            // local = parent_inverse_world * child_world
-            geom.granny_bones[parent_idx].inverse_world_matrix.multiply(&world_matrices[i])
-        } else {
-            world_matrices[i].clone()
-        };
+    let local_transforms: Vec<LocalTransform> = geom
+        .granny_bones
+        .iter()
+        .enumerate()
+        .map(|(i, bone)| {
+            let local_matrix =
+                if bone.parent_index >= 0 && (bone.parent_index as usize) < bone_count {
+                    let parent_idx = bone.parent_index as usize;
+                    // local = parent_inverse_world * child_world
+                    geom.granny_bones[parent_idx]
+                        .inverse_world_matrix
+                        .multiply(&world_matrices[i])
+                } else {
+                    world_matrices[i].clone()
+                };
 
-        // Extract position from row 3 (translation row in row-major DX convention)
-        let position = local_matrix.translation();
+            // Extract position from row 3 (translation row in row-major DX convention)
+            let position = local_matrix.translation();
 
-        // Extract the upper-left 3×3 for rotation + scale
-        let m = &local_matrix.rows;
-        // Column lengths = scale factors
-        let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-        let sy = (m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1]).sqrt();
-        let sz = (m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2]).sqrt();
+            // Extract the upper-left 3×3 for rotation + scale
+            let m = &local_matrix.rows;
+            // Column lengths = scale factors
+            let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+            let sy = (m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1]).sqrt();
+            let sz = (m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2]).sqrt();
 
-        // Build a pure rotation matrix by removing scale
-        let rot_matrix = if sx > 1e-7 && sy > 1e-7 && sz > 1e-7 {
-            Matrix4x4 {
-                rows: [
-                    [m[0][0] / sx, m[0][1] / sy, m[0][2] / sz, 0.0],
-                    [m[1][0] / sx, m[1][1] / sy, m[1][2] / sz, 0.0],
-                    [m[2][0] / sx, m[2][1] / sy, m[2][2] / sz, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
+            // Build a pure rotation matrix by removing scale
+            let rot_matrix = if sx > 1e-7 && sy > 1e-7 && sz > 1e-7 {
+                Matrix4x4 {
+                    rows: [
+                        [m[0][0] / sx, m[0][1] / sy, m[0][2] / sz, 0.0],
+                        [m[1][0] / sx, m[1][1] / sy, m[1][2] / sz, 0.0],
+                        [m[2][0] / sx, m[2][1] / sy, m[2][2] / sz, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                }
+            } else {
+                Matrix4x4::identity()
+            };
+
+            let orientation = rot_matrix.to_quaternion();
+
+            // Scale_shear: Granny stores this as the 3×3 matrix S where M_3x3 = R * S
+            // So S = R^T * M_3x3 (since R is orthogonal, R^-1 = R^T)
+            let rt = rot_matrix.transpose();
+            let scale_shear = [
+                [
+                    rt.rows[0][0] * m[0][0] + rt.rows[0][1] * m[1][0] + rt.rows[0][2] * m[2][0],
+                    rt.rows[0][0] * m[0][1] + rt.rows[0][1] * m[1][1] + rt.rows[0][2] * m[2][1],
+                    rt.rows[0][0] * m[0][2] + rt.rows[0][1] * m[1][2] + rt.rows[0][2] * m[2][2],
                 ],
+                [
+                    rt.rows[1][0] * m[0][0] + rt.rows[1][1] * m[1][0] + rt.rows[1][2] * m[2][0],
+                    rt.rows[1][0] * m[0][1] + rt.rows[1][1] * m[1][1] + rt.rows[1][2] * m[2][1],
+                    rt.rows[1][0] * m[0][2] + rt.rows[1][1] * m[1][2] + rt.rows[1][2] * m[2][2],
+                ],
+                [
+                    rt.rows[2][0] * m[0][0] + rt.rows[2][1] * m[1][0] + rt.rows[2][2] * m[2][0],
+                    rt.rows[2][0] * m[0][1] + rt.rows[2][1] * m[1][1] + rt.rows[2][2] * m[2][1],
+                    rt.rows[2][0] * m[0][2] + rt.rows[2][1] * m[1][2] + rt.rows[2][2] * m[2][2],
+                ],
+            ];
+
+            // Determine which flags to set based on whether values differ from defaults
+            let mut flags = 0u32;
+            if position[0].abs() > 1e-7 || position[1].abs() > 1e-7 || position[2].abs() > 1e-7 {
+                flags |= GRANNY_HAS_POSITION;
             }
-        } else {
-            Matrix4x4::identity()
-        };
+            if (orientation[0].abs() > 1e-7)
+                || (orientation[1].abs() > 1e-7)
+                || (orientation[2].abs() > 1e-7)
+                || ((orientation[3] - 1.0).abs() > 1e-7)
+            {
+                flags |= GRANNY_HAS_ORIENTATION;
+            }
+            let is_identity_scale = (scale_shear[0][0] - 1.0).abs() < 1e-5
+                && scale_shear[0][1].abs() < 1e-5
+                && scale_shear[0][2].abs() < 1e-5
+                && scale_shear[1][0].abs() < 1e-5
+                && (scale_shear[1][1] - 1.0).abs() < 1e-5
+                && scale_shear[1][2].abs() < 1e-5
+                && scale_shear[2][0].abs() < 1e-5
+                && scale_shear[2][1].abs() < 1e-5
+                && (scale_shear[2][2] - 1.0).abs() < 1e-5;
+            if !is_identity_scale {
+                flags |= GRANNY_HAS_SCALE_SHEAR;
+            }
 
-        let orientation = rot_matrix.to_quaternion();
-
-        // Scale_shear: Granny stores this as the 3×3 matrix S where M_3x3 = R * S
-        // So S = R^T * M_3x3 (since R is orthogonal, R^-1 = R^T)
-        let rt = rot_matrix.transpose();
-        let scale_shear = [
-            [
-                rt.rows[0][0] * m[0][0] + rt.rows[0][1] * m[1][0] + rt.rows[0][2] * m[2][0],
-                rt.rows[0][0] * m[0][1] + rt.rows[0][1] * m[1][1] + rt.rows[0][2] * m[2][1],
-                rt.rows[0][0] * m[0][2] + rt.rows[0][1] * m[1][2] + rt.rows[0][2] * m[2][2],
-            ],
-            [
-                rt.rows[1][0] * m[0][0] + rt.rows[1][1] * m[1][0] + rt.rows[1][2] * m[2][0],
-                rt.rows[1][0] * m[0][1] + rt.rows[1][1] * m[1][1] + rt.rows[1][2] * m[2][1],
-                rt.rows[1][0] * m[0][2] + rt.rows[1][1] * m[1][2] + rt.rows[1][2] * m[2][2],
-            ],
-            [
-                rt.rows[2][0] * m[0][0] + rt.rows[2][1] * m[1][0] + rt.rows[2][2] * m[2][0],
-                rt.rows[2][0] * m[0][1] + rt.rows[2][1] * m[1][1] + rt.rows[2][2] * m[2][1],
-                rt.rows[2][0] * m[0][2] + rt.rows[2][1] * m[1][2] + rt.rows[2][2] * m[2][2],
-            ],
-        ];
-
-        // Determine which flags to set based on whether values differ from defaults
-        let mut flags = 0u32;
-        if position[0].abs() > 1e-7 || position[1].abs() > 1e-7 || position[2].abs() > 1e-7 {
-            flags |= GRANNY_HAS_POSITION;
-        }
-        if (orientation[0].abs() > 1e-7) || (orientation[1].abs() > 1e-7)
-            || (orientation[2].abs() > 1e-7) || ((orientation[3] - 1.0).abs() > 1e-7) {
-            flags |= GRANNY_HAS_ORIENTATION;
-        }
-        let is_identity_scale =
-            (scale_shear[0][0] - 1.0).abs() < 1e-5 && scale_shear[0][1].abs() < 1e-5 && scale_shear[0][2].abs() < 1e-5
-            && scale_shear[1][0].abs() < 1e-5 && (scale_shear[1][1] - 1.0).abs() < 1e-5 && scale_shear[1][2].abs() < 1e-5
-            && scale_shear[2][0].abs() < 1e-5 && scale_shear[2][1].abs() < 1e-5 && (scale_shear[2][2] - 1.0).abs() < 1e-5;
-        if !is_identity_scale {
-            flags |= GRANNY_HAS_SCALE_SHEAR;
-        }
-
-        LocalTransform { flags, position, orientation, scale_shear }
-    }).collect();
+            LocalTransform {
+                flags,
+                position,
+                orientation,
+                scale_shear,
+            }
+        })
+        .collect();
 
     // ---- Layout ----
     // [0x00..0x60]: File info header (96 bytes)
@@ -309,7 +332,8 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     drop(cursor);
 
-    let mut string_offsets: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut string_offsets: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for fixup in &string_fixups {
         if !string_offsets.contains_key(&fixup.string) {
             let offset = buf.len();
@@ -520,7 +544,8 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // ---- String table ----
     // Deduplicate strings and assign offsets
-    let mut string_offsets: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut string_offsets: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     for fixup in &string_fixups {
         if !string_offsets.contains_key(&fixup.string) {
             let offset = cursor.stream_position()?;
@@ -538,12 +563,27 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- Fix up packed array headers ----
-    fixup_packed_array_header(&mut cursor, sections_header_pos, num_sections, sections_offset)?;
+    fixup_packed_array_header(
+        &mut cursor,
+        sections_header_pos,
+        num_sections,
+        sections_offset,
+    )?;
     fixup_packed_array_header(&mut cursor, bones_header_pos, num_bones, bones_offset)?;
     fixup_packed_array_header(&mut cursor, accessories_header_pos, 0, 0)?;
     fixup_packed_array_header(&mut cursor, valid_acc_header_pos, 0, 0)?;
-    fixup_packed_array_header(&mut cursor, bounds_low_header_pos, num_bone_bounds, bounds_low_offset)?;
-    fixup_packed_array_header(&mut cursor, bounds_high_header_pos, num_bone_bounds, bounds_high_offset)?;
+    fixup_packed_array_header(
+        &mut cursor,
+        bounds_low_header_pos,
+        num_bone_bounds,
+        bounds_low_offset,
+    )?;
+    fixup_packed_array_header(
+        &mut cursor,
+        bounds_high_header_pos,
+        num_bone_bounds,
+        bounds_high_offset,
+    )?;
 
     drop(cursor);
     Ok(buf)
@@ -675,8 +715,14 @@ mod tests {
             bones,
             granny_bones: Vec::new(),
             bone_bounds: vec![
-                AABB { min: [0.0, 0.0, 0.0], max: [1.0, 1.0, 0.0] },
-                AABB { min: [-1.0, -1.0, -1.0], max: [1.0, 1.0, 1.0] },
+                AABB {
+                    min: [0.0, 0.0, 0.0],
+                    max: [1.0, 1.0, 0.0],
+                },
+                AABB {
+                    min: [-1.0, -1.0, -1.0],
+                    max: [1.0, 1.0, 1.0],
+                },
             ],
             sections: vec![section],
             vertex_buffer,
@@ -703,12 +749,21 @@ mod tests {
         assert_eq!(read_back.rigid_bone_index, original.rigid_bone_index);
         assert_eq!(read_back.rigid_only, original.rigid_only);
         assert_eq!(read_back.all_sections_rigid, original.all_sections_rigid);
-        assert_eq!(read_back.all_sections_skinned, original.all_sections_skinned);
+        assert_eq!(
+            read_back.all_sections_skinned,
+            original.all_sections_skinned
+        );
         assert_eq!(read_back.global_bones, original.global_bones);
 
         // Compare bounds
-        assert_eq!(read_back.bounding_sphere.center, original.bounding_sphere.center);
-        assert_eq!(read_back.bounding_sphere.radius, original.bounding_sphere.radius);
+        assert_eq!(
+            read_back.bounding_sphere.center,
+            original.bounding_sphere.center
+        );
+        assert_eq!(
+            read_back.bounding_sphere.radius,
+            original.bounding_sphere.radius
+        );
         assert_eq!(read_back.bounds.min, original.bounds.min);
         assert_eq!(read_back.bounds.max, original.bounds.max);
 
@@ -723,7 +778,10 @@ mod tests {
         assert_eq!(s_read.vb_offset, s_orig.vb_offset);
         assert_eq!(s_read.vb_bytes, s_orig.vb_bytes);
         assert_eq!(s_read.ib_offset, s_orig.ib_offset);
-        assert_eq!(s_read.base_vert_packer.pack_order, s_orig.base_vert_packer.pack_order);
+        assert_eq!(
+            s_read.base_vert_packer.pack_order,
+            s_orig.base_vert_packer.pack_order
+        );
 
         // Compare bones
         assert_eq!(read_back.bones.len(), original.bones.len());
@@ -734,7 +792,11 @@ mod tests {
 
         // Compare bone bounds
         assert_eq!(read_back.bone_bounds.len(), original.bone_bounds.len());
-        for (bb_orig, bb_read) in original.bone_bounds.iter().zip(read_back.bone_bounds.iter()) {
+        for (bb_orig, bb_read) in original
+            .bone_bounds
+            .iter()
+            .zip(read_back.bone_bounds.iter())
+        {
             assert_eq!(bb_read.min, bb_orig.min);
             assert_eq!(bb_read.max, bb_orig.max);
         }
@@ -806,7 +868,10 @@ mod tests {
                 assert!(
                     (gb0.inverse_world_matrix.rows[row][col] - expected).abs() < 1e-6,
                     "gb0 matrix[{}][{}] = {}, expected {}",
-                    row, col, gb0.inverse_world_matrix.rows[row][col], expected
+                    row,
+                    col,
+                    gb0.inverse_world_matrix.rows[row][col],
+                    expected
                 );
             }
         }
@@ -824,9 +889,13 @@ mod tests {
         for row in 0..4 {
             for col in 0..4 {
                 assert!(
-                    (gb1.inverse_world_matrix.rows[row][col] - expected_rows[row][col]).abs() < 1e-6,
+                    (gb1.inverse_world_matrix.rows[row][col] - expected_rows[row][col]).abs()
+                        < 1e-6,
                     "gb1 matrix[{}][{}] = {}, expected {}",
-                    row, col, gb1.inverse_world_matrix.rows[row][col], expected_rows[row][col]
+                    row,
+                    col,
+                    gb1.inverse_world_matrix.rows[row][col],
+                    expected_rows[row][col]
                 );
             }
         }

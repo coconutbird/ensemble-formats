@@ -264,7 +264,12 @@ impl UnivertPacker {
         while let Some(c) = chars.next() {
             match c.to_ascii_uppercase() {
                 'P' => {
-                    let v = [vertex.position[0], vertex.position[1], vertex.position[2], 1.0];
+                    let v = [
+                        vertex.position[0],
+                        vertex.position[1],
+                        vertex.position[2],
+                        1.0,
+                    ];
                     self.pos_type.pack(writer, v)?;
                 }
                 'B' => {
@@ -293,7 +298,8 @@ impl UnivertPacker {
                     }
                 }
                 'S' => {
-                    self.indices_type.pack_as_indices(writer, vertex.bone_indices)?;
+                    self.indices_type
+                        .pack_as_indices(writer, vertex.bone_indices)?;
                     self.weights_type.pack(writer, vertex.bone_weights)?;
                 }
                 'D' => {

@@ -27,11 +27,11 @@ mod error;
 pub use error::{Error, Result};
 
 pub mod variant;
-pub use variant::{Variant, VariantType};
 pub use variant::{
     pack_float24, pack_fract24, pack_int24, pack_uint24, unpack_float24, unpack_fract24,
     unpack_int24, unpack_uint24,
 };
+pub use variant::{Variant, VariantType};
 pub use variant::{OFFSET_FLAG, TYPE_MASK, UNSIGNED_FLAG, VEC_SIZE_MASK, VEC_SIZE_SHIFT};
 
 mod types;

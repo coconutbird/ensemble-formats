@@ -130,4 +130,3 @@ impl EcfChunkHeader {
         CompressionMethod::from_flags(self.flags)
     }
 }
-

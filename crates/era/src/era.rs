@@ -114,7 +114,9 @@ impl EraChunkExtra {
         reader.read_exact(&mut buf)?;
 
         Ok(Self {
-            date: u64::from_be_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]]),
+            date: u64::from_be_bytes([
+                buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+            ]),
             decomp_size: u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]),
             comp_tiger128: buf[12..28].try_into().unwrap(),
             // 3-byte big-endian offset at bytes 28, 29, 30
@@ -199,9 +201,8 @@ impl<R: Read + Seek> EraArchive<R> {
         let archive_header = EraArchiveHeader::read(&mut reader)?;
 
         // Skip signature data
-        let signature_skip = ecf_header.header_size as i64
-            - EcfHeader::SIZE as i64
-            - EraArchiveHeader::SIZE as i64;
+        let signature_skip =
+            ecf_header.header_size as i64 - EcfHeader::SIZE as i64 - EraArchiveHeader::SIZE as i64;
         if signature_skip > 0 {
             reader.seek(SeekFrom::Current(signature_skip))?;
         }
@@ -215,7 +216,8 @@ impl<R: Read + Seek> EraArchive<R> {
             // Read extra data if present
             let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
                 let extra = EraChunkExtra::read(&mut reader)?;
-                let remaining = ecf_header.chunk_extra_data_size as i64 - EraChunkExtra::SIZE as i64;
+                let remaining =
+                    ecf_header.chunk_extra_data_size as i64 - EraChunkExtra::SIZE as i64;
                 if remaining > 0 {
                     reader.seek(SeekFrom::Current(remaining))?;
                 }
@@ -232,7 +234,11 @@ impl<R: Read + Seek> EraArchive<R> {
                 }
             };
 
-            entries.push(EraEntry { chunk, extra, filename: None });
+            entries.push(EraEntry {
+                chunk,
+                extra,
+                filename: None,
+            });
         }
 
         // Read and decompress filename table (always at index 0)
@@ -249,7 +255,13 @@ impl<R: Read + Seek> EraArchive<R> {
             }
         }
 
-        Ok(Self { reader, ecf_header, archive_header, entries, filename_table })
+        Ok(Self {
+            reader,
+            ecf_header,
+            archive_header,
+            entries,
+            filename_table,
+        })
     }
 
     fn read_filename_table(reader: &mut R, entry: &EraEntry) -> Result<Vec<u8>> {
@@ -263,16 +275,17 @@ impl<R: Read + Seek> EraArchive<R> {
                 use flate2::read::DeflateDecoder;
                 let mut decoder = DeflateDecoder::new(&compressed[..]);
                 let mut decompressed = vec![0u8; entry.extra.decomp_size as usize];
-                decoder.read_exact(&mut decompressed).map_err(|e| {
-                    Error::DecompressionError(format!("deflate raw: {}", e))
-                })?;
+                decoder
+                    .read_exact(&mut decompressed)
+                    .map_err(|e| Error::DecompressionError(format!("deflate raw: {}", e)))?;
                 decompressed
             }
-            CompressionMethod::DeflateStream => {
-                ecf::decompress_bdeflate_stream(&compressed)?
-            }
+            CompressionMethod::DeflateStream => ecf::decompress_bdeflate_stream(&compressed)?,
             CompressionMethod::Unknown(n) => {
-                return Err(Error::DecompressionError(format!("unknown compression method: {}", n)));
+                return Err(Error::DecompressionError(format!(
+                    "unknown compression method: {}",
+                    n
+                )));
             }
         };
         Ok(decompressed)
@@ -283,38 +296,57 @@ impl<R: Read + Seek> EraArchive<R> {
             return None;
         }
         let start = offset as usize;
-        let end = table[start..].iter().position(|&b| b == 0).map(|p| start + p).unwrap_or(table.len());
+        let end = table[start..]
+            .iter()
+            .position(|&b| b == 0)
+            .map(|p| start + p)
+            .unwrap_or(table.len());
         String::from_utf8(table[start..end].to_vec()).ok()
     }
 
     /// Get the number of entries in the archive
-    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 
     /// Check if the archive is empty
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 
     /// Get an entry by index
-    pub fn entry(&self, index: usize) -> Option<&EraEntry> { self.entries.get(index) }
+    pub fn entry(&self, index: usize) -> Option<&EraEntry> {
+        self.entries.get(index)
+    }
 
     /// Iterate over all entries
-    pub fn iter(&self) -> impl Iterator<Item = &EraEntry> { self.entries.iter() }
+    pub fn iter(&self) -> impl Iterator<Item = &EraEntry> {
+        self.entries.iter()
+    }
 
     /// Find an entry by filename
     pub fn find_by_name(&self, name: &str) -> Option<usize> {
         let name_lower = name.to_lowercase().replace('/', "\\");
         self.entries.iter().position(|e| {
-            e.filename.as_ref().is_some_and(|f| f.to_lowercase() == name_lower)
+            e.filename
+                .as_ref()
+                .is_some_and(|f| f.to_lowercase() == name_lower)
         })
     }
 
     /// Read and decompress the data for an entry
     pub fn read_entry(&mut self, index: usize) -> Result<Vec<u8>> {
-        let entry = self.entries.get(index).ok_or(Error::ChunkIndexOutOfBounds {
-            index,
-            count: self.entries.len(),
-        })?.clone();
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(Error::ChunkIndexOutOfBounds {
+                index,
+                count: self.entries.len(),
+            })?
+            .clone();
 
-        self.reader.seek(SeekFrom::Start(entry.chunk.offset as u64))?;
+        self.reader
+            .seek(SeekFrom::Start(entry.chunk.offset as u64))?;
         let mut compressed = vec![0u8; entry.chunk.size as usize];
         self.reader.read_exact(&mut compressed)?;
 
@@ -324,20 +356,20 @@ impl<R: Read + Seek> EraArchive<R> {
                 use flate2::read::DeflateDecoder;
                 let mut decoder = DeflateDecoder::new(&compressed[..]);
                 let mut decompressed = vec![0u8; entry.extra.decomp_size as usize];
-                decoder.read_exact(&mut decompressed).map_err(|e| {
-                    Error::DecompressionError(format!("deflate raw: {}", e))
-                })?;
+                decoder
+                    .read_exact(&mut decompressed)
+                    .map_err(|e| Error::DecompressionError(format!("deflate raw: {}", e)))?;
                 decompressed
             }
-            CompressionMethod::DeflateStream => {
-                ecf::decompress_bdeflate_stream(&compressed)?
-            }
+            CompressionMethod::DeflateStream => ecf::decompress_bdeflate_stream(&compressed)?,
             CompressionMethod::Unknown(n) => {
-                return Err(Error::DecompressionError(format!("unknown compression method: {}", n)));
+                return Err(Error::DecompressionError(format!(
+                    "unknown compression method: {}",
+                    n
+                )));
             }
         };
 
         Ok(decompressed)
     }
 }
-

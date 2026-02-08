@@ -24,8 +24,8 @@ pub use header::{EcfChunkHeader, EcfHeader};
 
 mod deflate_stream;
 pub use deflate_stream::{
-    decompress_bdeflate_stream, compress_bdeflate_stream, 
-    SIGNATURE, SIGNATURE_INVERTED, HEADER_SIZE, END_MAGIC,
+    compress_bdeflate_stream, decompress_bdeflate_stream, END_MAGIC, HEADER_SIZE, SIGNATURE,
+    SIGNATURE_INVERTED,
 };
 
 mod reader;
@@ -155,14 +155,17 @@ mod tests {
 
     #[test]
     fn test_ecf_compressed_chunk_roundtrip() {
-        let data = b"This is some data that will be compressed using BDeflateStream format!".to_vec();
+        let data =
+            b"This is some data that will be compressed using BDeflateStream format!".to_vec();
         let file_id = 0x11111111;
         let chunk_id = 0x22222222;
 
         // Write with compression
         let mut buffer = Cursor::new(Vec::new());
         let mut writer = EcfWriter::new(&mut buffer, file_id);
-        writer.add_chunk_compressed(chunk_id, data.clone()).expect("Failed to add compressed chunk");
+        writer
+            .add_chunk_compressed(chunk_id, data.clone())
+            .expect("Failed to add compressed chunk");
         writer.finalize().expect("Failed to finalize");
 
         // Read (should auto-decompress)
@@ -226,9 +229,18 @@ mod tests {
     #[test]
     fn test_compression_method_from_flags() {
         assert_eq!(CompressionMethod::from_flags(0), CompressionMethod::Stored);
-        assert_eq!(CompressionMethod::from_flags(1), CompressionMethod::DeflateRaw);
-        assert_eq!(CompressionMethod::from_flags(2), CompressionMethod::DeflateStream);
-        assert_eq!(CompressionMethod::from_flags(5), CompressionMethod::Unknown(5));
+        assert_eq!(
+            CompressionMethod::from_flags(1),
+            CompressionMethod::DeflateRaw
+        );
+        assert_eq!(
+            CompressionMethod::from_flags(2),
+            CompressionMethod::DeflateStream
+        );
+        assert_eq!(
+            CompressionMethod::from_flags(5),
+            CompressionMethod::Unknown(5)
+        );
     }
 
     #[test]

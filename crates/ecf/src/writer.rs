@@ -168,4 +168,3 @@ impl<W: Write + Seek> EcfWriter<W> {
         Ok(())
     }
 }
-

@@ -79,12 +79,13 @@ pub fn import_from_gltf(
             }
 
             // Choose vertex format based on what data is present
-            let has_tangents = vertices.iter().any(|v| {
-                v.tangent[0] != 0.0 || v.tangent[1] != 0.0 || v.tangent[2] != 0.0
-            });
-            let has_skin = has_skeleton && vertices.iter().any(|v| {
-                v.bone_weights.iter().sum::<f32>() > 0.0
-            });
+            let has_tangents = vertices
+                .iter()
+                .any(|v| v.tangent[0] != 0.0 || v.tangent[1] != 0.0 || v.tangent[2] != 0.0);
+            let has_skin = has_skeleton
+                && vertices
+                    .iter()
+                    .any(|v| v.bone_weights.iter().sum::<f32>() > 0.0);
             let max_texcoords = vertices.iter().map(|v| v.num_texcoords).max().unwrap_or(0);
 
             // Build pack order
@@ -111,11 +112,23 @@ pub fn import_from_gltf(
                 pos_type: VertexElementType::Float3,
                 basis_type: VertexElementType::Float4,
                 basis_scale_type: VertexElementType::Float2,
-                tangent_type: if has_tangents { VertexElementType::Float4 } else { VertexElementType::Ignore },
+                tangent_type: if has_tangents {
+                    VertexElementType::Float4
+                } else {
+                    VertexElementType::Ignore
+                },
                 normal_type: VertexElementType::Float3,
                 uv_types,
-                indices_type: if has_skin { VertexElementType::UByte4 } else { VertexElementType::Ignore },
-                weights_type: if has_skin { VertexElementType::Float4 } else { VertexElementType::Ignore },
+                indices_type: if has_skin {
+                    VertexElementType::UByte4
+                } else {
+                    VertexElementType::Ignore
+                },
+                weights_type: if has_skin {
+                    VertexElementType::Float4
+                } else {
+                    VertexElementType::Ignore
+                },
                 diffuse_type: VertexElementType::Ignore,
                 index_type: VertexElementType::Ignore,
             };
@@ -137,7 +150,11 @@ pub fn import_from_gltf(
                 material_index,
                 accessory_index: -1,
                 max_bones: if has_skin { bones.len() as i32 } else { 0 },
-                rigid_bone_index: if !has_skin && !bones.is_empty() { 0 } else { -1 },
+                rigid_bone_index: if !has_skin && !bones.is_empty() {
+                    0
+                } else {
+                    -1
+                },
                 ib_offset,
                 num_tris,
                 vb_offset,
@@ -185,10 +202,7 @@ pub fn import_from_gltf(
 }
 
 /// Resolve the binary buffer data from either the provided bytes or embedded base64.
-fn resolve_buffer(
-    root: &gltf_json::Root,
-    external_data: Option<&[u8]>,
-) -> Result<Vec<u8>> {
+fn resolve_buffer(root: &gltf_json::Root, external_data: Option<&[u8]>) -> Result<Vec<u8>> {
     if let Some(data) = external_data {
         return Ok(data.to_vec());
     }
@@ -197,9 +211,9 @@ fn resolve_buffer(
     if let Some(buffer) = root.buffers.first() {
         if let Some(ref uri) = buffer.uri {
             if let Some(base64_data) = uri.strip_prefix("data:application/octet-stream;base64,") {
-                let decoded = STANDARD
-                    .decode(base64_data)
-                    .map_err(|e| Error::UnsupportedFormat(format!("Invalid base64 buffer: {}", e)))?;
+                let decoded = STANDARD.decode(base64_data).map_err(|e| {
+                    Error::UnsupportedFormat(format!("Invalid base64 buffer: {}", e))
+                })?;
                 return Ok(decoded);
             }
         }
@@ -215,7 +229,8 @@ fn read_accessor_f32(
     root: &gltf_json::Root,
     buffer_bytes: &[u8],
 ) -> Result<Vec<f32>> {
-    let view_idx = accessor.buffer_view
+    let view_idx = accessor
+        .buffer_view
         .ok_or_else(|| Error::UnsupportedFormat("Accessor missing buffer_view".into()))?;
     let view = &root.buffer_views[view_idx.value()];
 
@@ -256,24 +271,27 @@ fn read_accessor_f32(
         for c in 0..components {
             let offset = elem_offset + c * component_size;
             let value = match accessor.component_type {
-                gltf_json::validation::Checked::Valid(gltf_json::accessor::GenericComponentType(ct)) => {
-                    match ct {
-                        gltf_json::accessor::ComponentType::F32 => {
-                            f32::from_le_bytes(buffer_bytes[offset..offset + 4].try_into().unwrap())
-                        }
-                        gltf_json::accessor::ComponentType::U8 => buffer_bytes[offset] as f32,
-                        gltf_json::accessor::ComponentType::U16 => {
-                            u16::from_le_bytes(buffer_bytes[offset..offset + 2].try_into().unwrap()) as f32
-                        }
-                        gltf_json::accessor::ComponentType::I8 => buffer_bytes[offset] as i8 as f32,
-                        gltf_json::accessor::ComponentType::I16 => {
-                            i16::from_le_bytes(buffer_bytes[offset..offset + 2].try_into().unwrap()) as f32
-                        }
-                        gltf_json::accessor::ComponentType::U32 => {
-                            u32::from_le_bytes(buffer_bytes[offset..offset + 4].try_into().unwrap()) as f32
-                        }
+                gltf_json::validation::Checked::Valid(
+                    gltf_json::accessor::GenericComponentType(ct),
+                ) => match ct {
+                    gltf_json::accessor::ComponentType::F32 => {
+                        f32::from_le_bytes(buffer_bytes[offset..offset + 4].try_into().unwrap())
                     }
-                }
+                    gltf_json::accessor::ComponentType::U8 => buffer_bytes[offset] as f32,
+                    gltf_json::accessor::ComponentType::U16 => {
+                        u16::from_le_bytes(buffer_bytes[offset..offset + 2].try_into().unwrap())
+                            as f32
+                    }
+                    gltf_json::accessor::ComponentType::I8 => buffer_bytes[offset] as i8 as f32,
+                    gltf_json::accessor::ComponentType::I16 => {
+                        i16::from_le_bytes(buffer_bytes[offset..offset + 2].try_into().unwrap())
+                            as f32
+                    }
+                    gltf_json::accessor::ComponentType::U32 => {
+                        u32::from_le_bytes(buffer_bytes[offset..offset + 4].try_into().unwrap())
+                            as f32
+                    }
+                },
                 _ => 0.0,
             };
             result.push(value);
@@ -295,13 +313,16 @@ fn import_primitive(
     use gltf_json::validation::Checked::Valid;
 
     // Read positions
-    let (positions, vertex_count) = if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Positions)) {
-        let acc = &root.accessors[acc_idx.value()];
-        let count = acc.count.0 as usize;
-        (read_accessor_f32(acc, root, buffer_bytes)?, count)
-    } else {
-        return Err(Error::UnsupportedFormat("Mesh primitive missing POSITION".into()));
-    };
+    let (positions, vertex_count) =
+        if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Positions)) {
+            let acc = &root.accessors[acc_idx.value()];
+            let count = acc.count.0 as usize;
+            (read_accessor_f32(acc, root, buffer_bytes)?, count)
+        } else {
+            return Err(Error::UnsupportedFormat(
+                "Mesh primitive missing POSITION".into(),
+            ));
+        };
 
     // Read normals
     let normals = if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Normals)) {
@@ -322,7 +343,10 @@ fn import_primitive(
     // Read UV sets
     let mut uv_sets: Vec<Vec<f32>> = Vec::new();
     for i in 0..MAX_UV {
-        if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::TexCoords(i as u32))) {
+        if let Some(acc_idx) = primitive
+            .attributes
+            .get(&Valid(Semantic::TexCoords(i as u32)))
+        {
             let acc = &root.accessors[acc_idx.value()];
             uv_sets.push(read_accessor_f32(acc, root, buffer_bytes)?);
         } else {
@@ -366,24 +390,20 @@ fn import_primitive(
 
     // Build vertices
     let mut vertices = Vec::with_capacity(vertex_count);
-    let max_bone_idx = if bone_count > 0 { (bone_count - 1) as u16 } else { 0 };
+    let max_bone_idx = if bone_count > 0 {
+        (bone_count - 1) as u16
+    } else {
+        0
+    };
 
     for i in 0..vertex_count {
         let mut vertex = UnpackedVertex::default();
 
         // Position
-        vertex.position = [
-            positions[i * 3],
-            positions[i * 3 + 1],
-            positions[i * 3 + 2],
-        ];
+        vertex.position = [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]];
 
         // Normal
-        vertex.normal = [
-            normals[i * 3],
-            normals[i * 3 + 1],
-            normals[i * 3 + 2],
-        ];
+        vertex.normal = [normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]];
 
         // Tangent
         if let Some(ref t) = tangents {
@@ -449,17 +469,15 @@ fn import_skeleton(
         let mut data = Vec::with_capacity(joint_count * 16);
         for _ in 0..joint_count {
             data.extend_from_slice(&[
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
             ]);
         }
         data
     };
 
     // Build a map from node index → joint index
-    let mut node_to_joint: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut node_to_joint: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
     for (joint_idx, joint_node) in skin.joints.iter().enumerate() {
         node_to_joint.insert(joint_node.value(), joint_idx);
     }
@@ -471,7 +489,10 @@ fn import_skeleton(
     for (joint_idx, joint_node_idx) in skin.joints.iter().enumerate() {
         let node = &root.nodes[joint_node_idx.value()];
 
-        let name = node.name.clone().unwrap_or_else(|| format!("bone_{}", joint_idx));
+        let name = node
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("bone_{}", joint_idx));
 
         // Find parent: look through all joint nodes to find one that has this node as a child
         let mut parent_index: i32 = -1;
@@ -666,14 +687,26 @@ mod tests {
         ];
 
         UgxGeom {
-            bounding_sphere: Sphere { center: [0.5, 0.5, 0.0], radius: 1.0 },
-            bounds: AABB { min: [0.0, 0.0, 0.0], max: [1.0, 1.0, 0.0] },
+            bounding_sphere: Sphere {
+                center: [0.5, 0.5, 0.0],
+                radius: 1.0,
+            },
+            bounds: AABB {
+                min: [0.0, 0.0, 0.0],
+                max: [1.0, 1.0, 0.0],
+            },
             materials: Vec::new(),
             bones,
             granny_bones,
             bone_bounds: vec![
-                AABB { min: [0.0, 0.0, 0.0], max: [1.0, 1.0, 0.0] },
-                AABB { min: [0.0, 0.0, 0.0], max: [1.0, 1.0, 0.0] },
+                AABB {
+                    min: [0.0, 0.0, 0.0],
+                    max: [1.0, 1.0, 0.0],
+                },
+                AABB {
+                    min: [0.0, 0.0, 0.0],
+                    max: [1.0, 1.0, 0.0],
+                },
             ],
             sections: vec![Section {
                 material_index: -1,
@@ -717,7 +750,8 @@ mod tests {
             include_skeleton: false,
             include_materials: false,
         };
-        let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
         // Compare vertex positions
         assert_eq!(imported.sections.len(), 1);
@@ -729,7 +763,10 @@ mod tests {
             for i in 0..3 {
                 assert!(
                     (orig.position[i] - imp.position[i]).abs() < 1e-5,
-                    "position[{}] mismatch: {} vs {}", i, orig.position[i], imp.position[i]
+                    "position[{}] mismatch: {} vs {}",
+                    i,
+                    orig.position[i],
+                    imp.position[i]
                 );
             }
         }
@@ -750,7 +787,8 @@ mod tests {
             include_skeleton: false,
             include_materials: false,
         };
-        let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
         let orig_verts = original.unpack_section_vertices(0).unwrap();
         let imported_verts = imported.unpack_section_vertices(0).unwrap();
@@ -760,14 +798,20 @@ mod tests {
             for i in 0..3 {
                 assert!(
                     (orig.normal[i] - imp.normal[i]).abs() < 1e-4,
-                    "normal[{}] mismatch: {} vs {}", i, orig.normal[i], imp.normal[i]
+                    "normal[{}] mismatch: {} vs {}",
+                    i,
+                    orig.normal[i],
+                    imp.normal[i]
                 );
             }
             // UVs
             for i in 0..2 {
                 assert!(
                     (orig.texcoords[0][i] - imp.texcoords[0][i]).abs() < 1e-5,
-                    "uv[0][{}] mismatch: {} vs {}", i, orig.texcoords[0][i], imp.texcoords[0][i]
+                    "uv[0][{}] mismatch: {} vs {}",
+                    i,
+                    orig.texcoords[0][i],
+                    imp.texcoords[0][i]
                 );
             }
         }
@@ -788,7 +832,8 @@ mod tests {
             include_skeleton: true,
             include_materials: false,
         };
-        let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
         // Check bone count and names
         assert_eq!(imported.bones.len(), original.bones.len());
@@ -813,21 +858,28 @@ mod tests {
             include_skeleton: true,
             include_materials: false,
         };
-        let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
         let orig_verts = original.unpack_section_vertices(0).unwrap();
         let imported_verts = imported.unpack_section_vertices(0).unwrap();
 
         for (orig, imp) in orig_verts.iter().zip(imported_verts.iter()) {
             // Bone indices should match
-            assert_eq!(imp.bone_indices, orig.bone_indices,
-                "bone_indices mismatch: {:?} vs {:?}", imp.bone_indices, orig.bone_indices);
+            assert_eq!(
+                imp.bone_indices, orig.bone_indices,
+                "bone_indices mismatch: {:?} vs {:?}",
+                imp.bone_indices, orig.bone_indices
+            );
 
             // Bone weights should be close
             for k in 0..4 {
                 assert!(
                     (orig.bone_weights[k] - imp.bone_weights[k]).abs() < 1e-4,
-                    "bone_weight[{}] mismatch: {} vs {}", k, orig.bone_weights[k], imp.bone_weights[k]
+                    "bone_weight[{}] mismatch: {} vs {}",
+                    k,
+                    orig.bone_weights[k],
+                    imp.bone_weights[k]
                 );
             }
         }
@@ -844,7 +896,10 @@ mod tests {
             include_skeleton: false,
         };
         let export = export_to_gltf(&original, &opts).unwrap();
-        assert!(export.buffer.is_none(), "embedded export should not have separate buffer");
+        assert!(
+            export.buffer.is_none(),
+            "embedded export should not have separate buffer"
+        );
 
         // Import with no external buffer (should decode from base64)
         let import_opts = GltfImportOptions {
@@ -878,7 +933,8 @@ mod tests {
             include_skeleton: true,
             include_materials: false,
         };
-        let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
         // 3. Write to UGX bytes
         let ugx_bytes = crate::write_ugx(&imported).unwrap();
@@ -899,7 +955,11 @@ mod tests {
             for i in 0..3 {
                 assert!(
                     (orig.position[i] - fin.position[i]).abs() < 1e-4,
-                    "vertex {} position[{}] mismatch: {} vs {}", vi, i, orig.position[i], fin.position[i]
+                    "vertex {} position[{}] mismatch: {} vs {}",
+                    vi,
+                    i,
+                    orig.position[i],
+                    fin.position[i]
                 );
             }
 
@@ -907,7 +967,11 @@ mod tests {
             for i in 0..3 {
                 assert!(
                     (orig.normal[i] - fin.normal[i]).abs() < 1e-4,
-                    "vertex {} normal[{}] mismatch: {} vs {}", vi, i, orig.normal[i], fin.normal[i]
+                    "vertex {} normal[{}] mismatch: {} vs {}",
+                    vi,
+                    i,
+                    orig.normal[i],
+                    fin.normal[i]
                 );
             }
 
@@ -915,7 +979,11 @@ mod tests {
             for i in 0..4 {
                 assert!(
                     (orig.tangent[i] - fin.tangent[i]).abs() < 1e-4,
-                    "vertex {} tangent[{}] mismatch: {} vs {}", vi, i, orig.tangent[i], fin.tangent[i]
+                    "vertex {} tangent[{}] mismatch: {} vs {}",
+                    vi,
+                    i,
+                    orig.tangent[i],
+                    fin.tangent[i]
                 );
             }
 
@@ -924,7 +992,12 @@ mod tests {
                 for j in 0..2 {
                     assert!(
                         (orig.texcoords[i][j] - fin.texcoords[i][j]).abs() < 1e-4,
-                        "vertex {} texcoord[{}][{}] mismatch: {} vs {}", vi, i, j, orig.texcoords[i][j], fin.texcoords[i][j]
+                        "vertex {} texcoord[{}][{}] mismatch: {} vs {}",
+                        vi,
+                        i,
+                        j,
+                        orig.texcoords[i][j],
+                        fin.texcoords[i][j]
                     );
                 }
             }
@@ -932,14 +1005,19 @@ mod tests {
             // Bone indices
             assert_eq!(
                 orig.bone_indices, fin.bone_indices,
-                "vertex {} bone_indices mismatch: {:?} vs {:?}", vi, orig.bone_indices, fin.bone_indices
+                "vertex {} bone_indices mismatch: {:?} vs {:?}",
+                vi, orig.bone_indices, fin.bone_indices
             );
 
             // Bone weights
             for i in 0..4 {
                 assert!(
                     (orig.bone_weights[i] - fin.bone_weights[i]).abs() < 1e-4,
-                    "vertex {} bone_weights[{}] mismatch: {} vs {}", vi, i, orig.bone_weights[i], fin.bone_weights[i]
+                    "vertex {} bone_weights[{}] mismatch: {} vs {}",
+                    vi,
+                    i,
+                    orig.bone_weights[i],
+                    fin.bone_weights[i]
                 );
             }
         }
@@ -951,38 +1029,57 @@ mod tests {
 
         // Verify bone names and hierarchy survived
         assert_eq!(re_read.bones.len(), original.bones.len());
-        for (bi, (orig_bone, fin_bone)) in original.bones.iter().zip(re_read.bones.iter()).enumerate() {
+        for (bi, (orig_bone, fin_bone)) in
+            original.bones.iter().zip(re_read.bones.iter()).enumerate()
+        {
             assert_eq!(
                 orig_bone.name, fin_bone.name,
-                "bone {} name mismatch: {:?} vs {:?}", bi, orig_bone.name, fin_bone.name
+                "bone {} name mismatch: {:?} vs {:?}",
+                bi, orig_bone.name, fin_bone.name
             );
             assert_eq!(
                 orig_bone.parent_index, fin_bone.parent_index,
-                "bone {} parent_index mismatch: {} vs {}", bi, orig_bone.parent_index, fin_bone.parent_index
+                "bone {} parent_index mismatch: {} vs {}",
+                bi, orig_bone.parent_index, fin_bone.parent_index
             );
         }
 
         // Verify granny bones survived the round trip
         assert_eq!(
-            re_read.granny_bones.len(), original.granny_bones.len(),
-            "granny_bones count mismatch: {} vs {}", re_read.granny_bones.len(), original.granny_bones.len()
+            re_read.granny_bones.len(),
+            original.granny_bones.len(),
+            "granny_bones count mismatch: {} vs {}",
+            re_read.granny_bones.len(),
+            original.granny_bones.len()
         );
-        for (bi, (orig_gb, fin_gb)) in original.granny_bones.iter().zip(re_read.granny_bones.iter()).enumerate() {
+        for (bi, (orig_gb, fin_gb)) in original
+            .granny_bones
+            .iter()
+            .zip(re_read.granny_bones.iter())
+            .enumerate()
+        {
             assert_eq!(
                 orig_gb.name, fin_gb.name,
-                "granny_bone {} name mismatch: {:?} vs {:?}", bi, orig_gb.name, fin_gb.name
+                "granny_bone {} name mismatch: {:?} vs {:?}",
+                bi, orig_gb.name, fin_gb.name
             );
             assert_eq!(
                 orig_gb.parent_index, fin_gb.parent_index,
-                "granny_bone {} parent_index mismatch: {} vs {}", bi, orig_gb.parent_index, fin_gb.parent_index
+                "granny_bone {} parent_index mismatch: {} vs {}",
+                bi, orig_gb.parent_index, fin_gb.parent_index
             );
             // Compare inverse world matrices
             for row in 0..4 {
                 for col in 0..4 {
                     assert!(
-                        (orig_gb.inverse_world_matrix.rows[row][col] - fin_gb.inverse_world_matrix.rows[row][col]).abs() < 1e-4,
+                        (orig_gb.inverse_world_matrix.rows[row][col]
+                            - fin_gb.inverse_world_matrix.rows[row][col])
+                            .abs()
+                            < 1e-4,
                         "granny_bone {} matrix[{}][{}] mismatch: {} vs {}",
-                        bi, row, col,
+                        bi,
+                        row,
+                        col,
                         orig_gb.inverse_world_matrix.rows[row][col],
                         fin_gb.inverse_world_matrix.rows[row][col]
                     );
@@ -991,11 +1088,16 @@ mod tests {
         }
 
         // Verify bounding volumes are reasonable
-        assert!(re_read.bounding_sphere.radius > 0.0, "bounding sphere radius should be positive");
+        assert!(
+            re_read.bounding_sphere.radius > 0.0,
+            "bounding sphere radius should be positive"
+        );
         for i in 0..3 {
             assert!(
                 re_read.bounds.max[i] >= re_read.bounds.min[i],
-                "AABB max[{}] < min[{}]", i, i
+                "AABB max[{}] < min[{}]",
+                i,
+                i
             );
         }
     }
@@ -1026,10 +1128,17 @@ mod tests {
             };
 
             eprintln!("\n=== Testing: {} ===", path);
-            eprintln!("  Sections: {}, Bones: {}, Granny bones: {}",
-                original.sections.len(), original.bones.len(), original.granny_bones.len());
-            eprintln!("  Total vertices: {}, Total triangles: {}",
-                original.total_vertices(), original.total_triangles());
+            eprintln!(
+                "  Sections: {}, Bones: {}, Granny bones: {}",
+                original.sections.len(),
+                original.bones.len(),
+                original.granny_bones.len()
+            );
+            eprintln!(
+                "  Total vertices: {}, Total triangles: {}",
+                original.total_vertices(),
+                original.total_triangles()
+            );
 
             // 1. Export to glTF
             let export_opts = GltfExportOptions {
@@ -1044,33 +1153,56 @@ mod tests {
                 include_skeleton: true,
                 include_materials: false,
             };
-            let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+            let imported =
+                import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
             // 3. Verify imported matches original in structure
-            assert_eq!(imported.sections.len(), original.sections.len(),
-                "section count mismatch");
+            assert_eq!(
+                imported.sections.len(),
+                original.sections.len(),
+                "section count mismatch"
+            );
 
             // Check vertex counts match per section
-            for (si, (orig_sec, imp_sec)) in original.sections.iter().zip(imported.sections.iter()).enumerate() {
-                assert_eq!(imp_sec.num_verts, orig_sec.num_verts,
-                    "section {} vertex count mismatch: {} vs {}", si, imp_sec.num_verts, orig_sec.num_verts);
-                assert_eq!(imp_sec.num_tris, orig_sec.num_tris,
-                    "section {} triangle count mismatch: {} vs {}", si, imp_sec.num_tris, orig_sec.num_tris);
+            for (si, (orig_sec, imp_sec)) in original
+                .sections
+                .iter()
+                .zip(imported.sections.iter())
+                .enumerate()
+            {
+                assert_eq!(
+                    imp_sec.num_verts, orig_sec.num_verts,
+                    "section {} vertex count mismatch: {} vs {}",
+                    si, imp_sec.num_verts, orig_sec.num_verts
+                );
+                assert_eq!(
+                    imp_sec.num_tris, orig_sec.num_tris,
+                    "section {} triangle count mismatch: {} vs {}",
+                    si, imp_sec.num_tris, orig_sec.num_tris
+                );
             }
 
             // Check vertex data for each section
             for si in 0..original.sections.len() {
                 let orig_verts = original.unpack_section_vertices(si).unwrap();
                 let imp_verts = imported.unpack_section_vertices(si).unwrap();
-                assert_eq!(imp_verts.len(), orig_verts.len(),
-                    "section {} unpacked vertex count mismatch", si);
+                assert_eq!(
+                    imp_verts.len(),
+                    orig_verts.len(),
+                    "section {} unpacked vertex count mismatch",
+                    si
+                );
 
                 for (vi, (ov, iv)) in orig_verts.iter().zip(imp_verts.iter()).enumerate() {
                     for c in 0..3 {
                         assert!(
                             (ov.position[c] - iv.position[c]).abs() < 0.01,
                             "section {} vertex {} position[{}] mismatch: {} vs {}",
-                            si, vi, c, ov.position[c], iv.position[c]
+                            si,
+                            vi,
+                            c,
+                            ov.position[c],
+                            iv.position[c]
                         );
                     }
                     // Normals (may lose some precision through half-float or dec3n packing in original)
@@ -1080,7 +1212,11 @@ mod tests {
                     assert!(
                         ndot > 0.9 || (ov.normal == [0.0, 0.0, 0.0]),
                         "section {} vertex {} normal diverged too much: {:?} vs {:?} (dot={})",
-                        si, vi, ov.normal, iv.normal, ndot
+                        si,
+                        vi,
+                        ov.normal,
+                        iv.normal,
+                        ndot
                     );
                 }
 
@@ -1092,30 +1228,54 @@ mod tests {
 
             // Check bone hierarchy
             if !original.bones.is_empty() {
-                assert_eq!(imported.bones.len(), original.bones.len(),
-                    "bone count mismatch");
+                assert_eq!(
+                    imported.bones.len(),
+                    original.bones.len(),
+                    "bone count mismatch"
+                );
                 for (bi, (ob, ib)) in original.bones.iter().zip(imported.bones.iter()).enumerate() {
                     assert_eq!(ob.name, ib.name, "bone {} name mismatch", bi);
-                    assert_eq!(ob.parent_index, ib.parent_index,
-                        "bone {} parent mismatch", bi);
+                    assert_eq!(
+                        ob.parent_index, ib.parent_index,
+                        "bone {} parent mismatch",
+                        bi
+                    );
                 }
             }
 
             // Check granny bones
             if !original.granny_bones.is_empty() {
-                assert_eq!(imported.granny_bones.len(), original.granny_bones.len(),
-                    "granny bone count mismatch");
-                for (bi, (og, ig)) in original.granny_bones.iter().zip(imported.granny_bones.iter()).enumerate() {
+                assert_eq!(
+                    imported.granny_bones.len(),
+                    original.granny_bones.len(),
+                    "granny bone count mismatch"
+                );
+                for (bi, (og, ig)) in original
+                    .granny_bones
+                    .iter()
+                    .zip(imported.granny_bones.iter())
+                    .enumerate()
+                {
                     assert_eq!(og.name, ig.name, "granny bone {} name mismatch", bi);
-                    assert_eq!(og.parent_index, ig.parent_index,
-                        "granny bone {} parent mismatch", bi);
+                    assert_eq!(
+                        og.parent_index, ig.parent_index,
+                        "granny bone {} parent mismatch",
+                        bi
+                    );
                     // Compare inverse world matrices (may have some float precision loss)
                     for r in 0..4 {
                         for c in 0..4 {
                             assert!(
-                                (og.inverse_world_matrix.rows[r][c] - ig.inverse_world_matrix.rows[r][c]).abs() < 1e-3,
+                                (og.inverse_world_matrix.rows[r][c]
+                                    - ig.inverse_world_matrix.rows[r][c])
+                                    .abs()
+                                    < 1e-3,
                                 "granny bone {} matrix[{}][{}] mismatch: {} vs {}",
-                                bi, r, c, og.inverse_world_matrix.rows[r][c], ig.inverse_world_matrix.rows[r][c]
+                                bi,
+                                r,
+                                c,
+                                og.inverse_world_matrix.rows[r][c],
+                                ig.inverse_world_matrix.rows[r][c]
                             );
                         }
                     }
@@ -1131,46 +1291,80 @@ mod tests {
             for si in 0..imported.sections.len() {
                 let imp_verts = imported.unpack_section_vertices(si).unwrap();
                 let rr_verts = re_read.unpack_section_vertices(si).unwrap();
-                assert_eq!(rr_verts.len(), imp_verts.len(),
-                    "write roundtrip section {} vertex count mismatch", si);
+                assert_eq!(
+                    rr_verts.len(),
+                    imp_verts.len(),
+                    "write roundtrip section {} vertex count mismatch",
+                    si
+                );
 
                 for (vi, (iv, rv)) in imp_verts.iter().zip(rr_verts.iter()).enumerate() {
                     for c in 0..3 {
                         assert!(
                             (iv.position[c] - rv.position[c]).abs() < 1e-4,
                             "write roundtrip section {} vertex {} position[{}] mismatch: {} vs {}",
-                            si, vi, c, iv.position[c], rv.position[c]
+                            si,
+                            vi,
+                            c,
+                            iv.position[c],
+                            rv.position[c]
                         );
                     }
                 }
 
                 let imp_idx = imported.get_section_indices(si);
                 let rr_idx = re_read.get_section_indices(si);
-                assert_eq!(rr_idx, imp_idx, "write roundtrip section {} index mismatch", si);
+                assert_eq!(
+                    rr_idx, imp_idx,
+                    "write roundtrip section {} index mismatch",
+                    si
+                );
             }
 
             // Verify granny bones survived write→read
             if !imported.granny_bones.is_empty() {
                 assert_eq!(re_read.granny_bones.len(), imported.granny_bones.len());
-                for (bi, (ig, rg)) in imported.granny_bones.iter().zip(re_read.granny_bones.iter()).enumerate() {
-                    assert_eq!(ig.name, rg.name,
-                        "write roundtrip granny bone {} name mismatch", bi);
-                    assert_eq!(ig.parent_index, rg.parent_index,
-                        "write roundtrip granny bone {} parent mismatch", bi);
+                for (bi, (ig, rg)) in imported
+                    .granny_bones
+                    .iter()
+                    .zip(re_read.granny_bones.iter())
+                    .enumerate()
+                {
+                    assert_eq!(
+                        ig.name, rg.name,
+                        "write roundtrip granny bone {} name mismatch",
+                        bi
+                    );
+                    assert_eq!(
+                        ig.parent_index, rg.parent_index,
+                        "write roundtrip granny bone {} parent mismatch",
+                        bi
+                    );
                     for r in 0..4 {
                         for c in 0..4 {
                             assert!(
-                                (ig.inverse_world_matrix.rows[r][c] - rg.inverse_world_matrix.rows[r][c]).abs() < 1e-4,
+                                (ig.inverse_world_matrix.rows[r][c]
+                                    - rg.inverse_world_matrix.rows[r][c])
+                                    .abs()
+                                    < 1e-4,
                                 "write roundtrip granny bone {} matrix[{}][{}] mismatch: {} vs {}",
-                                bi, r, c, ig.inverse_world_matrix.rows[r][c], rg.inverse_world_matrix.rows[r][c]
+                                bi,
+                                r,
+                                c,
+                                ig.inverse_world_matrix.rows[r][c],
+                                rg.inverse_world_matrix.rows[r][c]
                             );
                         }
                     }
                 }
             }
 
-            eprintln!("  PASSED: {} sections, {} bones, {} granny bones round-tripped",
-                re_read.sections.len(), re_read.bones.len(), re_read.granny_bones.len());
+            eprintln!(
+                "  PASSED: {} sections, {} bones, {} granny bones round-tripped",
+                re_read.sections.len(),
+                re_read.bones.len(),
+                re_read.granny_bones.len()
+            );
             tested = true;
         }
 
@@ -1209,10 +1403,17 @@ mod tests {
 
             let stem = filename.trim_end_matches(".ugx");
             eprintln!("\n=== Foxcannon: {} ===", filename);
-            eprintln!("  Sections: {}, Bones: {}, Granny bones: {}",
-                original.sections.len(), original.bones.len(), original.granny_bones.len());
-            eprintln!("  Total vertices: {}, Total triangles: {}",
-                original.total_vertices(), original.total_triangles());
+            eprintln!(
+                "  Sections: {}, Bones: {}, Granny bones: {}",
+                original.sections.len(),
+                original.bones.len(),
+                original.granny_bones.len()
+            );
+            eprintln!(
+                "  Total vertices: {}, Total triangles: {}",
+                original.total_vertices(),
+                original.total_triangles()
+            );
 
             // Export glTF WITHOUT skeleton
             {
@@ -1222,7 +1423,8 @@ mod tests {
                     include_skeleton: false,
                 };
                 let buffer_name = format!("{}_no_bones.bin", stem);
-                let export = crate::export_to_gltf_with_buffer_name(&original, &opts, &buffer_name).unwrap();
+                let export =
+                    crate::export_to_gltf_with_buffer_name(&original, &opts, &buffer_name).unwrap();
                 let json_path = format!("{}/{}_no_bones.gltf", dir, stem);
                 let bin_path = format!("{}/{}", dir, buffer_name);
                 std::fs::write(&json_path, &export.json).unwrap();
@@ -1240,7 +1442,8 @@ mod tests {
                     include_skeleton: true,
                 };
                 let buffer_name = format!("{}_with_bones.bin", stem);
-                let export = crate::export_to_gltf_with_buffer_name(&original, &opts, &buffer_name).unwrap();
+                let export =
+                    crate::export_to_gltf_with_buffer_name(&original, &opts, &buffer_name).unwrap();
                 let json_path = format!("{}/{}_with_bones.gltf", dir, stem);
                 let bin_path = format!("{}/{}", dir, buffer_name);
                 std::fs::write(&json_path, &export.json).unwrap();
@@ -1262,16 +1465,32 @@ mod tests {
                 include_skeleton: true,
                 include_materials: false,
             };
-            let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+            let imported =
+                import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
             // Verify section structure
-            assert_eq!(imported.sections.len(), original.sections.len(),
-                "{}: section count mismatch", filename);
-            for (si, (orig_sec, imp_sec)) in original.sections.iter().zip(imported.sections.iter()).enumerate() {
-                assert_eq!(imp_sec.num_verts, orig_sec.num_verts,
-                    "{}: section {} vertex count mismatch", filename, si);
-                assert_eq!(imp_sec.num_tris, orig_sec.num_tris,
-                    "{}: section {} triangle count mismatch", filename, si);
+            assert_eq!(
+                imported.sections.len(),
+                original.sections.len(),
+                "{}: section count mismatch",
+                filename
+            );
+            for (si, (orig_sec, imp_sec)) in original
+                .sections
+                .iter()
+                .zip(imported.sections.iter())
+                .enumerate()
+            {
+                assert_eq!(
+                    imp_sec.num_verts, orig_sec.num_verts,
+                    "{}: section {} vertex count mismatch",
+                    filename, si
+                );
+                assert_eq!(
+                    imp_sec.num_tris, orig_sec.num_tris,
+                    "{}: section {} triangle count mismatch",
+                    filename, si
+                );
             }
 
             // Verify vertex data per section
@@ -1283,24 +1502,40 @@ mod tests {
                         assert!(
                             (ov.position[c] - iv.position[c]).abs() < 0.01,
                             "{}: section {} vertex {} position[{}] mismatch: {} vs {}",
-                            filename, si, vi, c, ov.position[c], iv.position[c]
+                            filename,
+                            si,
+                            vi,
+                            c,
+                            ov.position[c],
+                            iv.position[c]
                         );
                     }
                 }
 
                 let orig_idx = original.get_section_indices(si);
                 let imp_idx = imported.get_section_indices(si);
-                assert_eq!(imp_idx, orig_idx, "{}: section {} index mismatch", filename, si);
+                assert_eq!(
+                    imp_idx, orig_idx,
+                    "{}: section {} index mismatch",
+                    filename, si
+                );
             }
 
             // Verify bone hierarchy
             if !original.bones.is_empty() {
-                assert_eq!(imported.bones.len(), original.bones.len(),
-                    "{}: bone count mismatch", filename);
+                assert_eq!(
+                    imported.bones.len(),
+                    original.bones.len(),
+                    "{}: bone count mismatch",
+                    filename
+                );
                 for (bi, (ob, ib)) in original.bones.iter().zip(imported.bones.iter()).enumerate() {
                     assert_eq!(ob.name, ib.name, "{}: bone {} name mismatch", filename, bi);
-                    assert_eq!(ob.parent_index, ib.parent_index,
-                        "{}: bone {} parent mismatch", filename, bi);
+                    assert_eq!(
+                        ob.parent_index, ib.parent_index,
+                        "{}: bone {} parent mismatch",
+                        filename, bi
+                    );
                 }
             }
 
@@ -1308,19 +1543,33 @@ mod tests {
             let ugx_bytes = crate::write_ugx(&imported).unwrap();
             let re_read = UgxGeom::read(&ugx_bytes).unwrap();
 
-            assert_eq!(re_read.sections.len(), imported.sections.len(),
-                "{}: write roundtrip section count mismatch", filename);
+            assert_eq!(
+                re_read.sections.len(),
+                imported.sections.len(),
+                "{}: write roundtrip section count mismatch",
+                filename
+            );
             for si in 0..imported.sections.len() {
                 let imp_verts = imported.unpack_section_vertices(si).unwrap();
                 let rr_verts = re_read.unpack_section_vertices(si).unwrap();
-                assert_eq!(rr_verts.len(), imp_verts.len(),
-                    "{}: write roundtrip section {} vertex count mismatch", filename, si);
+                assert_eq!(
+                    rr_verts.len(),
+                    imp_verts.len(),
+                    "{}: write roundtrip section {} vertex count mismatch",
+                    filename,
+                    si
+                );
                 for (vi, (iv, rv)) in imp_verts.iter().zip(rr_verts.iter()).enumerate() {
                     for c in 0..3 {
                         assert!(
                             (iv.position[c] - rv.position[c]).abs() < 1e-4,
                             "{}: write roundtrip section {} vertex {} position[{}]: {} vs {}",
-                            filename, si, vi, c, iv.position[c], rv.position[c]
+                            filename,
+                            si,
+                            vi,
+                            c,
+                            iv.position[c],
+                            rv.position[c]
                         );
                     }
                 }

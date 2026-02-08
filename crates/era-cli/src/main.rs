@@ -79,7 +79,10 @@ fn list_archive(path: &str) {
             100.0
         };
 
-        println!("{:5} {:>10} -> {:>10} ({:5.1}%) {}", i, comp, decomp, ratio, name);
+        println!(
+            "{:5} {:>10} -> {:>10} ({:5.1}%) {}",
+            i, comp, decomp, ratio, name
+        );
     }
 
     println!();
@@ -99,14 +102,26 @@ fn info_archive(path: &str) {
     println!();
     println!("ECF Header:");
     println!("  Magic:           0x{:08X}", archive.ecf_header.magic);
-    println!("  Header Size:     {} bytes", archive.ecf_header.header_size);
+    println!(
+        "  Header Size:     {} bytes",
+        archive.ecf_header.header_size
+    );
     println!("  File Size:       {} bytes", archive.ecf_header.file_size);
     println!("  Num Chunks:      {}", archive.ecf_header.num_chunks);
-    println!("  Chunk Extra:     {} bytes", archive.ecf_header.chunk_extra_data_size);
+    println!(
+        "  Chunk Extra:     {} bytes",
+        archive.ecf_header.chunk_extra_data_size
+    );
     println!();
     println!("Archive Header:");
-    println!("  Archive Magic:   0x{:08X}", archive.archive_header.archive_magic);
-    println!("  Signature Size:  {} bytes", archive.archive_header.signature_size);
+    println!(
+        "  Archive Magic:   0x{:08X}",
+        archive.archive_header.archive_magic
+    );
+    println!(
+        "  Signature Size:  {} bytes",
+        archive.archive_header.signature_size
+    );
     println!();
     println!("Entries: {}", archive.len());
 }

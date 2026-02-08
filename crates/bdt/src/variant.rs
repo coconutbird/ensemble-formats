@@ -135,7 +135,11 @@ impl Variant {
             Variant::UInt(v) => v.to_string(),
             Variant::Bool(v) => if *v { "true" } else { "false" }.to_string(),
             Variant::String(s) | Variant::UString(s) => s.clone(),
-            Variant::FloatVec(v) => v.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(","),
+            Variant::FloatVec(v) => v
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
         }
     }
 
@@ -230,7 +234,11 @@ pub fn unpack_fract24(packed: u32) -> f32 {
     let is_negative = (packed & 0x800000) != 0;
     let magnitude = (packed & 0x7FFFFF) as f32;
     let value = magnitude / 10000.0;
-    if is_negative { -value } else { value }
+    if is_negative {
+        -value
+    } else {
+        value
+    }
 }
 
 /// Pack a 24-bit signed integer.
@@ -246,7 +254,11 @@ pub fn pack_int24(value: i32) -> u32 {
 pub fn unpack_int24(packed: u32) -> i32 {
     let is_negative = (packed & 0x800000) != 0;
     let magnitude = (packed & 0x7FFFFF) as i32;
-    if is_negative { -magnitude } else { magnitude }
+    if is_negative {
+        -magnitude
+    } else {
+        magnitude
+    }
 }
 
 /// Pack a 24-bit unsigned integer.

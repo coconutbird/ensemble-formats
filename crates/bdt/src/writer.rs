@@ -425,8 +425,7 @@ impl DataTableLe {
             4 => 2u32,
             _ => 0u32,
         };
-        ((VariantType::FloatVec as u32 | OFFSET_FLAG as u32 | (vec_size_bits << 5)) << 24)
-            | offset
+        ((VariantType::FloatVec as u32 | OFFSET_FLAG as u32 | (vec_size_bits << 5)) << 24) | offset
     }
 }
 
@@ -555,8 +554,7 @@ impl VariantDataBuilder {
     fn add_float(&mut self, v: f32) -> u32 {
         let data_table_offset = self.data_table.len() as u32;
         self.data_table.extend_from_slice(&v.to_be_bytes());
-        let variant =
-            ((VariantType::Float as u32 | OFFSET_FLAG as u32) << 24) | data_table_offset;
+        let variant = ((VariantType::Float as u32 | OFFSET_FLAG as u32) << 24) | data_table_offset;
         self.data_table_fixups.push(variant);
         variant
     }
@@ -564,8 +562,7 @@ impl VariantDataBuilder {
     fn add_double(&mut self, v: f64) -> u32 {
         let data_table_offset = self.data_table.len() as u32;
         self.data_table.extend_from_slice(&v.to_be_bytes());
-        let variant =
-            ((VariantType::Double as u32 | OFFSET_FLAG as u32) << 24) | data_table_offset;
+        let variant = ((VariantType::Double as u32 | OFFSET_FLAG as u32) << 24) | data_table_offset;
         self.data_table_fixups.push(variant);
         variant
     }
@@ -573,8 +570,7 @@ impl VariantDataBuilder {
     fn add_int32(&mut self, v: i32) -> u32 {
         let data_table_offset = self.data_table.len() as u32;
         self.data_table.extend_from_slice(&v.to_be_bytes());
-        let variant =
-            ((VariantType::Int32 as u32 | OFFSET_FLAG as u32) << 24) | data_table_offset;
+        let variant = ((VariantType::Int32 as u32 | OFFSET_FLAG as u32) << 24) | data_table_offset;
         self.data_table_fixups.push(variant);
         variant
     }
@@ -590,9 +586,7 @@ impl VariantDataBuilder {
             4 => 2u32,
             _ => 0u32,
         };
-        let variant = ((VariantType::FloatVec as u32
-            | OFFSET_FLAG as u32
-            | (vec_size_bits << 5))
+        let variant = ((VariantType::FloatVec as u32 | OFFSET_FLAG as u32 | (vec_size_bits << 5))
             << 24)
             | data_table_offset;
         self.data_table_fixups.push(variant);

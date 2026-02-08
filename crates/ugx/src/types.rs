@@ -272,10 +272,8 @@ impl Matrix4x4 {
 
         for i in 0..4 {
             for j in 0..4 {
-                result[i][j] = a[i][0] * b[0][j]
-                    + a[i][1] * b[1][j]
-                    + a[i][2] * b[2][j]
-                    + a[i][3] * b[3][j];
+                result[i][j] =
+                    a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
             }
         }
 
@@ -358,7 +356,10 @@ impl QForm {
             reader.read_f32::<LittleEndian>()?,
             reader.read_f32::<LittleEndian>()?,
         ];
-        Ok(Self { rotation, translation })
+        Ok(Self {
+            rotation,
+            translation,
+        })
     }
 }
 
@@ -488,4 +489,3 @@ impl Keyframe {
         Ok(Self { time, verts })
     }
 }
-

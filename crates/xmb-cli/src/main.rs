@@ -265,7 +265,10 @@ fn convert_xml_to_xmb(
 }
 
 /// Convert an XMB file to XML.
-fn convert_xmb_to_xml(input: &PathBuf, overwrite: bool) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn convert_xmb_to_xml(
+    input: &PathBuf,
+    overwrite: bool,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let output = output_path(input, "xml", overwrite);
 
     let file = File::open(input)?;

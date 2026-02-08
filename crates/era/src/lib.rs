@@ -130,7 +130,9 @@ mod tests {
         // Second write
         let mut buffer2 = Cursor::new(Vec::new());
         let encrypt_writer2 = EncryptWriter::new(&mut buffer2, keys);
-        writer2.write(encrypt_writer2).expect("Failed to write second time");
+        writer2
+            .write(encrypt_writer2)
+            .expect("Failed to write second time");
         let data2 = buffer2.into_inner();
 
         assert_eq!(data1, data2, "Round-trip should produce identical bytes");
@@ -160,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_tea_encrypt_decrypt_roundtrip() {
-        use crate::crypto::{tea_encrypt_block64, tea_decrypt_block64};
+        use crate::crypto::{tea_decrypt_block64, tea_encrypt_block64};
 
         let keys = TeaKeys::default_archive_keys();
         let original: [u8; 64] = std::array::from_fn(|i| i as u8);

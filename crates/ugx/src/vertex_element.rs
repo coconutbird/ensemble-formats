@@ -362,7 +362,8 @@ impl VertexElementType {
                 let y = value[1] as u8;
                 let z = value[2] as u8;
                 let w = value[3] as u8;
-                let packed = (x as u32) | ((y as u32) << 8) | ((z as u32) << 16) | ((w as u32) << 24);
+                let packed =
+                    (x as u32) | ((y as u32) << 8) | ((z as u32) << 16) | ((w as u32) << 24);
                 writer.write_u32::<LittleEndian>(packed)?;
                 Ok(())
             }
@@ -392,30 +393,54 @@ impl VertexElementType {
             }
 
             Self::Short2N => {
-                writer.write_i16::<LittleEndian>((value[0].clamp(-1.0, 1.0) * 32767.0).round() as i16)?;
-                writer.write_i16::<LittleEndian>((value[1].clamp(-1.0, 1.0) * 32767.0).round() as i16)?;
+                writer.write_i16::<LittleEndian>(
+                    (value[0].clamp(-1.0, 1.0) * 32767.0).round() as i16
+                )?;
+                writer.write_i16::<LittleEndian>(
+                    (value[1].clamp(-1.0, 1.0) * 32767.0).round() as i16
+                )?;
                 Ok(())
             }
 
             Self::Short4N => {
-                writer.write_i16::<LittleEndian>((value[0].clamp(-1.0, 1.0) * 32767.0).round() as i16)?;
-                writer.write_i16::<LittleEndian>((value[1].clamp(-1.0, 1.0) * 32767.0).round() as i16)?;
-                writer.write_i16::<LittleEndian>((value[2].clamp(-1.0, 1.0) * 32767.0).round() as i16)?;
-                writer.write_i16::<LittleEndian>((value[3].clamp(-1.0, 1.0) * 32767.0).round() as i16)?;
+                writer.write_i16::<LittleEndian>(
+                    (value[0].clamp(-1.0, 1.0) * 32767.0).round() as i16
+                )?;
+                writer.write_i16::<LittleEndian>(
+                    (value[1].clamp(-1.0, 1.0) * 32767.0).round() as i16
+                )?;
+                writer.write_i16::<LittleEndian>(
+                    (value[2].clamp(-1.0, 1.0) * 32767.0).round() as i16
+                )?;
+                writer.write_i16::<LittleEndian>(
+                    (value[3].clamp(-1.0, 1.0) * 32767.0).round() as i16
+                )?;
                 Ok(())
             }
 
             Self::UShort2N => {
-                writer.write_u16::<LittleEndian>((value[0].clamp(0.0, 1.0) * 65535.0).round() as u16)?;
-                writer.write_u16::<LittleEndian>((value[1].clamp(0.0, 1.0) * 65535.0).round() as u16)?;
+                writer.write_u16::<LittleEndian>(
+                    (value[0].clamp(0.0, 1.0) * 65535.0).round() as u16
+                )?;
+                writer.write_u16::<LittleEndian>(
+                    (value[1].clamp(0.0, 1.0) * 65535.0).round() as u16
+                )?;
                 Ok(())
             }
 
             Self::UShort4N => {
-                writer.write_u16::<LittleEndian>((value[0].clamp(0.0, 1.0) * 65535.0).round() as u16)?;
-                writer.write_u16::<LittleEndian>((value[1].clamp(0.0, 1.0) * 65535.0).round() as u16)?;
-                writer.write_u16::<LittleEndian>((value[2].clamp(0.0, 1.0) * 65535.0).round() as u16)?;
-                writer.write_u16::<LittleEndian>((value[3].clamp(0.0, 1.0) * 65535.0).round() as u16)?;
+                writer.write_u16::<LittleEndian>(
+                    (value[0].clamp(0.0, 1.0) * 65535.0).round() as u16
+                )?;
+                writer.write_u16::<LittleEndian>(
+                    (value[1].clamp(0.0, 1.0) * 65535.0).round() as u16
+                )?;
+                writer.write_u16::<LittleEndian>(
+                    (value[2].clamp(0.0, 1.0) * 65535.0).round() as u16
+                )?;
+                writer.write_u16::<LittleEndian>(
+                    (value[3].clamp(0.0, 1.0) * 65535.0).round() as u16
+                )?;
                 Ok(())
             }
 
@@ -432,7 +457,9 @@ impl VertexElementType {
                 let x = (value[0].clamp(-1.0, 1.0) * 511.0).round() as i32;
                 let y = (value[1].clamp(-1.0, 1.0) * 511.0).round() as i32;
                 let z = (value[2].clamp(-1.0, 1.0) * 511.0).round() as i32;
-                let packed = ((x as u32) & 0x3FF) | (((y as u32) & 0x3FF) << 10) | (((z as u32) & 0x3FF) << 20);
+                let packed = ((x as u32) & 0x3FF)
+                    | (((y as u32) & 0x3FF) << 10)
+                    | (((z as u32) & 0x3FF) << 20);
                 writer.write_u32::<LittleEndian>(packed)?;
                 Ok(())
             }
@@ -556,7 +583,9 @@ mod tests {
         // Bytes: [5, 10, 200, 0] packed little-endian
         let data: [u8; 4] = [5, 10, 200, 0];
         let mut cursor = Cursor::new(&data);
-        let result = VertexElementType::UByte4.unpack_as_indices(&mut cursor).unwrap();
+        let result = VertexElementType::UByte4
+            .unpack_as_indices(&mut cursor)
+            .unwrap();
         assert_eq!(result, [5, 10, 200, 0]);
     }
 
@@ -566,7 +595,9 @@ mod tests {
         // unpack_as_indices() must return the raw byte values instead
         let data: [u8; 4] = [255, 128, 0, 255];
         let mut cursor = Cursor::new(&data);
-        let result = VertexElementType::UByte4N.unpack_as_indices(&mut cursor).unwrap();
+        let result = VertexElementType::UByte4N
+            .unpack_as_indices(&mut cursor)
+            .unwrap();
         assert_eq!(result, [255, 128, 0, 255]);
     }
 
@@ -579,7 +610,9 @@ mod tests {
         data.extend_from_slice(&0i16.to_le_bytes());
         data.extend_from_slice(&0i16.to_le_bytes());
         let mut cursor = Cursor::new(&data);
-        let result = VertexElementType::Short4.unpack_as_indices(&mut cursor).unwrap();
+        let result = VertexElementType::Short4
+            .unpack_as_indices(&mut cursor)
+            .unwrap();
         assert_eq!(result, [300, 1, 0, 0]);
     }
 
@@ -592,7 +625,9 @@ mod tests {
         data.extend_from_slice(&(-100i16).to_le_bytes());
         data.extend_from_slice(&0i16.to_le_bytes());
         let mut cursor = Cursor::new(&data);
-        let result = VertexElementType::Short4.unpack_as_indices(&mut cursor).unwrap();
+        let result = VertexElementType::Short4
+            .unpack_as_indices(&mut cursor)
+            .unwrap();
         assert_eq!(result, [0, 5, 0, 0]);
     }
 
@@ -606,7 +641,9 @@ mod tests {
         data.extend_from_slice(&0u16.to_le_bytes());
         data.extend_from_slice(&1u16.to_le_bytes());
         let mut cursor = Cursor::new(&data);
-        let result = VertexElementType::UShort4N.unpack_as_indices(&mut cursor).unwrap();
+        let result = VertexElementType::UShort4N
+            .unpack_as_indices(&mut cursor)
+            .unwrap();
         assert_eq!(result, [500, 65535, 0, 1]);
     }
 
@@ -667,7 +704,11 @@ mod tests {
         let v = [0.5, -0.5, 1.0, 1.0];
         let r = roundtrip_pack_unpack(VertexElementType::Dec3N, v);
         assert!((r[0] - 0.5).abs() < 0.01, "x: expected ~0.5, got {}", r[0]);
-        assert!((r[1] - (-0.5)).abs() < 0.01, "y: expected ~-0.5, got {}", r[1]);
+        assert!(
+            (r[1] - (-0.5)).abs() < 0.01,
+            "y: expected ~-0.5, got {}",
+            r[1]
+        );
         assert!((r[2] - 1.0).abs() < 0.01, "z: expected ~1.0, got {}", r[2]);
     }
 
@@ -675,9 +716,13 @@ mod tests {
     fn test_pack_as_indices_ubyte4_roundtrip() {
         let indices = [5u16, 10, 200, 0];
         let mut buf = Vec::new();
-        VertexElementType::UByte4.pack_as_indices(&mut buf, indices).unwrap();
+        VertexElementType::UByte4
+            .pack_as_indices(&mut buf, indices)
+            .unwrap();
         let mut cursor = Cursor::new(&buf);
-        let result = VertexElementType::UByte4.unpack_as_indices(&mut cursor).unwrap();
+        let result = VertexElementType::UByte4
+            .unpack_as_indices(&mut cursor)
+            .unwrap();
         assert_eq!(result, indices);
     }
 
@@ -685,9 +730,13 @@ mod tests {
     fn test_pack_as_indices_short4_roundtrip() {
         let indices = [300u16, 1, 0, 0];
         let mut buf = Vec::new();
-        VertexElementType::Short4.pack_as_indices(&mut buf, indices).unwrap();
+        VertexElementType::Short4
+            .pack_as_indices(&mut buf, indices)
+            .unwrap();
         let mut cursor = Cursor::new(&buf);
-        let result = VertexElementType::Short4.unpack_as_indices(&mut cursor).unwrap();
+        let result = VertexElementType::Short4
+            .unpack_as_indices(&mut cursor)
+            .unwrap();
         assert_eq!(result, indices);
     }
 }

@@ -49,7 +49,7 @@ impl PackedReader {
     pub fn read_le_at(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
         // Auto-detect format based on signature byte
         if header_offset < data.len() && data[header_offset] == PACKED_HEADER_SIG_LE {
-            return read_compact_le(data, header_offset);
+            return read_compact(data, header_offset, false);
         }
 
         if data.len() < header_offset + 36 {
@@ -89,7 +89,11 @@ impl PackedReader {
 
         // Bounds check before allocating
         let expected_end = nodes_ptr
-            .checked_add((nodes_size as usize).checked_mul(NODE_SIZE).ok_or(Error::UnexpectedEof)?)
+            .checked_add(
+                (nodes_size as usize)
+                    .checked_mul(NODE_SIZE)
+                    .ok_or(Error::UnexpectedEof)?,
+            )
             .ok_or(Error::UnexpectedEof)?;
         if expected_end > data.len() {
             return Err(Error::UnexpectedEof);
@@ -156,7 +160,7 @@ impl PackedReader {
         }
 
         // Build tree
-        build_tree_le(&packed_nodes, variant_data)
+        build_tree(&packed_nodes, variant_data, false)
     }
 
     /// Parse big-endian packed data (Xbox 360 format).
@@ -173,7 +177,7 @@ impl PackedReader {
     pub fn read_be_at(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
         // Auto-detect compact format
         if header_offset < data.len() && data[header_offset] == PACKED_HEADER_SIG_BE {
-            return read_compact_be(data, header_offset);
+            return read_compact(data, header_offset, true);
         }
 
         if data.len() < header_offset + 16 {
@@ -206,7 +210,11 @@ impl PackedReader {
 
         // Bounds check before allocating
         let expected_end = nodes_ptr
-            .checked_add((nodes_size as usize).checked_mul(NODE_SIZE).ok_or(Error::UnexpectedEof)?)
+            .checked_add(
+                (nodes_size as usize)
+                    .checked_mul(NODE_SIZE)
+                    .ok_or(Error::UnexpectedEof)?,
+            )
             .ok_or(Error::UnexpectedEof)?;
         if expected_end > data.len() {
             return Err(Error::UnexpectedEof);
@@ -266,7 +274,7 @@ impl PackedReader {
         }
 
         // Build tree
-        build_tree_be(&packed_nodes, variant_data)
+        build_tree(&packed_nodes, variant_data, true)
     }
 }
 
@@ -284,8 +292,12 @@ struct PackedNodeRead {
     children: Vec<u32>,
 }
 
-/// Build tree from packed nodes (little-endian variant data).
-fn build_tree_le(packed_nodes: &[PackedNodeRead], variant_data: &[u8]) -> Result<Option<Node>> {
+/// Build tree from packed nodes (XMX variant format).
+fn build_tree(
+    packed_nodes: &[PackedNodeRead],
+    variant_data: &[u8],
+    big_endian: bool,
+) -> Result<Option<Node>> {
     if packed_nodes.is_empty() {
         return Ok(None);
     }
@@ -294,12 +306,12 @@ fn build_tree_le(packed_nodes: &[PackedNodeRead], variant_data: &[u8]) -> Result
 
     for pn in packed_nodes {
         let name = decode_variant_string(pn.name_variant, variant_data)?;
-        let text = decode_variant_to_variant_le(pn.text_variant, variant_data)?;
+        let text = decode_variant_to_variant(pn.text_variant, variant_data, big_endian)?;
 
         let mut attributes = Vec::with_capacity(pn.attributes.len());
         for (name_var, value_var) in &pn.attributes {
             let attr_name = decode_variant_string(*name_var, variant_data)?;
-            let attr_value = decode_variant_to_variant_le(*value_var, variant_data)?;
+            let attr_value = decode_variant_to_variant(*value_var, variant_data, big_endian)?;
             attributes.push(Attribute {
                 name: attr_name,
                 value: attr_value,
@@ -337,55 +349,6 @@ fn build_tree_le(packed_nodes: &[PackedNodeRead], variant_data: &[u8]) -> Result
     Ok(Some(nodes[0].clone()))
 }
 
-/// Build tree from packed nodes (big-endian variant data).
-fn build_tree_be(packed_nodes: &[PackedNodeRead], variant_data: &[u8]) -> Result<Option<Node>> {
-    if packed_nodes.is_empty() {
-        return Ok(None);
-    }
-
-    let mut nodes: Vec<Node> = Vec::with_capacity(packed_nodes.len());
-
-    for pn in packed_nodes {
-        let name = decode_variant_string(pn.name_variant, variant_data)?;
-        let text = decode_variant_to_variant_be(pn.text_variant, variant_data)?;
-
-        let mut attributes = Vec::with_capacity(pn.attributes.len());
-        for (name_var, value_var) in &pn.attributes {
-            let attr_name = decode_variant_string(*name_var, variant_data)?;
-            let attr_value = decode_variant_to_variant_be(*value_var, variant_data)?;
-            attributes.push(Attribute {
-                name: attr_name,
-                value: attr_value,
-            });
-        }
-
-        nodes.push(Node {
-            name,
-            text,
-            attributes,
-            children: Vec::new(),
-        });
-    }
-
-    for (i, pn) in packed_nodes.iter().enumerate().rev() {
-        let child_indices: Vec<usize> = pn.children.iter().map(|&c| c as usize).collect();
-        for &child_idx in &child_indices {
-            if child_idx < nodes.len() {
-                let child = nodes[child_idx].clone();
-                nodes[i].children.push(child);
-            }
-        }
-    }
-
-    for (i, pn) in packed_nodes.iter().enumerate() {
-        if pn.parent_node == 0xFFFFFFFF || pn.parent_node as usize == i {
-            return Ok(Some(nodes[i].clone()));
-        }
-    }
-
-    Ok(Some(nodes[0].clone()))
-}
-
 // ============================================================================
 // Variant decoding
 // ============================================================================
@@ -410,7 +373,11 @@ fn decode_variant_string(variant_value: u32, variant_data: &[u8]) -> Result<Stri
     }
 }
 
-fn decode_variant_to_variant_le(variant_value: u32, variant_data: &[u8]) -> Result<Variant> {
+fn decode_variant_to_variant(
+    variant_value: u32,
+    variant_data: &[u8],
+    big_endian: bool,
+) -> Result<Variant> {
     let type_bits = (variant_value >> 24) as u8;
     let data_bits = variant_value & 0xFFFFFF;
     let variant_type = type_bits & 0x0F;
@@ -423,9 +390,12 @@ fn decode_variant_to_variant_le(variant_value: u32, variant_data: &[u8]) -> Resu
         2 => {
             if is_offset && data_bits as usize + 4 <= variant_data.len() {
                 let bytes = &variant_data[data_bits as usize..data_bits as usize + 4];
-                Ok(Variant::Float(f32::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                ])))
+                let v = if big_endian {
+                    f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                } else {
+                    f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                };
+                Ok(Variant::Float(v))
             } else {
                 Ok(Variant::Float(0.0))
             }
@@ -440,9 +410,12 @@ fn decode_variant_to_variant_le(variant_value: u32, variant_data: &[u8]) -> Resu
         4 => {
             if is_offset && data_bits as usize + 4 <= variant_data.len() {
                 let bytes = &variant_data[data_bits as usize..data_bits as usize + 4];
-                Ok(Variant::Int(i32::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                ])))
+                let v = if big_endian {
+                    i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                } else {
+                    i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                };
+                Ok(Variant::Int(v))
             } else {
                 Ok(Variant::Int(0))
             }
@@ -451,9 +424,18 @@ fn decode_variant_to_variant_le(variant_value: u32, variant_data: &[u8]) -> Resu
         6 => {
             if is_offset && data_bits as usize + 8 <= variant_data.len() {
                 let bytes = &variant_data[data_bits as usize..data_bits as usize + 8];
-                Ok(Variant::Double(f64::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-                ])))
+                let v = if big_endian {
+                    f64::from_be_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ])
+                } else {
+                    f64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ])
+                };
+                Ok(Variant::Double(v))
             } else {
                 Ok(Variant::Double(0.0))
             }
@@ -471,9 +453,10 @@ fn decode_variant_to_variant_le(variant_value: u32, variant_data: &[u8]) -> Resu
         }
         9 => {
             if is_offset {
-                Ok(Variant::String(read_null_terminated_wstring_le(
+                Ok(Variant::String(read_null_terminated_wstring(
                     variant_data,
                     data_bits as usize,
+                    big_endian,
                 )?))
             } else {
                 Ok(Variant::String(String::new()))
@@ -486,94 +469,12 @@ fn decode_variant_to_variant_le(variant_value: u32, variant_data: &[u8]) -> Resu
                 let mut vec = Vec::with_capacity(vec_size as usize);
                 for i in 0..vec_size as usize {
                     let bytes = &variant_data[offset + i * 4..offset + i * 4 + 4];
-                    vec.push(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
-                }
-                Ok(Variant::FloatVec(vec))
-            } else {
-                Ok(Variant::FloatVec(vec![0.0; vec_size as usize]))
-            }
-        }
-        _ => Ok(Variant::Null),
-    }
-}
-
-fn decode_variant_to_variant_be(variant_value: u32, variant_data: &[u8]) -> Result<Variant> {
-    let type_bits = (variant_value >> 24) as u8;
-    let data_bits = variant_value & 0xFFFFFF;
-    let variant_type = type_bits & 0x0F;
-    let is_offset = (type_bits & OFFSET_FLAG) != 0;
-    let is_unsigned = (type_bits & UNSIGNED_FLAG) != 0;
-
-    match variant_type {
-        0 => Ok(Variant::Null),
-        1 => Ok(Variant::Float(unpack_float24(data_bits))),
-        2 => {
-            if is_offset && data_bits as usize + 4 <= variant_data.len() {
-                let bytes = &variant_data[data_bits as usize..data_bits as usize + 4];
-                Ok(Variant::Float(f32::from_be_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                ])))
-            } else {
-                Ok(Variant::Float(0.0))
-            }
-        }
-        3 => {
-            if is_unsigned {
-                Ok(Variant::UInt(data_bits))
-            } else {
-                Ok(Variant::Int(unpack_int24(data_bits)))
-            }
-        }
-        4 => {
-            if is_offset && data_bits as usize + 4 <= variant_data.len() {
-                let bytes = &variant_data[data_bits as usize..data_bits as usize + 4];
-                Ok(Variant::Int(i32::from_be_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                ])))
-            } else {
-                Ok(Variant::Int(0))
-            }
-        }
-        5 => Ok(Variant::Float(unpack_fract24(data_bits) as f32)),
-        6 => {
-            if is_offset && data_bits as usize + 8 <= variant_data.len() {
-                let bytes = &variant_data[data_bits as usize..data_bits as usize + 8];
-                Ok(Variant::Double(f64::from_be_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-                ])))
-            } else {
-                Ok(Variant::Double(0.0))
-            }
-        }
-        7 => Ok(Variant::Bool(data_bits != 0)),
-        8 => {
-            if is_offset {
-                Ok(Variant::String(read_null_terminated_string(
-                    variant_data,
-                    data_bits as usize,
-                )?))
-            } else {
-                Ok(Variant::String(decode_direct_string(data_bits)?))
-            }
-        }
-        9 => {
-            if is_offset {
-                Ok(Variant::String(read_null_terminated_wstring_be(
-                    variant_data,
-                    data_bits as usize,
-                )?))
-            } else {
-                Ok(Variant::String(String::new()))
-            }
-        }
-        10 => {
-            let vec_size = 1 + ((type_bits >> 4) & 0x03);
-            if is_offset && data_bits as usize + (vec_size as usize * 4) <= variant_data.len() {
-                let offset = data_bits as usize;
-                let mut vec = Vec::with_capacity(vec_size as usize);
-                for i in 0..vec_size as usize {
-                    let bytes = &variant_data[offset + i * 4..offset + i * 4 + 4];
-                    vec.push(f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+                    let v = if big_endian {
+                        f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                    } else {
+                        f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+                    };
+                    vec.push(v);
                 }
                 Ok(Variant::FloatVec(vec))
             } else {
@@ -599,31 +500,18 @@ fn read_null_terminated_string(data: &[u8], offset: usize) -> Result<String> {
     Ok(String::from_utf8_lossy(&data[offset..offset + end]).into_owned())
 }
 
-fn read_null_terminated_wstring_le(data: &[u8], offset: usize) -> Result<String> {
+fn read_null_terminated_wstring(data: &[u8], offset: usize, big_endian: bool) -> Result<String> {
     if offset >= data.len() {
         return Ok(String::new());
     }
     let mut chars = Vec::new();
     let mut i = offset;
     while i + 1 < data.len() {
-        let c = u16::from_le_bytes([data[i], data[i + 1]]);
-        if c == 0 {
-            break;
-        }
-        chars.push(c);
-        i += 2;
-    }
-    Ok(String::from_utf16_lossy(&chars))
-}
-
-fn read_null_terminated_wstring_be(data: &[u8], offset: usize) -> Result<String> {
-    if offset >= data.len() {
-        return Ok(String::new());
-    }
-    let mut chars = Vec::new();
-    let mut i = offset;
-    while i + 1 < data.len() {
-        let c = u16::from_be_bytes([data[i], data[i + 1]]);
+        let c = if big_endian {
+            u16::from_be_bytes([data[i], data[i + 1]])
+        } else {
+            u16::from_le_bytes([data[i], data[i + 1]])
+        };
         if c == 0 {
             break;
         }
@@ -722,8 +610,8 @@ struct CompactNameValue {
     flags: u16,
 }
 
-/// Read compact LE format (BPackedHeader with 0x3E signature).
-fn read_compact_le(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
+/// Read compact format (BPackedHeader with 0x3E/0xE3 signature).
+fn read_compact(data: &[u8], header_offset: usize, big_endian: bool) -> Result<Option<Node>> {
     const HEADER_SIZE: usize = 28;
 
     if data.len() < header_offset + HEADER_SIZE {
@@ -731,23 +619,41 @@ fn read_compact_le(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
     }
 
     let base = header_offset;
-    let mut cursor = Cursor::new(data);
-    cursor.set_position(base as u64);
 
-    // Parse BPackedHeader
-    let sig = cursor.read_u8()?;
-    if sig != PACKED_HEADER_SIG_LE {
+    // Parse BPackedHeader - first 4 bytes are single-byte fields (endian-independent)
+    let sig = data[base];
+    let expected_sig = if big_endian {
+        PACKED_HEADER_SIG_BE
+    } else {
+        PACKED_HEADER_SIG_LE
+    };
+    if sig != expected_sig {
         return Err(Error::UnexpectedEof);
     }
-    let _header_dwords = cursor.read_u8()?;
-    let _header_crc8 = cursor.read_u8()?;
-    let num_user_sections = cursor.read_u8()? as usize;
-    let _data_crc32 = cursor.read_u32::<LittleEndian>()?;
-    let _data_size = cursor.read_u32::<LittleEndian>()?;
-    let node_section_size = cursor.read_u32::<LittleEndian>()? as usize;
-    let nv_section_size = cursor.read_u32::<LittleEndian>()? as usize;
-    let name_data_size = cursor.read_u32::<LittleEndian>()? as usize;
-    let value_data_size = cursor.read_u32::<LittleEndian>()? as usize;
+    let num_user_sections = data[base + 3] as usize;
+
+    // Remaining header fields are u32 (endian-dependent)
+    let read_u32 = |off: usize| -> u32 {
+        let b = &data[off..off + 4];
+        if big_endian {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        }
+    };
+    let read_u16 = |off: usize| -> u16 {
+        let b = &data[off..off + 2];
+        if big_endian {
+            u16::from_be_bytes([b[0], b[1]])
+        } else {
+            u16::from_le_bytes([b[0], b[1]])
+        }
+    };
+
+    let node_section_size = read_u32(base + 12) as usize;
+    let nv_section_size = read_u32(base + 16) as usize;
+    let name_data_size = read_u32(base + 20) as usize;
+    let value_data_size = read_u32(base + 24) as usize;
 
     // Calculate section offsets
     let user_sections_offset = base + HEADER_SIZE;
@@ -778,9 +684,9 @@ fn read_compact_le(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
     for i in 0..node_count {
         let off = node_offset + i * 8;
         packed_nodes.push(CompactNode {
-            parent_index: u16::from_le_bytes([data[off], data[off + 1]]),
-            child_node_index: u16::from_le_bytes([data[off + 2], data[off + 3]]),
-            name_value_ofs: u16::from_le_bytes([data[off + 4], data[off + 5]]),
+            parent_index: read_u16(off),
+            child_node_index: read_u16(off + 2),
+            name_value_ofs: read_u16(off + 4),
             num_name_values: data[off + 6],
             num_children: data[off + 7],
         });
@@ -791,9 +697,9 @@ fn read_compact_le(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
     for i in 0..nv_count {
         let off = nv_offset + i * 8;
         packed_nvs.push(CompactNameValue {
-            value: u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]),
-            name_ofs: u16::from_le_bytes([data[off + 4], data[off + 5]]),
-            flags: u16::from_le_bytes([data[off + 6], data[off + 7]]),
+            value: read_u32(off),
+            name_ofs: read_u16(off + 4),
+            flags: read_u16(off + 6),
         });
     }
 
@@ -802,85 +708,13 @@ fn read_compact_le(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
     let value_data = &data[value_data_offset..value_data_offset + value_data_size];
 
     // Build tree
-    build_compact_tree(&packed_nodes, &packed_nvs, name_data, value_data, false)
-}
-
-/// Read compact BE format (BPackedHeader with 0xE3 signature).
-fn read_compact_be(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
-    const HEADER_SIZE: usize = 28;
-
-    if data.len() < header_offset + HEADER_SIZE {
-        return Err(Error::UnexpectedEof);
-    }
-
-    let base = header_offset;
-    let mut cursor = Cursor::new(data);
-    cursor.set_position(base as u64);
-
-    let sig = cursor.read_u8()?;
-    if sig != PACKED_HEADER_SIG_BE {
-        return Err(Error::UnexpectedEof);
-    }
-    let _header_dwords = cursor.read_u8()?;
-    let _header_crc8 = cursor.read_u8()?;
-    let num_user_sections = cursor.read_u8()? as usize;
-    let _data_crc32 = cursor.read_u32::<BigEndian>()?;
-    let _data_size = cursor.read_u32::<BigEndian>()?;
-    let node_section_size = cursor.read_u32::<BigEndian>()? as usize;
-    let nv_section_size = cursor.read_u32::<BigEndian>()? as usize;
-    let name_data_size = cursor.read_u32::<BigEndian>()? as usize;
-    let value_data_size = cursor.read_u32::<BigEndian>()? as usize;
-
-    let user_sections_offset = base + HEADER_SIZE;
-    let node_offset = user_sections_offset + num_user_sections * 12;
-    let nv_offset = node_offset + node_section_size;
-    let name_data_offset = nv_offset + nv_section_size;
-    let value_data_offset_unaligned = name_data_offset + name_data_size;
-    let value_data_offset = if value_data_size > 0 {
-        (value_data_offset_unaligned + 15) & !15
-    } else {
-        value_data_offset_unaligned
-    };
-
-    if value_data_offset + value_data_size > data.len() {
-        return Err(Error::UnexpectedEof);
-    }
-
-    let node_count = node_section_size / 8;
-    let nv_count = nv_section_size / 8;
-
-    if node_count == 0 {
-        return Ok(None);
-    }
-
-    // Read packed nodes (big-endian)
-    let mut packed_nodes = Vec::with_capacity(node_count);
-    for i in 0..node_count {
-        let off = node_offset + i * 8;
-        packed_nodes.push(CompactNode {
-            parent_index: u16::from_be_bytes([data[off], data[off + 1]]),
-            child_node_index: u16::from_be_bytes([data[off + 2], data[off + 3]]),
-            name_value_ofs: u16::from_be_bytes([data[off + 4], data[off + 5]]),
-            num_name_values: data[off + 6],
-            num_children: data[off + 7],
-        });
-    }
-
-    // Read packed name-values (big-endian)
-    let mut packed_nvs = Vec::with_capacity(nv_count);
-    for i in 0..nv_count {
-        let off = nv_offset + i * 8;
-        packed_nvs.push(CompactNameValue {
-            value: u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]),
-            name_ofs: u16::from_be_bytes([data[off + 4], data[off + 5]]),
-            flags: u16::from_be_bytes([data[off + 6], data[off + 7]]),
-        });
-    }
-
-    let name_data = &data[name_data_offset..name_data_offset + name_data_size];
-    let value_data = &data[value_data_offset..value_data_offset + value_data_size];
-
-    build_compact_tree(&packed_nodes, &packed_nvs, name_data, value_data, true)
+    build_compact_tree(
+        &packed_nodes,
+        &packed_nvs,
+        name_data,
+        value_data,
+        big_endian,
+    )
 }
 
 /// Build tree from compact packed data.
@@ -1014,7 +848,8 @@ fn decode_compact_value(nv: &CompactNameValue, value_data: &[u8], big_endian: bo
     let type_class = TypeClass::from_flags(flags);
     let is_direct = (flags & nv_flags::DIRECT_ENCODING) != 0;
     let is_unsigned = (flags & nv_flags::TYPE_IS_UNSIGNED) != 0;
-    let type_size_log2 = ((flags & nv_flags::TYPE_SIZE_LOG2_MASK) >> nv_flags::TYPE_SIZE_LOG2_SHIFT) as usize;
+    let type_size_log2 =
+        ((flags & nv_flags::TYPE_SIZE_LOG2_MASK) >> nv_flags::TYPE_SIZE_LOG2_SHIFT) as usize;
     let data_size = ((flags & nv_flags::SIZE_MASK) >> nv_flags::SIZE_SHIFT) as usize;
 
     // Get pointer to value bytes
@@ -1064,32 +899,60 @@ fn decode_compact_value(nv: &CompactNameValue, value_data: &[u8], big_endian: bo
                 if is_unsigned {
                     let v = match type_size {
                         1 => value_bytes[0] as u32,
-                        2 => if big_endian {
-                            u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as u32
-                        } else {
-                            u16::from_le_bytes([value_bytes[0], value_bytes[1]]) as u32
-                        },
-                        4 => if big_endian {
-                            u32::from_be_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
-                        } else {
-                            u32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
-                        },
+                        2 => {
+                            if big_endian {
+                                u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as u32
+                            } else {
+                                u16::from_le_bytes([value_bytes[0], value_bytes[1]]) as u32
+                            }
+                        }
+                        4 => {
+                            if big_endian {
+                                u32::from_be_bytes([
+                                    value_bytes[0],
+                                    value_bytes[1],
+                                    value_bytes[2],
+                                    value_bytes[3],
+                                ])
+                            } else {
+                                u32::from_le_bytes([
+                                    value_bytes[0],
+                                    value_bytes[1],
+                                    value_bytes[2],
+                                    value_bytes[3],
+                                ])
+                            }
+                        }
                         _ => nv.value,
                     };
                     Variant::UInt(v)
                 } else {
                     let v = match type_size {
                         1 => value_bytes[0] as i8 as i32,
-                        2 => if big_endian {
-                            i16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i32
-                        } else {
-                            i16::from_le_bytes([value_bytes[0], value_bytes[1]]) as i32
-                        },
-                        4 => if big_endian {
-                            i32::from_be_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
-                        } else {
-                            i32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
-                        },
+                        2 => {
+                            if big_endian {
+                                i16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i32
+                            } else {
+                                i16::from_le_bytes([value_bytes[0], value_bytes[1]]) as i32
+                            }
+                        }
+                        4 => {
+                            if big_endian {
+                                i32::from_be_bytes([
+                                    value_bytes[0],
+                                    value_bytes[1],
+                                    value_bytes[2],
+                                    value_bytes[3],
+                                ])
+                            } else {
+                                i32::from_le_bytes([
+                                    value_bytes[0],
+                                    value_bytes[1],
+                                    value_bytes[2],
+                                    value_bytes[3],
+                                ])
+                            }
+                        }
                         _ => nv.value as i32,
                     };
                     Variant::Int(v)
@@ -1105,21 +968,43 @@ fn decode_compact_value(nv: &CompactNameValue, value_data: &[u8], big_endian: bo
                 // Double
                 let v = if big_endian {
                     f64::from_be_bytes([
-                        value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3],
-                        value_bytes[4], value_bytes[5], value_bytes[6], value_bytes[7],
+                        value_bytes[0],
+                        value_bytes[1],
+                        value_bytes[2],
+                        value_bytes[3],
+                        value_bytes[4],
+                        value_bytes[5],
+                        value_bytes[6],
+                        value_bytes[7],
                     ])
                 } else {
                     f64::from_le_bytes([
-                        value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3],
-                        value_bytes[4], value_bytes[5], value_bytes[6], value_bytes[7],
+                        value_bytes[0],
+                        value_bytes[1],
+                        value_bytes[2],
+                        value_bytes[3],
+                        value_bytes[4],
+                        value_bytes[5],
+                        value_bytes[6],
+                        value_bytes[7],
                     ])
                 };
                 Variant::Double(v)
             } else if value_bytes.len() >= 4 {
                 let v = if big_endian {
-                    f32::from_be_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                    f32::from_be_bytes([
+                        value_bytes[0],
+                        value_bytes[1],
+                        value_bytes[2],
+                        value_bytes[3],
+                    ])
                 } else {
-                    f32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                    f32::from_le_bytes([
+                        value_bytes[0],
+                        value_bytes[1],
+                        value_bytes[2],
+                        value_bytes[3],
+                    ])
                 };
                 Variant::Float(v)
             } else {
@@ -1141,13 +1026,17 @@ fn decode_compact_value(nv: &CompactNameValue, value_data: &[u8], big_endian: bo
                     // Extended size: stored as u32 at offset - 4
                     actual_size = if big_endian {
                         u32::from_be_bytes([
-                            value_data[offset - 4], value_data[offset - 3],
-                            value_data[offset - 2], value_data[offset - 1],
+                            value_data[offset - 4],
+                            value_data[offset - 3],
+                            value_data[offset - 2],
+                            value_data[offset - 1],
                         ]) as usize
                     } else {
                         u32::from_le_bytes([
-                            value_data[offset - 4], value_data[offset - 3],
-                            value_data[offset - 2], value_data[offset - 1],
+                            value_data[offset - 4],
+                            value_data[offset - 3],
+                            value_data[offset - 2],
+                            value_data[offset - 1],
                         ]) as usize
                     };
                 }
@@ -1160,11 +1049,19 @@ fn decode_compact_value(nv: &CompactNameValue, value_data: &[u8], big_endian: bo
                         let mut chars = Vec::with_capacity(char_count);
                         for i in 0..char_count {
                             let c = if big_endian {
-                                u16::from_be_bytes([value_data[offset + i * 2], value_data[offset + i * 2 + 1]])
+                                u16::from_be_bytes([
+                                    value_data[offset + i * 2],
+                                    value_data[offset + i * 2 + 1],
+                                ])
                             } else {
-                                u16::from_le_bytes([value_data[offset + i * 2], value_data[offset + i * 2 + 1]])
+                                u16::from_le_bytes([
+                                    value_data[offset + i * 2],
+                                    value_data[offset + i * 2 + 1],
+                                ])
                             };
-                            if c == 0 { break; }
+                            if c == 0 {
+                                break;
+                            }
                             chars.push(c);
                         }
                         Variant::String(String::from_utf16_lossy(&chars))
@@ -1178,7 +1075,9 @@ fn decode_compact_value(nv: &CompactNameValue, value_data: &[u8], big_endian: bo
                             .iter()
                             .position(|&b| b == 0)
                             .unwrap_or(actual_size.min(value_data.len() - offset));
-                        Variant::String(String::from_utf8_lossy(&value_data[offset..offset + end]).into_owned())
+                        Variant::String(
+                            String::from_utf8_lossy(&value_data[offset..offset + end]).into_owned(),
+                        )
                     } else {
                         Variant::String(String::new())
                     }

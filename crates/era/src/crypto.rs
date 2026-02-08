@@ -43,7 +43,12 @@ impl TeaKeys {
         // Extract keys from hashes (big-endian DWORDs)
         let get_dword = |hash: &[u8], index: usize| -> u32 {
             let offset = index * 4;
-            u32::from_be_bytes([hash[offset], hash[offset + 1], hash[offset + 2], hash[offset + 3]])
+            u32::from_be_bytes([
+                hash[offset],
+                hash[offset + 1],
+                hash[offset + 2],
+                hash[offset + 3],
+            ])
         };
 
         let k1 = (get_dword(&hash2, 0) as u64) | ((get_dword(&hash2, 1) as u64) << 32);
@@ -77,14 +82,54 @@ fn tea_decipher_4(v0: u64, v1: u64, v2: u64, v3: u64, k0: u64, k1: u64) -> (u64,
 
     macro_rules! tea_round_4 {
         ($sum:expr) => {
-            z0 = z0.wrapping_sub((y0 << 4).wrapping_add(c ^ y0).wrapping_add($sum ^ (y0 >> 5)).wrapping_add(d));
-            z1 = z1.wrapping_sub((y1 << 4).wrapping_add(c ^ y1).wrapping_add($sum ^ (y1 >> 5)).wrapping_add(d));
-            z2 = z2.wrapping_sub((y2 << 4).wrapping_add(c ^ y2).wrapping_add($sum ^ (y2 >> 5)).wrapping_add(d));
-            z3 = z3.wrapping_sub((y3 << 4).wrapping_add(c ^ y3).wrapping_add($sum ^ (y3 >> 5)).wrapping_add(d));
-            y0 = y0.wrapping_sub((z0 << 4).wrapping_add(a ^ z0).wrapping_add($sum ^ (z0 >> 5)).wrapping_add(b));
-            y1 = y1.wrapping_sub((z1 << 4).wrapping_add(a ^ z1).wrapping_add($sum ^ (z1 >> 5)).wrapping_add(b));
-            y2 = y2.wrapping_sub((z2 << 4).wrapping_add(a ^ z2).wrapping_add($sum ^ (z2 >> 5)).wrapping_add(b));
-            y3 = y3.wrapping_sub((z3 << 4).wrapping_add(a ^ z3).wrapping_add($sum ^ (z3 >> 5)).wrapping_add(b));
+            z0 = z0.wrapping_sub(
+                (y0 << 4)
+                    .wrapping_add(c ^ y0)
+                    .wrapping_add($sum ^ (y0 >> 5))
+                    .wrapping_add(d),
+            );
+            z1 = z1.wrapping_sub(
+                (y1 << 4)
+                    .wrapping_add(c ^ y1)
+                    .wrapping_add($sum ^ (y1 >> 5))
+                    .wrapping_add(d),
+            );
+            z2 = z2.wrapping_sub(
+                (y2 << 4)
+                    .wrapping_add(c ^ y2)
+                    .wrapping_add($sum ^ (y2 >> 5))
+                    .wrapping_add(d),
+            );
+            z3 = z3.wrapping_sub(
+                (y3 << 4)
+                    .wrapping_add(c ^ y3)
+                    .wrapping_add($sum ^ (y3 >> 5))
+                    .wrapping_add(d),
+            );
+            y0 = y0.wrapping_sub(
+                (z0 << 4)
+                    .wrapping_add(a ^ z0)
+                    .wrapping_add($sum ^ (z0 >> 5))
+                    .wrapping_add(b),
+            );
+            y1 = y1.wrapping_sub(
+                (z1 << 4)
+                    .wrapping_add(a ^ z1)
+                    .wrapping_add($sum ^ (z1 >> 5))
+                    .wrapping_add(b),
+            );
+            y2 = y2.wrapping_sub(
+                (z2 << 4)
+                    .wrapping_add(a ^ z2)
+                    .wrapping_add($sum ^ (z2 >> 5))
+                    .wrapping_add(b),
+            );
+            y3 = y3.wrapping_sub(
+                (z3 << 4)
+                    .wrapping_add(a ^ z3)
+                    .wrapping_add($sum ^ (z3 >> 5))
+                    .wrapping_add(b),
+            );
         };
     }
 
@@ -139,8 +184,14 @@ pub fn tea_decrypt_block64(keys: &TeaKeys, src: &[u8; 64], dst: &mut [u8; 64], c
     // Read 8 u64 values from source (big-endian)
     let read_u64 = |offset: usize| -> u64 {
         u64::from_be_bytes([
-            src[offset], src[offset + 1], src[offset + 2], src[offset + 3],
-            src[offset + 4], src[offset + 5], src[offset + 6], src[offset + 7],
+            src[offset],
+            src[offset + 1],
+            src[offset + 2],
+            src[offset + 3],
+            src[offset + 4],
+            src[offset + 5],
+            src[offset + 6],
+            src[offset + 7],
         ])
     };
 
@@ -192,16 +243,26 @@ pub fn tea_decrypt_block64(keys: &TeaKeys, src: &[u8; 64], dst: &mut [u8; 64], c
 
     // Apply counter-based XOR
     let mut ctr = counter.wrapping_add((iv >> 10) as u32);
-    if ctr == 0 { ctr = 1; }
+    if ctr == 0 {
+        ctr = 1;
+    }
 
-    ctr = lfsr3(ctr); out0 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); out1 ^= (ctr as u64).wrapping_sub(iv);
-    ctr = lfsr3(ctr); out2 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); out3 ^= (ctr as u64).wrapping_sub(iv);
-    ctr = lfsr3(ctr); w4 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); w5 ^= (ctr as u64).wrapping_sub(iv);
-    ctr = lfsr3(ctr); w6 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); w7 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    out0 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    out1 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    out2 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    out3 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    w4 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    w5 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    w6 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    w7 ^= (ctr as u64).wrapping_sub(iv);
 
     // Write output (big-endian)
     let outputs = [out0, out1, out2, out3, w4, w5, w6, w7];
@@ -252,14 +313,54 @@ fn tea_encipher_4(v0: u64, v1: u64, v2: u64, v3: u64, k0: u64, k1: u64) -> (u64,
 
     macro_rules! tea_round_4_enc {
         ($sum:expr) => {
-            y0 = y0.wrapping_add((z0 << 4).wrapping_add(a ^ z0).wrapping_add($sum ^ (z0 >> 5)).wrapping_add(b));
-            y1 = y1.wrapping_add((z1 << 4).wrapping_add(a ^ z1).wrapping_add($sum ^ (z1 >> 5)).wrapping_add(b));
-            y2 = y2.wrapping_add((z2 << 4).wrapping_add(a ^ z2).wrapping_add($sum ^ (z2 >> 5)).wrapping_add(b));
-            y3 = y3.wrapping_add((z3 << 4).wrapping_add(a ^ z3).wrapping_add($sum ^ (z3 >> 5)).wrapping_add(b));
-            z0 = z0.wrapping_add((y0 << 4).wrapping_add(c ^ y0).wrapping_add($sum ^ (y0 >> 5)).wrapping_add(d));
-            z1 = z1.wrapping_add((y1 << 4).wrapping_add(c ^ y1).wrapping_add($sum ^ (y1 >> 5)).wrapping_add(d));
-            z2 = z2.wrapping_add((y2 << 4).wrapping_add(c ^ y2).wrapping_add($sum ^ (y2 >> 5)).wrapping_add(d));
-            z3 = z3.wrapping_add((y3 << 4).wrapping_add(c ^ y3).wrapping_add($sum ^ (y3 >> 5)).wrapping_add(d));
+            y0 = y0.wrapping_add(
+                (z0 << 4)
+                    .wrapping_add(a ^ z0)
+                    .wrapping_add($sum ^ (z0 >> 5))
+                    .wrapping_add(b),
+            );
+            y1 = y1.wrapping_add(
+                (z1 << 4)
+                    .wrapping_add(a ^ z1)
+                    .wrapping_add($sum ^ (z1 >> 5))
+                    .wrapping_add(b),
+            );
+            y2 = y2.wrapping_add(
+                (z2 << 4)
+                    .wrapping_add(a ^ z2)
+                    .wrapping_add($sum ^ (z2 >> 5))
+                    .wrapping_add(b),
+            );
+            y3 = y3.wrapping_add(
+                (z3 << 4)
+                    .wrapping_add(a ^ z3)
+                    .wrapping_add($sum ^ (z3 >> 5))
+                    .wrapping_add(b),
+            );
+            z0 = z0.wrapping_add(
+                (y0 << 4)
+                    .wrapping_add(c ^ y0)
+                    .wrapping_add($sum ^ (y0 >> 5))
+                    .wrapping_add(d),
+            );
+            z1 = z1.wrapping_add(
+                (y1 << 4)
+                    .wrapping_add(c ^ y1)
+                    .wrapping_add($sum ^ (y1 >> 5))
+                    .wrapping_add(d),
+            );
+            z2 = z2.wrapping_add(
+                (y2 << 4)
+                    .wrapping_add(c ^ y2)
+                    .wrapping_add($sum ^ (y2 >> 5))
+                    .wrapping_add(d),
+            );
+            z3 = z3.wrapping_add(
+                (y3 << 4)
+                    .wrapping_add(c ^ y3)
+                    .wrapping_add($sum ^ (y3 >> 5))
+                    .wrapping_add(d),
+            );
         };
     }
 
@@ -306,8 +407,14 @@ pub fn tea_encrypt_block64(keys: &TeaKeys, src: &[u8; 64], dst: &mut [u8; 64], c
     // Read 8 u64 values from source (big-endian)
     let read_u64 = |offset: usize| -> u64 {
         u64::from_be_bytes([
-            src[offset], src[offset + 1], src[offset + 2], src[offset + 3],
-            src[offset + 4], src[offset + 5], src[offset + 6], src[offset + 7],
+            src[offset],
+            src[offset + 1],
+            src[offset + 2],
+            src[offset + 3],
+            src[offset + 4],
+            src[offset + 5],
+            src[offset + 6],
+            src[offset + 7],
         ])
     };
 
@@ -322,16 +429,26 @@ pub fn tea_encrypt_block64(keys: &TeaKeys, src: &[u8; 64], dst: &mut [u8; 64], c
 
     // Apply counter-based XOR (same as decrypt - XOR is its own inverse)
     let mut ctr = counter.wrapping_add((iv >> 10) as u32);
-    if ctr == 0 { ctr = 1; }
+    if ctr == 0 {
+        ctr = 1;
+    }
 
-    ctr = lfsr3(ctr); in0 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); in1 ^= (ctr as u64).wrapping_sub(iv);
-    ctr = lfsr3(ctr); in2 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); in3 ^= (ctr as u64).wrapping_sub(iv);
-    ctr = lfsr3(ctr); in4 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); in5 ^= (ctr as u64).wrapping_sub(iv);
-    ctr = lfsr3(ctr); in6 ^= (ctr as u64).wrapping_add(iv);
-    ctr = lfsr3(ctr); in7 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    in0 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    in1 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    in2 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    in3 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    in4 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    in5 ^= (ctr as u64).wrapping_sub(iv);
+    ctr = lfsr3(ctr);
+    in6 ^= (ctr as u64).wrapping_add(iv);
+    ctr = lfsr3(ctr);
+    in7 ^= (ctr as u64).wrapping_sub(iv);
 
     // Third encipher (inverse of third decipher): in[0..4] with k2, k1
     let (w0, w1, w2, w3) = tea_encipher_4(in0, in1, in2, in3, keys.k2, keys.k1);
@@ -400,4 +517,3 @@ pub fn tea_encrypt_data(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
         data[offset..offset + 64].copy_from_slice(&dst);
     }
 }
-

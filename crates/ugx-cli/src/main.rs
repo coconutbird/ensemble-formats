@@ -1,11 +1,11 @@
 //! UGX CLI - Command-line tool for UGX model files.
 
 use clap::{Parser, Subcommand};
-use std::fs::File;
+use ecf::EcfReader;
 use std::fs;
+use std::fs::File;
 use std::path::PathBuf;
 use ugx::{export_to_gltf_with_buffer_name, GltfExportOptions, UgxGeom};
-use ecf::EcfReader;
 
 #[derive(Parser)]
 #[command(name = "ugx")]
@@ -114,10 +114,22 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         if i < 3 {
             let m = &bone.model_to_bone.rows;
             println!("      Matrix (model_to_bone):");
-            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[0][0], m[0][1], m[0][2], m[0][3]);
-            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[1][0], m[1][1], m[1][2], m[1][3]);
-            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[2][0], m[2][1], m[2][2], m[2][3]);
-            println!("        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]", m[3][0], m[3][1], m[3][2], m[3][3]);
+            println!(
+                "        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]",
+                m[0][0], m[0][1], m[0][2], m[0][3]
+            );
+            println!(
+                "        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]",
+                m[1][0], m[1][1], m[1][2], m[1][3]
+            );
+            println!(
+                "        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]",
+                m[2][0], m[2][1], m[2][2], m[2][3]
+            );
+            println!(
+                "        [{:8.4}, {:8.4}, {:8.4}, {:8.4}]",
+                m[3][0], m[3][1], m[3][2], m[3][3]
+            );
         }
     }
     println!();
@@ -126,7 +138,11 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     for (i, section) in geom.sections.iter().enumerate() {
         println!(
             "  [{}] Material={}, Verts={}, Tris={}, VB={}bytes, VertSize={}",
-            i, section.material_index, section.num_verts, section.num_tris, section.vb_bytes,
+            i,
+            section.material_index,
+            section.num_verts,
+            section.num_tris,
+            section.vb_bytes,
             section.vert_size
         );
         println!(
@@ -135,11 +151,26 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         );
         println!("       PackOrder: {}", section.base_vert_packer.pack_order);
         println!("       PosType: {:?}", section.base_vert_packer.pos_type);
-        println!("       NormType: {:?}", section.base_vert_packer.normal_type);
-        println!("       TangentType: {:?}", section.base_vert_packer.tangent_type);
-        println!("       UV[0]Type: {:?}", section.base_vert_packer.uv_types[0]);
-        println!("       IndicesType: {:?}", section.base_vert_packer.indices_type);
-        println!("       WeightsType: {:?}", section.base_vert_packer.weights_type);
+        println!(
+            "       NormType: {:?}",
+            section.base_vert_packer.normal_type
+        );
+        println!(
+            "       TangentType: {:?}",
+            section.base_vert_packer.tangent_type
+        );
+        println!(
+            "       UV[0]Type: {:?}",
+            section.base_vert_packer.uv_types[0]
+        );
+        println!(
+            "       IndicesType: {:?}",
+            section.base_vert_packer.indices_type
+        );
+        println!(
+            "       WeightsType: {:?}",
+            section.base_vert_packer.weights_type
+        );
 
         // Print first 3 unpacked vertices for debugging
         if section.num_verts > 0 && !section.base_vert_packer.pack_order.is_empty() {
@@ -204,12 +235,14 @@ fn cmd_to_gltf(
     }
 
     println!();
-    println!("Exported {} sections, {} materials, {} bones",
+    println!(
+        "Exported {} sections, {} materials, {} bones",
         geom.sections.len(),
         geom.materials.len(),
         geom.bones.len()
     );
-    println!("Total: {} vertices, {} triangles",
+    println!(
+        "Total: {} vertices, {} triangles",
         geom.total_vertices(),
         geom.total_triangles()
     );
@@ -229,14 +262,19 @@ fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Chunks ===");
     for (i, chunk) in ecf.chunks().iter().enumerate() {
-        println!("Chunk {}: ID=0x{:08X} offset=0x{:X} size=0x{:X} flags=0x{:02X}",
-            i, chunk.id, chunk.offset, chunk.size, chunk.flags);
+        println!(
+            "Chunk {}: ID=0x{:08X} offset=0x{:X} size=0x{:X} flags=0x{:02X}",
+            i, chunk.id, chunk.offset, chunk.size, chunk.flags
+        );
     }
 
     // Read and dump cached data chunk (0x700)
     if let Ok(cached_data) = ecf.read_chunk_data_by_id(0x700) {
-        println!("\n=== Cached Data (0x700) - {} bytes ===", cached_data.len());
-        hexdump(&cached_data, 768);  // Dump more to see section data
+        println!(
+            "\n=== Cached Data (0x700) - {} bytes ===",
+            cached_data.len()
+        );
+        hexdump(&cached_data, 768); // Dump more to see section data
     }
 
     // Read IB chunk (0x701)

@@ -163,7 +163,12 @@ impl EraWriter {
         }
 
         // Write chunk data with padding
-        write_chunk_data(&mut writer, &chunk_offsets, &compressed_names, &compressed_files)?;
+        write_chunk_data(
+            &mut writer,
+            &chunk_offsets,
+            &compressed_names,
+            &compressed_files,
+        )?;
 
         // Flush to ensure all data is written (important for EncryptWriter)
         writer.flush()?;

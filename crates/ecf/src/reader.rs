@@ -88,4 +88,3 @@ impl<R: Read + Seek> EcfReader<R> {
         self.read_chunk_data(index)
     }
 }
-

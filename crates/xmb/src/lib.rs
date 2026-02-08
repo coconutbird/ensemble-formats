@@ -128,8 +128,14 @@ mod tests {
 
         let read_root = read_xmb.root().unwrap();
         assert_eq!(read_root.attributes.len(), 2);
-        assert_eq!(read_root.get_attribute("id").unwrap().value_string(), "test123");
-        assert_eq!(read_root.get_attribute("count").unwrap().value_string(), "42");
+        assert_eq!(
+            read_root.get_attribute("id").unwrap().value_string(),
+            "test123"
+        );
+        assert_eq!(
+            read_root.get_attribute("count").unwrap().value_string(),
+            "42"
+        );
     }
 
     #[test]
@@ -149,9 +155,17 @@ mod tests {
         // Verify the XML parsed correctly first
         let parsed_root = xmb.root().unwrap();
         assert_eq!(parsed_root.name, "level1");
-        assert_eq!(parsed_root.children.len(), 1, "XML parsing: level1 should have 1 child");
+        assert_eq!(
+            parsed_root.children.len(),
+            1,
+            "XML parsing: level1 should have 1 child"
+        );
         assert_eq!(parsed_root.children[0].name, "level2");
-        assert_eq!(parsed_root.children[0].children.len(), 1, "XML parsing: level2 should have 1 child");
+        assert_eq!(
+            parsed_root.children[0].children.len(),
+            1,
+            "XML parsing: level2 should have 1 child"
+        );
 
         // Write
         let mut buffer = Cursor::new(Vec::new());
@@ -163,13 +177,24 @@ mod tests {
 
         let root = read_xmb.root().unwrap();
         assert_eq!(root.name, "level1");
-        assert_eq!(root.children.len(), 1, "XMB roundtrip: level1 should have 1 child");
+        assert_eq!(
+            root.children.len(),
+            1,
+            "XMB roundtrip: level1 should have 1 child"
+        );
         assert_eq!(root.children[0].name, "level2");
-        assert_eq!(root.children[0].children.len(), 1, "XMB roundtrip: level2 should have 1 child");
+        assert_eq!(
+            root.children[0].children.len(),
+            1,
+            "XMB roundtrip: level2 should have 1 child"
+        );
         assert_eq!(root.children[0].children[0].name, "level3");
         assert_eq!(root.children[0].children[0].children.len(), 1);
         assert_eq!(root.children[0].children[0].children[0].name, "leaf");
-        assert_eq!(root.children[0].children[0].children[0].text_string(), "deep value");
+        assert_eq!(
+            root.children[0].children[0].children[0].text_string(),
+            "deep value"
+        );
     }
 
     #[test]
@@ -179,7 +204,10 @@ mod tests {
         assert_eq!(Variant::Bool(false).to_string_value(), "false");
         assert_eq!(Variant::Int(-42).to_string_value(), "-42");
         assert_eq!(Variant::UInt(100).to_string_value(), "100");
-        assert_eq!(Variant::String("test".to_string()).to_string_value(), "test");
+        assert_eq!(
+            Variant::String("test".to_string()).to_string_value(),
+            "test"
+        );
     }
 
     #[test]

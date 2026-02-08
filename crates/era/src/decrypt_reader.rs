@@ -98,16 +98,14 @@ impl<R: Read + Seek> Seek for DecryptReader<R> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset,
-            SeekFrom::Current(offset) => {
-                if offset >= 0 {
-                    self.position.checked_add(offset as u64)
-                } else {
-                    self.position.checked_sub((-offset) as u64)
-                }
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of bounds")
-                })?
+            SeekFrom::Current(offset) => if offset >= 0 {
+                self.position.checked_add(offset as u64)
+            } else {
+                self.position.checked_sub((-offset) as u64)
             }
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of bounds")
+            })?,
             SeekFrom::End(offset) => {
                 // Get file size
                 let end = self.inner.seek(SeekFrom::End(0))?;
@@ -126,4 +124,3 @@ impl<R: Read + Seek> Seek for DecryptReader<R> {
         Ok(new_pos)
     }
 }
-

@@ -94,9 +94,9 @@ pub fn decompress_bdeflate_stream(data: &[u8]) -> Result<Vec<u8>> {
 
     let mut decoder = DeflateDecoder::new(deflate_data);
     let mut decompressed = Vec::with_capacity(src_bytes);
-    decoder.read_to_end(&mut decompressed).map_err(|e| {
-        Error::DecompressionError(format!("deflate decompression failed: {}", e))
-    })?;
+    decoder
+        .read_to_end(&mut decompressed)
+        .map_err(|e| Error::DecompressionError(format!("deflate decompression failed: {}", e)))?;
 
     Ok(decompressed)
 }
@@ -155,4 +155,3 @@ pub fn compress_bdeflate_stream(data: &[u8], big_endian: bool) -> Result<Vec<u8>
 
     Ok(wrapped_data)
 }
-

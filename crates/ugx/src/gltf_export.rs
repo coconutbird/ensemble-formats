@@ -407,10 +407,9 @@ fn create_primitive(
     let norm_view_idx = buffer_views.len() as u32;
     let norm_offset = buffer_data.len();
     for v in vertices {
-        let len = (v.normal[0] * v.normal[0]
-            + v.normal[1] * v.normal[1]
-            + v.normal[2] * v.normal[2])
-            .sqrt();
+        let len =
+            (v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1] + v.normal[2] * v.normal[2])
+                .sqrt();
         let (nx, ny, nz) = if len > 1e-6 {
             (v.normal[0] / len, v.normal[1] / len, v.normal[2] / len)
         } else {
@@ -504,9 +503,9 @@ fn create_primitive(
     }
 
     // Write tangents (vec4: xyz + handedness in w)
-    let has_tangents = vertices.iter().any(|v| {
-        v.tangent[0] != 0.0 || v.tangent[1] != 0.0 || v.tangent[2] != 0.0
-    });
+    let has_tangents = vertices
+        .iter()
+        .any(|v| v.tangent[0] != 0.0 || v.tangent[1] != 0.0 || v.tangent[2] != 0.0);
     if has_tangents {
         let tangent_view_idx = buffer_views.len() as u32;
         let tangent_offset = buffer_data.len();
@@ -527,7 +526,11 @@ fn create_primitive(
             buffer_data.extend_from_slice(&tz.to_le_bytes());
             // glTF tangent.w is handedness: +1 or -1.
             // UGX stores this in tangent[3]; default to 1.0 if unset.
-            let w = if v.tangent[3] == 0.0 { 1.0f32 } else { v.tangent[3] };
+            let w = if v.tangent[3] == 0.0 {
+                1.0f32
+            } else {
+                v.tangent[3]
+            };
             buffer_data.extend_from_slice(&w.to_le_bytes());
         }
         let tangent_byte_length = buffer_data.len() - tangent_offset;
@@ -572,12 +575,11 @@ fn create_primitive(
         let use_u16_joints = bone_count > 256;
         // rigid_bone_index can be INT_MAX (0x7FFFFFFF) meaning "no rigid bone".
         // Default to bone 0 when invalid.
-        let rigid_idx: u16 =
-            if rigid_bone_index >= 0 && (rigid_bone_index as usize) < bone_count {
-                rigid_bone_index as u16
-            } else {
-                0
-            };
+        let rigid_idx: u16 = if rigid_bone_index >= 0 && (rigid_bone_index as usize) < bone_count {
+            rigid_bone_index as u16
+        } else {
+            0
+        };
 
         // JOINTS_0 - bone indices as u8 (<=256 bones) or u16 (>256 bones)
         // Pad to 2-byte boundary if using u16
@@ -639,9 +641,7 @@ fn create_primitive(
             buffer_view: Some(json::Index::new(joints_view_idx)),
             byte_offset: Some(json::validation::USize64(0)),
             count: json::validation::USize64(vertices.len() as u64),
-            component_type: Valid(json::accessor::GenericComponentType(
-                joints_component_type,
-            )),
+            component_type: Valid(json::accessor::GenericComponentType(joints_component_type)),
             extensions: None,
             extras: json::Extras::default(),
             type_: Valid(json::accessor::Type::Vec4),
@@ -829,10 +829,8 @@ fn create_skeleton_nodes(
         // Write DX rows flat = column-major of GL matrix
         let m = &local_dx.rows;
         let gltf_matrix = [
-            m[0][0], m[0][1], m[0][2], m[0][3],
-            m[1][0], m[1][1], m[1][2], m[1][3],
-            m[2][0], m[2][1], m[2][2], m[2][3],
-            m[3][0], m[3][1], m[3][2], m[3][3],
+            m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0],
+            m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2], m[3][3],
         ];
 
         nodes.push(json::Node {
@@ -967,10 +965,8 @@ fn create_skeleton_nodes_from_granny(
         // So just write DX matrix rows flat.
         let m = &local_dx.rows;
         let gltf_matrix = [
-            m[0][0], m[0][1], m[0][2], m[0][3],
-            m[1][0], m[1][1], m[1][2], m[1][3],
-            m[2][0], m[2][1], m[2][2], m[2][3],
-            m[3][0], m[3][1], m[3][2], m[3][3],
+            m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0],
+            m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2], m[3][3],
         ];
 
         nodes.push(json::Node {
@@ -1068,10 +1064,7 @@ mod tests {
     }
 
     /// Helper: find a semantic in a primitive's attributes.
-    fn has_semantic(
-        prim: &json::mesh::Primitive,
-        semantic: json::mesh::Semantic,
-    ) -> bool {
+    fn has_semantic(prim: &json::mesh::Primitive, semantic: json::mesh::Semantic) -> bool {
         prim.attributes.contains_key(&Valid(semantic))
     }
 
@@ -1100,7 +1093,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         assert!(has_semantic(&prim, json::mesh::Semantic::TexCoords(0)));
         assert!(!has_semantic(&prim, json::mesh::Semantic::TexCoords(1)));
@@ -1120,7 +1124,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         assert!(has_semantic(&prim, json::mesh::Semantic::TexCoords(0)));
         assert!(has_semantic(&prim, json::mesh::Semantic::TexCoords(1)));
@@ -1143,7 +1158,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         assert!(!has_semantic(&prim, json::mesh::Semantic::TexCoords(0)));
     }
@@ -1161,7 +1187,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         assert!(has_semantic(&prim, json::mesh::Semantic::Tangents));
         let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Tangents).unwrap();
@@ -1177,7 +1214,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         assert!(!has_semantic(&prim, json::mesh::Semantic::Tangents));
     }
@@ -1192,7 +1240,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         // Find the tangent data in the buffer
         let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Tangents).unwrap();
@@ -1205,7 +1264,11 @@ mod tests {
         let tw = f32::from_le_bytes(buf[offset + 12..offset + 16].try_into().unwrap());
 
         let length = (tx * tx + ty * ty + tz * tz).sqrt();
-        assert!((length - 1.0).abs() < 1e-5, "tangent should be unit length, got {}", length);
+        assert!(
+            (length - 1.0).abs() < 1e-5,
+            "tangent should be unit length, got {}",
+            length
+        );
         assert!((tx - 1.0).abs() < 1e-5, "expected tx=1.0, got {}", tx);
         assert_eq!(tw, 1.0, "handedness should be preserved");
     }
@@ -1219,7 +1282,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Tangents).unwrap();
         let view = &views[acc.buffer_view.unwrap().value()];
@@ -1241,7 +1315,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         let acc = get_accessor(
             &json::mesh::Primitive {
@@ -1259,7 +1344,8 @@ mod tests {
             },
             &accessors,
             json::mesh::Semantic::Normals,
-        ).unwrap();
+        )
+        .unwrap();
         let view = &views[acc.buffer_view.unwrap().value()];
         let offset = view.byte_offset.unwrap().0 as usize;
 
@@ -1268,7 +1354,11 @@ mod tests {
         let nz = f32::from_le_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
 
         let length = (nx * nx + ny * ny + nz * nz).sqrt();
-        assert!((length - 1.0).abs() < 1e-5, "normal should be unit length, got {}", length);
+        assert!(
+            (length - 1.0).abs() < 1e-5,
+            "normal should be unit length, got {}",
+            length
+        );
         assert!((nx - 1.0).abs() < 1e-5, "expected nx=1.0, got {}", nx);
     }
 
@@ -1282,7 +1372,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, false, 0, -1);
+        create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            false,
+            0,
+            -1,
+        );
 
         // Normal accessor is index 1 (after position at 0), view index 1
         let view = &views[1];
@@ -1293,7 +1394,10 @@ mod tests {
         let nz = f32::from_le_bytes(buf[offset + 8..offset + 12].try_into().unwrap());
 
         assert!((nx - 0.0).abs() < 1e-5);
-        assert!((ny - 1.0).abs() < 1e-5, "zero normal should fall back to up (0,1,0)");
+        assert!(
+            (ny - 1.0).abs() < 1e-5,
+            "zero normal should fall back to up (0,1,0)"
+        );
         assert!((nz - 0.0).abs() < 1e-5);
     }
 
@@ -1311,13 +1415,28 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, true, 50, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            true,
+            50,
+            -1,
+        );
 
         let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Joints(0)).unwrap();
         // U8 joints for <=256 bones
         match &acc.component_type {
             Valid(json::accessor::GenericComponentType(ct)) => {
-                assert!(matches!(ct, json::accessor::ComponentType::U8), "expected U8, got {:?}", ct);
+                assert!(
+                    matches!(ct, json::accessor::ComponentType::U8),
+                    "expected U8, got {:?}",
+                    ct
+                );
             }
             other => panic!("unexpected component_type: {:?}", other),
         }
@@ -1335,13 +1454,28 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, true, 300, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            true,
+            300,
+            -1,
+        );
 
         let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Joints(0)).unwrap();
         // U16 joints for >256 bones
         match &acc.component_type {
             Valid(json::accessor::GenericComponentType(ct)) => {
-                assert!(matches!(ct, json::accessor::ComponentType::U16), "expected U16, got {:?}", ct);
+                assert!(
+                    matches!(ct, json::accessor::ComponentType::U16),
+                    "expected U16, got {:?}",
+                    ct
+                );
             }
             other => panic!("unexpected component_type: {:?}", other),
         }
@@ -1358,7 +1492,18 @@ mod tests {
         let mut accessors = Vec::new();
         let mut views = Vec::new();
 
-        let prim = create_primitive(&verts, &indices, -1, &mut buf, &mut accessors, &mut views, false, true, 10, -1);
+        let prim = create_primitive(
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            true,
+            10,
+            -1,
+        );
 
         let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Joints(0)).unwrap();
         let view = &views[acc.buffer_view.unwrap().value()];
@@ -1382,8 +1527,16 @@ mod tests {
         let mut views = Vec::new();
 
         let prim = create_primitive(
-            &verts, &indices, -1, &mut buf, &mut accessors, &mut views,
-            false, true, 10, 5, // rigid_bone_index = 5
+            &verts,
+            &indices,
+            -1,
+            &mut buf,
+            &mut accessors,
+            &mut views,
+            false,
+            true,
+            10,
+            5, // rigid_bone_index = 5
         );
 
         let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Joints(0)).unwrap();

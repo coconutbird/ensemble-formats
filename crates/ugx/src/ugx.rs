@@ -118,7 +118,13 @@ impl UgxGeom {
         }
 
         // Parse cached data (pass the full slice for offset resolution)
-        Self::parse_cached_data(&cached_data, granny_data, material_data, vertex_buffer, index_buffer)
+        Self::parse_cached_data(
+            &cached_data,
+            granny_data,
+            material_data,
+            vertex_buffer,
+            index_buffer,
+        )
     }
 
     /// Parse the cached data chunk containing header, sections, bones, etc.
@@ -337,23 +343,28 @@ impl UgxGeom {
     }
 
     /// Read packed UnivertPacker.
-    fn read_packed_univert_packer(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<UnivertPacker> {
+    fn read_packed_univert_packer(
+        data: &[u8],
+        cursor: &mut Cursor<&[u8]>,
+    ) -> Result<UnivertPacker> {
         // Packed strings (uint64 offset each)
         let pack_order_offset = cursor.read_u64::<LittleEndian>()? as usize;
         let decl_order_offset = cursor.read_u64::<LittleEndian>()? as usize;
 
         // Read the pack order string
-        let pack_order = if pack_order_offset == 0xFFFFFFFFFFFFFFFF || pack_order_offset >= data.len() {
-            String::new()
-        } else {
-            Self::read_null_terminated_string(&data[pack_order_offset..])?
-        };
+        let pack_order =
+            if pack_order_offset == 0xFFFFFFFFFFFFFFFF || pack_order_offset >= data.len() {
+                String::new()
+            } else {
+                Self::read_null_terminated_string(&data[pack_order_offset..])?
+            };
 
-        let decl_order = if decl_order_offset == 0xFFFFFFFFFFFFFFFF || decl_order_offset >= data.len() {
-            String::new()
-        } else {
-            Self::read_null_terminated_string(&data[decl_order_offset..])?
-        };
+        let decl_order =
+            if decl_order_offset == 0xFFFFFFFFFFFFFFFF || decl_order_offset >= data.len() {
+                String::new()
+            } else {
+                Self::read_null_terminated_string(&data[decl_order_offset..])?
+            };
 
         // Vertex element types (each is uint32 for VertexElement::EType enum)
         let pos_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
@@ -605,7 +616,11 @@ impl UgxGeom {
         // Read maps from "Maps" child
         if let Some(maps_node) = node.children.iter().find(|c| c.name == "Maps") {
             for map_type in MapType::ALL {
-                if let Some(type_node) = maps_node.children.iter().find(|c| c.name == map_type.name()) {
+                if let Some(type_node) = maps_node
+                    .children
+                    .iter()
+                    .find(|c| c.name == map_type.name())
+                {
                     // UVWVel is an attribute on the map type node
                     if let Some(uvw_attr) = type_node.get_attribute("UVWVel") {
                         mat.uvw_velocity[map_type as usize][0] = variant_to_f32(&uvw_attr.value);
@@ -765,7 +780,10 @@ mod tests {
         let path = "../../foxcannon01/mesh_turret_0.ugx";
         let data = match std::fs::read(path) {
             Ok(d) => d,
-            Err(_) => { eprintln!("File not found, skipping"); return; }
+            Err(_) => {
+                eprintln!("File not found, skipping");
+                return;
+            }
         };
 
         let mut cursor = Cursor::new(&data);
@@ -774,9 +792,17 @@ mod tests {
 
         // IB analysis
         let ib = ecf.read_chunk_data_by_id(ECF_IB_CHUNK_ID).unwrap();
-        let ib_u16: Vec<u16> = ib.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let ib_u16: Vec<u16> = ib
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
         let num_unique = *ib_u16.iter().max().unwrap_or(&0) as usize + 1;
-        eprintln!("IB: {} indices, {} tris, {} unique verts", ib_u16.len(), ib_u16.len() / 3, num_unique);
+        eprintln!(
+            "IB: {} indices, {} tris, {} unique verts",
+            ib_u16.len(),
+            ib_u16.len() / 3,
+            num_unique
+        );
         eprintln!("Granny: {} bytes\n", granny.len());
 
         // Dump the ENTIRE granny chunk in annotated hex, looking for data regions
@@ -804,13 +830,25 @@ mod tests {
                 let hy = f16_to_f32(u16::from_le_bytes([row[2], row[3]]));
                 let hz = f16_to_f32(u16::from_le_bytes([row[4], row[5]]));
                 let hw = f16_to_f32(u16::from_le_bytes([row[6], row[7]]));
-                if hx.is_finite() && hy.is_finite() && hz.is_finite() && hx.abs() < 100.0 && hy.abs() < 100.0 && hz.abs() < 100.0 {
+                if hx.is_finite()
+                    && hy.is_finite()
+                    && hz.is_finite()
+                    && hx.abs() < 100.0
+                    && hy.abs() < 100.0
+                    && hz.abs() < 100.0
+                {
                     annotation += &format!("f16: ({:.3},{:.3},{:.3},{:.3}) ", hx, hy, hz, hw);
                 }
                 let fx = f32::from_le_bytes([row[0], row[1], row[2], row[3]]);
                 let fy = f32::from_le_bytes([row[4], row[5], row[6], row[7]]);
                 let fz = f32::from_le_bytes([row[8], row[9], row[10], row[11]]);
-                if fx.is_finite() && fy.is_finite() && fz.is_finite() && fx.abs() < 100.0 && fy.abs() < 100.0 && fz.abs() < 100.0 {
+                if fx.is_finite()
+                    && fy.is_finite()
+                    && fz.is_finite()
+                    && fx.abs() < 100.0
+                    && fy.abs() < 100.0
+                    && fz.abs() < 100.0
+                {
                     annotation += &format!("f32: ({:.3},{:.3},{:.3}) ", fx, fy, fz);
                 }
             }
@@ -822,32 +860,69 @@ mod tests {
         for stride in [12usize, 24, 32, 36, 44, 48] {
             let mut offset = 0x100;
             while offset + 12 <= granny.len() {
-                let x = f32::from_le_bytes(granny[offset..offset+4].try_into().unwrap());
-                let y = f32::from_le_bytes(granny[offset+4..offset+8].try_into().unwrap());
-                let z = f32::from_le_bytes(granny[offset+8..offset+12].try_into().unwrap());
+                let x = f32::from_le_bytes(granny[offset..offset + 4].try_into().unwrap());
+                let y = f32::from_le_bytes(granny[offset + 4..offset + 8].try_into().unwrap());
+                let z = f32::from_le_bytes(granny[offset + 8..offset + 12].try_into().unwrap());
 
-                if x.is_finite() && y.is_finite() && z.is_finite()
-                    && x.abs() < 100.0 && y.abs() < 100.0 && z.abs() < 100.0
-                    && (x.abs() > 0.01 || y.abs() > 0.01 || z.abs() > 0.01) {
+                if x.is_finite()
+                    && y.is_finite()
+                    && z.is_finite()
+                    && x.abs() < 100.0
+                    && y.abs() < 100.0
+                    && z.abs() < 100.0
+                    && (x.abs() > 0.01 || y.abs() > 0.01 || z.abs() > 0.01)
+                {
                     let mut count = 1;
                     while offset + count * stride + 12 <= granny.len() {
-                        let nx = f32::from_le_bytes(granny[offset+count*stride..offset+count*stride+4].try_into().unwrap());
-                        let ny = f32::from_le_bytes(granny[offset+count*stride+4..offset+count*stride+8].try_into().unwrap());
-                        let nz = f32::from_le_bytes(granny[offset+count*stride+8..offset+count*stride+12].try_into().unwrap());
-                        if nx.is_finite() && ny.is_finite() && nz.is_finite()
-                            && nx.abs() < 100.0 && ny.abs() < 100.0 && nz.abs() < 100.0
-                            && (nx.abs() > 0.01 || ny.abs() > 0.01 || nz.abs() > 0.01) {
+                        let nx = f32::from_le_bytes(
+                            granny[offset + count * stride..offset + count * stride + 4]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let ny = f32::from_le_bytes(
+                            granny[offset + count * stride + 4..offset + count * stride + 8]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let nz = f32::from_le_bytes(
+                            granny[offset + count * stride + 8..offset + count * stride + 12]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        if nx.is_finite()
+                            && ny.is_finite()
+                            && nz.is_finite()
+                            && nx.abs() < 100.0
+                            && ny.abs() < 100.0
+                            && nz.abs() < 100.0
+                            && (nx.abs() > 0.01 || ny.abs() > 0.01 || nz.abs() > 0.01)
+                        {
                             count += 1;
                         } else {
                             break;
                         }
                     }
                     if count >= 100 {
-                        eprintln!("  stride={}: {} positions at granny+0x{:X}", stride, count, offset);
+                        eprintln!(
+                            "  stride={}: {} positions at granny+0x{:X}",
+                            stride, count, offset
+                        );
                         for vi in 0..3 {
-                            let vx = f32::from_le_bytes(granny[offset+vi*stride..offset+vi*stride+4].try_into().unwrap());
-                            let vy = f32::from_le_bytes(granny[offset+vi*stride+4..offset+vi*stride+8].try_into().unwrap());
-                            let vz = f32::from_le_bytes(granny[offset+vi*stride+8..offset+vi*stride+12].try_into().unwrap());
+                            let vx = f32::from_le_bytes(
+                                granny[offset + vi * stride..offset + vi * stride + 4]
+                                    .try_into()
+                                    .unwrap(),
+                            );
+                            let vy = f32::from_le_bytes(
+                                granny[offset + vi * stride + 4..offset + vi * stride + 8]
+                                    .try_into()
+                                    .unwrap(),
+                            );
+                            let vz = f32::from_le_bytes(
+                                granny[offset + vi * stride + 8..offset + vi * stride + 12]
+                                    .try_into()
+                                    .unwrap(),
+                            );
                             eprintln!("    v[{}]: ({:.4}, {:.4}, {:.4})", vi, vx, vy, vz);
                         }
                     }
@@ -861,32 +936,63 @@ mod tests {
         for stride in [8usize, 12, 16, 20, 24, 28, 32, 36, 44] {
             let mut offset = 0x100;
             while offset + 6 <= granny.len() {
-                let x = f16_to_f32(u16::from_le_bytes([granny[offset], granny[offset+1]]));
-                let y = f16_to_f32(u16::from_le_bytes([granny[offset+2], granny[offset+3]]));
-                let z = f16_to_f32(u16::from_le_bytes([granny[offset+4], granny[offset+5]]));
+                let x = f16_to_f32(u16::from_le_bytes([granny[offset], granny[offset + 1]]));
+                let y = f16_to_f32(u16::from_le_bytes([granny[offset + 2], granny[offset + 3]]));
+                let z = f16_to_f32(u16::from_le_bytes([granny[offset + 4], granny[offset + 5]]));
 
-                if x.is_finite() && y.is_finite() && z.is_finite()
-                    && x.abs() < 100.0 && y.abs() < 100.0 && z.abs() < 100.0
-                    && (x.abs() > 0.01 || y.abs() > 0.01 || z.abs() > 0.01) {
+                if x.is_finite()
+                    && y.is_finite()
+                    && z.is_finite()
+                    && x.abs() < 100.0
+                    && y.abs() < 100.0
+                    && z.abs() < 100.0
+                    && (x.abs() > 0.01 || y.abs() > 0.01 || z.abs() > 0.01)
+                {
                     let mut count = 1;
                     while offset + count * stride + 6 <= granny.len() {
-                        let nx = f16_to_f32(u16::from_le_bytes([granny[offset+count*stride], granny[offset+count*stride+1]]));
-                        let ny = f16_to_f32(u16::from_le_bytes([granny[offset+count*stride+2], granny[offset+count*stride+3]]));
-                        let nz = f16_to_f32(u16::from_le_bytes([granny[offset+count*stride+4], granny[offset+count*stride+5]]));
-                        if nx.is_finite() && ny.is_finite() && nz.is_finite()
-                            && nx.abs() < 100.0 && ny.abs() < 100.0 && nz.abs() < 100.0
-                            && (nx.abs() > 0.01 || ny.abs() > 0.01 || nz.abs() > 0.01) {
+                        let nx = f16_to_f32(u16::from_le_bytes([
+                            granny[offset + count * stride],
+                            granny[offset + count * stride + 1],
+                        ]));
+                        let ny = f16_to_f32(u16::from_le_bytes([
+                            granny[offset + count * stride + 2],
+                            granny[offset + count * stride + 3],
+                        ]));
+                        let nz = f16_to_f32(u16::from_le_bytes([
+                            granny[offset + count * stride + 4],
+                            granny[offset + count * stride + 5],
+                        ]));
+                        if nx.is_finite()
+                            && ny.is_finite()
+                            && nz.is_finite()
+                            && nx.abs() < 100.0
+                            && ny.abs() < 100.0
+                            && nz.abs() < 100.0
+                            && (nx.abs() > 0.01 || ny.abs() > 0.01 || nz.abs() > 0.01)
+                        {
                             count += 1;
                         } else {
                             break;
                         }
                     }
                     if count >= 100 {
-                        eprintln!("  stride={}: {} half-positions at granny+0x{:X}", stride, count, offset);
+                        eprintln!(
+                            "  stride={}: {} half-positions at granny+0x{:X}",
+                            stride, count, offset
+                        );
                         for vi in 0..3 {
-                            let vx = f16_to_f32(u16::from_le_bytes([granny[offset+vi*stride], granny[offset+vi*stride+1]]));
-                            let vy = f16_to_f32(u16::from_le_bytes([granny[offset+vi*stride+2], granny[offset+vi*stride+3]]));
-                            let vz = f16_to_f32(u16::from_le_bytes([granny[offset+vi*stride+4], granny[offset+vi*stride+5]]));
+                            let vx = f16_to_f32(u16::from_le_bytes([
+                                granny[offset + vi * stride],
+                                granny[offset + vi * stride + 1],
+                            ]));
+                            let vy = f16_to_f32(u16::from_le_bytes([
+                                granny[offset + vi * stride + 2],
+                                granny[offset + vi * stride + 3],
+                            ]));
+                            let vz = f16_to_f32(u16::from_le_bytes([
+                                granny[offset + vi * stride + 4],
+                                granny[offset + vi * stride + 5],
+                            ]));
                             eprintln!("    v[{}]: ({:.4}, {:.4}, {:.4})", vi, vx, vy, vz);
                         }
                     }
@@ -916,16 +1022,28 @@ mod tests {
         let paths = [
             ("foxcannon turret", "../../foxcannon01/mesh_turret_0.ugx"),
             ("foxcannon barrel", "../../foxcannon01/mesh_barrel_0.ugx"),
-            ("foxcannon chassis", "../../foxcannon01/mesh_chassis_front_0.ugx"),
+            (
+                "foxcannon chassis",
+                "../../foxcannon01/mesh_chassis_front_0.ugx",
+            ),
             ("foxcannon main", "../../foxcannon01/mesh_foxcannon01.ugx"),
-            ("banshee damage", "../../test_ugx/art/covenant/air/banshee_01/banshee_damage_01.ugx"),
-            ("banshee upgrade", "../../test_ugx/art/covenant/air/banshee_01/upgrade_01.ugx"),
+            (
+                "banshee damage",
+                "../../test_ugx/art/covenant/air/banshee_01/banshee_damage_01.ugx",
+            ),
+            (
+                "banshee upgrade",
+                "../../test_ugx/art/covenant/air/banshee_01/upgrade_01.ugx",
+            ),
         ];
 
         for (label, path) in paths {
             let data = match std::fs::read(path) {
                 Ok(d) => d,
-                Err(_) => { eprintln!("  {} - file not found, skipping", label); continue; }
+                Err(_) => {
+                    eprintln!("  {} - file not found, skipping", label);
+                    continue;
+                }
             };
 
             // Check if 0x704 chunk exists
@@ -946,7 +1064,11 @@ mod tests {
 
                 match bdt::PackedReader::read_le(&mat_data) {
                     Ok(Some(root)) => {
-                        eprintln!("  BDT root: '{}' children={}", root.name, root.children.len());
+                        eprintln!(
+                            "  BDT root: '{}' children={}",
+                            root.name,
+                            root.children.len()
+                        );
                         // Dump full tree for first material
                         if let Some(mat_node) = root.children.first() {
                             dump_node(mat_node, 2);
@@ -963,14 +1085,18 @@ mod tests {
             let geom = UgxGeom::read(&data).unwrap();
             eprintln!("  UgxGeom materials: {}", geom.materials.len());
             for (i, mat) in geom.materials.iter().enumerate() {
-                eprintln!("    [{}] '{}' opacity={:.3} spec_power={} blend_type={} flags={}",
-                    i, mat.name, mat.opacity, mat.spec_power, mat.blend_type, mat.flags);
+                eprintln!(
+                    "    [{}] '{}' opacity={:.3} spec_power={} blend_type={} flags={}",
+                    i, mat.name, mat.opacity, mat.spec_power, mat.blend_type, mat.flags
+                );
                 for (mi, maps) in mat.maps.iter().enumerate() {
                     if !maps.is_empty() {
                         let type_name = MapType::ALL[mi].name();
                         for map in maps {
-                            eprintln!("        {}: '{}' ch={} fl={}",
-                                type_name, map.name, map.channel, map.flags);
+                            eprintln!(
+                                "        {}: '{}' ch={} fl={}",
+                                type_name, map.name, map.channel, map.flags
+                            );
                         }
                     }
                 }
@@ -989,7 +1115,10 @@ mod tests {
         for (label, path) in [("V6 foxcannon", v6_path), ("V4 banshee", v4_path)] {
             let data = match std::fs::read(path) {
                 Ok(d) => d,
-                Err(_) => { eprintln!("  {} - file not found, skipping", label); continue; }
+                Err(_) => {
+                    eprintln!("  {} - file not found, skipping", label);
+                    continue;
+                }
             };
 
             eprintln!("\n=== {} ({} bytes total) ===", label, data.len());
@@ -999,15 +1128,20 @@ mod tests {
             if let Ok(mut ecf) = ecf::EcfReader::new(&mut cursor) {
                 eprintln!("  ECF chunks ({} total):", ecf.chunks().len());
                 for (i, chunk) in ecf.chunks().iter().enumerate() {
-                    eprintln!("    [{}] id=0x{:03X} offset={} size={} flags=0x{:02X} res_flags=0x{:04X}",
-                        i, chunk.id, chunk.offset, chunk.size, chunk.flags, chunk.resource_flags);
+                    eprintln!(
+                        "    [{}] id=0x{:03X} offset={} size={} flags=0x{:02X} res_flags=0x{:04X}",
+                        i, chunk.id, chunk.offset, chunk.size, chunk.flags, chunk.resource_flags
+                    );
                 }
 
                 // Dump first 256 bytes of cached data (0x700)
                 if let Ok(cached) = ecf.read_chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID) {
                     let dump_len = 320.min(cached.len());
                     eprintln!("  Cached data (0x700) first {} bytes:", dump_len);
-                    let hex: Vec<String> = cached[..dump_len].iter().map(|b| format!("{:02X}", b)).collect();
+                    let hex: Vec<String> = cached[..dump_len]
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect();
                     for (i, row) in hex.chunks(16).enumerate() {
                         eprintln!("    {:04X}: {}", i * 16, row.join(" "));
                     }
@@ -1017,10 +1151,21 @@ mod tests {
                     eprintln!("  Header signature: 0x{:08X}", sig);
 
                     // Section array at 0x40
-                    let sec_count = u32::from_le_bytes([cached[0x40], cached[0x41], cached[0x42], cached[0x43]]);
+                    let sec_count = u32::from_le_bytes([
+                        cached[0x40],
+                        cached[0x41],
+                        cached[0x42],
+                        cached[0x43],
+                    ]);
                     let sec_offset = u64::from_le_bytes([
-                        cached[0x48], cached[0x49], cached[0x4A], cached[0x4B],
-                        cached[0x4C], cached[0x4D], cached[0x4E], cached[0x4F],
+                        cached[0x48],
+                        cached[0x49],
+                        cached[0x4A],
+                        cached[0x4B],
+                        cached[0x4C],
+                        cached[0x4D],
+                        cached[0x4E],
+                        cached[0x4F],
                     ]);
                     eprintln!("  Sections: count={}, offset=0x{:X}", sec_count, sec_offset);
 
@@ -1028,8 +1173,14 @@ mod tests {
                     if sec_count > 0 && (sec_offset as usize) < cached.len() {
                         let sec_start = sec_offset as usize;
                         let sec_dump = 160.min(cached.len() - sec_start);
-                        eprintln!("  Section 0 raw data at 0x{:X} ({} bytes):", sec_start, sec_dump);
-                        let sec_hex: Vec<String> = cached[sec_start..sec_start+sec_dump].iter().map(|b| format!("{:02X}", b)).collect();
+                        eprintln!(
+                            "  Section 0 raw data at 0x{:X} ({} bytes):",
+                            sec_start, sec_dump
+                        );
+                        let sec_hex: Vec<String> = cached[sec_start..sec_start + sec_dump]
+                            .iter()
+                            .map(|b| format!("{:02X}", b))
+                            .collect();
                         for (i, row) in sec_hex.chunks(16).enumerate() {
                             eprintln!("    +{:04X}: {}", i * 16, row.join(" "));
                         }

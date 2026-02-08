@@ -28,4 +28,3 @@ pub enum Error {
     #[error("decompression error: {0}")]
     DecompressionError(String),
 }
-
