@@ -78,12 +78,7 @@ pub fn export_to_gltf_with_buffer_name(
     if options.include_materials {
         for mat in &geom.materials {
             let pbr = json::material::PbrMetallicRoughness {
-                base_color_factor: json::material::PbrBaseColorFactor([
-                    mat.diff_color[0],
-                    mat.diff_color[1],
-                    mat.diff_color[2],
-                    1.0,
-                ]),
+                base_color_factor: json::material::PbrBaseColorFactor([1.0, 1.0, 1.0, mat.opacity]),
                 base_color_texture: None,
                 metallic_factor: json::material::StrengthFactor(0.0),
                 roughness_factor: json::material::StrengthFactor(

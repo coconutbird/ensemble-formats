@@ -96,8 +96,8 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     for (i, mat) in geom.materials.iter().enumerate() {
         println!("  [{}] {}", i, mat.name);
         // Show diffuse texture if present
-        if !mat.maps[0].maps.is_empty() {
-            println!("      Diffuse: {}", mat.maps[0].maps[0].name);
+        if !mat.maps[0].is_empty() {
+            println!("      Diffuse: {}", mat.maps[0][0].name);
         }
     }
     println!();

@@ -24,7 +24,6 @@ const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
 const ECF_IB_CHUNK_ID: u64 = 0x00000701;
 const ECF_VB_CHUNK_ID: u64 = 0x00000702;
 const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
-#[allow(dead_code)]
 const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 
 /// Geometry header signatures (version 4 = original, version 6 = Definitive Edition).
@@ -107,6 +106,9 @@ impl UgxGeom {
         // Read granny chunk (optional - contains bone inverse world matrices)
         let granny_data = ecf.read_chunk_data_by_id(ECF_GRANNY_CHUNK_ID).ok();
 
+        // Read material chunk (optional - BBinaryDataTree packed document)
+        let material_data = ecf.read_chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).ok();
+
         // Convert index buffer from bytes to u16
         let mut ib_cursor = Cursor::new(&ib_data);
         let num_indices = ib_data.len() / 2;
@@ -116,13 +118,14 @@ impl UgxGeom {
         }
 
         // Parse cached data (pass the full slice for offset resolution)
-        Self::parse_cached_data(&cached_data, granny_data, vertex_buffer, index_buffer)
+        Self::parse_cached_data(&cached_data, granny_data, material_data, vertex_buffer, index_buffer)
     }
 
     /// Parse the cached data chunk containing header, sections, bones, etc.
     fn parse_cached_data(
         data: &[u8],
         granny_data: Option<Vec<u8>>,
+        material_data: Option<Vec<u8>>,
         vertex_buffer: Vec<u8>,
         index_buffer: Vec<u16>,
     ) -> Result<Self> {
@@ -212,8 +215,13 @@ impl UgxGeom {
         // Bone bounds low array
         let bone_bounds = Self::read_bone_bounds(data, &mut cursor)?;
 
-        // Materials are in a separate chunk - leave empty for now
-        let materials = Vec::new();
+        // Read materials from BBinaryDataTree packed document (chunk 0x704)
+        // Gracefully handle parse failures - some UGX files may have invalid/empty material chunks
+        let materials = if let Some(ref mat_data) = material_data {
+            Self::read_materials(mat_data).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         Ok(Self {
             bounding_sphere,
@@ -529,6 +537,103 @@ impl UgxGeom {
         self.sections.iter().map(|s| s.num_tris as usize).sum()
     }
 
+    /// Read materials from BBinaryDataTree packed document (chunk 0x704).
+    ///
+    /// The root node's children are individual material nodes. Each material
+    /// has a "Name" attribute, map type children (Diffuse, Normal, etc.),
+    /// UVW velocity children, and a Properties child (BNameValueMap).
+    fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
+        let root = match bdt::PackedReader::read_le(data)? {
+            Some(root) => root,
+            None => return Ok(Vec::new()),
+        };
+
+        let mut materials = Vec::with_capacity(root.children.len());
+        for child in &root.children {
+            materials.push(Self::read_material(child));
+        }
+
+        Ok(materials)
+    }
+
+    /// Read a single material from a BBinaryDataTree node.
+    ///
+    /// Tree structure:
+    /// ```text
+    /// <Material>
+    ///   @Name="material_name"
+    ///   @Ver=4
+    ///   <NameValues>
+    ///     <SpecPower> text=Float(...)
+    ///     <Flags> text=UInt(...)
+    ///     <BlendType> text=UInt(...)
+    ///     <Opacity> text=UInt(0-255)
+    ///     ...
+    ///   <Maps>
+    ///     <diffuse>
+    ///       @UVWVel=Float(0.0)
+    ///       <Map> @Name="texture_path" @Channel=Int(0) @Flags=UInt(7)
+    ///     <normal>
+    ///       @UVWVel=Float(0.0)
+    ///     ...
+    /// ```
+    fn read_material(node: &bdt::Node) -> Material {
+        let mut mat = Material::default();
+
+        // Name from attribute
+        if let Some(attr) = node.get_attribute("Name") {
+            mat.name = attr.value.to_string_value();
+        }
+
+        // Read properties from "NameValues" child
+        if let Some(nv_node) = node.children.iter().find(|c| c.name == "NameValues") {
+            for prop in &nv_node.children {
+                match prop.name.as_str() {
+                    "SpecPower" => mat.spec_power = variant_to_f32(&prop.text),
+                    "Flags" => mat.flags = variant_to_u32(&prop.text),
+                    "BlendType" => mat.blend_type = variant_to_u8(&prop.text),
+                    "Opacity" => {
+                        // Opacity is stored as UInt 0-255, convert to 0.0-1.0
+                        let raw = variant_to_u32(&prop.text);
+                        mat.opacity = raw as f32 / 255.0;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Read maps from "Maps" child
+        if let Some(maps_node) = node.children.iter().find(|c| c.name == "Maps") {
+            for map_type in MapType::ALL {
+                if let Some(type_node) = maps_node.children.iter().find(|c| c.name == map_type.name()) {
+                    // UVWVel is an attribute on the map type node
+                    if let Some(uvw_attr) = type_node.get_attribute("UVWVel") {
+                        mat.uvw_velocity[map_type as usize][0] = variant_to_f32(&uvw_attr.value);
+                    }
+
+                    // Each <Map> child is a texture reference
+                    for map_child in &type_node.children {
+                        if map_child.name == "Map" {
+                            let mut map = Map::default();
+                            if let Some(a) = map_child.get_attribute("Name") {
+                                map.name = a.value.to_string_value();
+                            }
+                            if let Some(a) = map_child.get_attribute("Channel") {
+                                map.channel = variant_to_i16(&a.value);
+                            }
+                            if let Some(a) = map_child.get_attribute("Flags") {
+                                map.flags = variant_to_u8(&a.value);
+                            }
+                            mat.maps[map_type as usize].push(map);
+                        }
+                    }
+                }
+            }
+        }
+
+        mat
+    }
+
     /// Parse granny bones from granny chunk (0x703).
     ///
     /// Granny skeleton format (from Python reference):
@@ -606,6 +711,44 @@ impl UgxGeom {
         }
 
         Ok(bones)
+    }
+}
+
+// ============================================================================
+// Variant conversion helpers
+// ============================================================================
+
+fn variant_to_f32(v: &bdt::Variant) -> f32 {
+    match v {
+        bdt::Variant::Float(f) => *f,
+        bdt::Variant::Double(d) => *d as f32,
+        bdt::Variant::Int(i) => *i as f32,
+        bdt::Variant::UInt(u) => *u as f32,
+        _ => 0.0,
+    }
+}
+
+fn variant_to_u32(v: &bdt::Variant) -> u32 {
+    match v {
+        bdt::Variant::UInt(u) => *u,
+        bdt::Variant::Int(i) => *i as u32,
+        _ => 0,
+    }
+}
+
+fn variant_to_i16(v: &bdt::Variant) -> i16 {
+    match v {
+        bdt::Variant::Int(i) => *i as i16,
+        bdt::Variant::UInt(u) => *u as i16,
+        _ => 0,
+    }
+}
+
+fn variant_to_u8(v: &bdt::Variant) -> u8 {
+    match v {
+        bdt::Variant::UInt(u) => *u as u8,
+        bdt::Variant::Int(i) => *i as u8,
+        _ => 0,
     }
 }
 
@@ -749,6 +892,91 @@ mod tests {
                     }
                 }
                 offset += 2;
+            }
+        }
+    }
+
+    fn dump_node(node: &bdt::Node, indent: usize) {
+        let pad = "  ".repeat(indent);
+        let text_str = match &node.text {
+            bdt::Variant::Null => String::new(),
+            other => format!(" text={:?}", other),
+        };
+        eprintln!("{}<{}>{}", pad, node.name, text_str);
+        for attr in &node.attributes {
+            eprintln!("{}  @{}={:?}", pad, attr.name, attr.value);
+        }
+        for child in &node.children {
+            dump_node(child, indent + 1);
+        }
+    }
+
+    #[test]
+    fn test_material_parsing() {
+        let paths = [
+            ("foxcannon turret", "../../foxcannon01/mesh_turret_0.ugx"),
+            ("foxcannon barrel", "../../foxcannon01/mesh_barrel_0.ugx"),
+            ("foxcannon chassis", "../../foxcannon01/mesh_chassis_front_0.ugx"),
+            ("foxcannon main", "../../foxcannon01/mesh_foxcannon01.ugx"),
+            ("banshee damage", "../../test_ugx/art/covenant/air/banshee_01/banshee_damage_01.ugx"),
+            ("banshee upgrade", "../../test_ugx/art/covenant/air/banshee_01/upgrade_01.ugx"),
+        ];
+
+        for (label, path) in paths {
+            let data = match std::fs::read(path) {
+                Ok(d) => d,
+                Err(_) => { eprintln!("  {} - file not found, skipping", label); continue; }
+            };
+
+            // Check if 0x704 chunk exists
+            let mut cursor = Cursor::new(&data);
+            let mut ecf = ecf::EcfReader::new(&mut cursor).unwrap();
+            let has_mat_chunk = ecf.read_chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).is_ok();
+
+            // Try direct BDT parse on the material chunk
+            if let Ok(mat_data) = ecf.read_chunk_data_by_id(ECF_MATERIAL_CHUNK_ID) {
+                eprintln!("\n=== {} ===", label);
+                eprintln!("  Material chunk (0x704): {} bytes", mat_data.len());
+                // Hexdump first 64 bytes
+                let dump = mat_data.len().min(64);
+                for row in mat_data[..dump].chunks(16) {
+                    let hex: Vec<String> = row.iter().map(|b| format!("{:02X}", b)).collect();
+                    eprintln!("    {}", hex.join(" "));
+                }
+
+                match bdt::PackedReader::read_le(&mat_data) {
+                    Ok(Some(root)) => {
+                        eprintln!("  BDT root: '{}' children={}", root.name, root.children.len());
+                        // Dump full tree for first material
+                        if let Some(mat_node) = root.children.first() {
+                            dump_node(mat_node, 2);
+                        }
+                    }
+                    Ok(None) => eprintln!("  BDT parse: None"),
+                    Err(e) => eprintln!("  BDT parse FAILED: {:?}", e),
+                }
+            } else {
+                eprintln!("\n=== {} === NO 0x704 chunk", label);
+            }
+
+            // Now test through UgxGeom::read
+            let geom = UgxGeom::read(&data).unwrap();
+            eprintln!("  UgxGeom materials: {}", geom.materials.len());
+            for (i, mat) in geom.materials.iter().enumerate() {
+                eprintln!("    [{}] '{}' opacity={:.3} spec_power={} blend_type={} flags={}",
+                    i, mat.name, mat.opacity, mat.spec_power, mat.blend_type, mat.flags);
+                for (mi, maps) in mat.maps.iter().enumerate() {
+                    if !maps.is_empty() {
+                        let type_name = MapType::ALL[mi].name();
+                        for map in maps {
+                            eprintln!("        {}: '{}' ch={} fl={}",
+                                type_name, map.name, map.channel, map.flags);
+                        }
+                    }
+                }
+            }
+            if !has_mat_chunk {
+                eprintln!("  (no 0x704 chunk - materials empty as expected)");
             }
         }
     }

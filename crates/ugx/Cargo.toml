@@ -8,6 +8,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+bdt = { workspace = true }
 ecf = { workspace = true }
 byteorder = { workspace = true }
 thiserror = { workspace = true }

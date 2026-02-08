@@ -9,136 +9,110 @@ use crate::univert_packer::UnivertPacker;
 /// UGX file version magic.
 pub const UGX_VERSION: u32 = 0xECDA1015;
 
-/// Maximum string length for names.
-#[allow(dead_code)]
-const MAX_STRING_LEN: usize = 64;
-
-/// Map types for materials.
+/// Unigeom map types (13 types, matching Ensemble's eMapType enum).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MapType {
     Diffuse = 0,
-    Specular = 1,
-    Bump = 2,
-    Env = 3,
-    Self_ = 4,
+    Normal = 1,
+    Gloss = 2,
+    Opacity = 3,
+    XForm = 4,
+    Emissive = 5,
+    AO = 6,
+    Env = 7,
+    EnvMask = 8,
+    EmXForm = 9,
+    Distortion = 10,
+    Highlight = 11,
+    Modulate = 12,
 }
 
 impl MapType {
-    pub const NUM_TYPES: usize = 5;
+    pub const NUM_TYPES: usize = 13;
+
+    pub const ALL: [MapType; 13] = [
+        MapType::Diffuse,
+        MapType::Normal,
+        MapType::Gloss,
+        MapType::Opacity,
+        MapType::XForm,
+        MapType::Emissive,
+        MapType::AO,
+        MapType::Env,
+        MapType::EnvMask,
+        MapType::EmXForm,
+        MapType::Distortion,
+        MapType::Highlight,
+        MapType::Modulate,
+    ];
+
+    /// Get the node name used in the BBinaryDataTree document.
+    /// Names are lowercase to match the packed BDT format in UGX material chunks.
+    pub fn name(&self) -> &'static str {
+        match self {
+            MapType::Diffuse => "diffuse",
+            MapType::Normal => "normal",
+            MapType::Gloss => "gloss",
+            MapType::Opacity => "opacity",
+            MapType::XForm => "xform",
+            MapType::Emissive => "emissive",
+            MapType::AO => "ao",
+            MapType::Env => "env",
+            MapType::EnvMask => "envmask",
+            MapType::EmXForm => "emxform",
+            MapType::Distortion => "distortion",
+            MapType::Highlight => "highlight",
+            MapType::Modulate => "modulate",
+        }
+    }
 }
 
-/// A texture map reference.
+/// A texture map reference (from Unigeom::BMap).
 #[derive(Debug, Clone, Default)]
 pub struct Map {
     /// Texture filename.
     pub name: String,
     /// UV channel index.
-    pub channel: i32,
+    pub channel: i16,
     /// Flags.
-    pub flags: i32,
+    pub flags: u8,
 }
 
-impl Map {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
-        let name = read_string64(reader)?;
-        let channel = reader.read_i32::<LittleEndian>()?;
-        let flags = reader.read_i32::<LittleEndian>()?;
-        Ok(Self { name, channel, flags })
-    }
-}
-
-/// Container for maps of a single type (up to 4 per type).
-#[derive(Debug, Clone, Default)]
-pub struct MapContainer {
-    pub maps: Vec<Map>,
-}
-
-impl MapContainer {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
-        let num_maps = reader.read_i32::<LittleEndian>()? as usize;
-        let mut maps = Vec::with_capacity(num_maps);
-        for _ in 0..num_maps {
-            maps.push(Map::read(reader)?);
-        }
-        Ok(Self { maps })
-    }
-}
-
-/// Material definition.
-#[derive(Debug, Clone, Default)]
+/// Material definition (from BBinaryDataTree packed document).
+///
+/// Materials are stored in UGX chunk 0x704 as a BBinaryDataTree document.
+/// Each material has 13 map type slots, UVW velocities per map type,
+/// and properties from a BNameValueMap (SpecPower, Flags, BlendType, Opacity).
+#[derive(Debug, Clone)]
 pub struct Material {
     /// Material name.
     pub name: String,
-    /// Texture maps by type (diffuse, specular, bump, env, self).
-    pub maps: [MapContainer; MapType::NUM_TYPES],
-    /// Material flags.
-    pub flags: i32,
-    /// Bump intensity.
-    pub bumpiness: f32,
-    /// Is this a skin material?
-    pub skin: bool,
-    /// Specular level.
-    pub spec_level: f32,
-    /// Specular power/shininess.
+    /// Texture maps indexed by MapType (13 slots, each can have multiple maps).
+    pub maps: [Vec<Map>; MapType::NUM_TYPES],
+    /// UVW velocity per map type.
+    pub uvw_velocity: [[f32; 3]; MapType::NUM_TYPES],
+    /// Specular power (default: 10.0).
     pub spec_power: f32,
-    /// Emissive intensity.
-    pub emissive: f32,
-    /// Diffuse color [r, g, b].
-    pub diff_color: [f32; 3],
-    /// Specular color [r, g, b].
-    pub spec_color: [f32; 3],
-    /// Self-illumination intensity.
-    pub self_intensity: f32,
-    /// Environment map intensity.
-    pub env_intensity: f32,
+    /// Material flags (default: 0).
+    pub flags: u32,
+    /// Blend type (default: 0).
+    pub blend_type: u8,
+    /// Opacity (default: 1.0).
+    pub opacity: f32,
 }
 
-impl Material {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
-        let name = read_string64(reader)?;
-
-        let mut maps: [MapContainer; MapType::NUM_TYPES] = Default::default();
-        for map in &mut maps {
-            *map = MapContainer::read(reader)?;
+impl Default for Material {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            maps: Default::default(),
+            uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
+            spec_power: 10.0,
+            flags: 0,
+            blend_type: 0,
+            opacity: 1.0,
         }
-
-        let flags = reader.read_i32::<LittleEndian>()?;
-        let bumpiness = reader.read_f32::<LittleEndian>()?;
-        let skin = reader.read_u8()? != 0;
-        let spec_level = reader.read_f32::<LittleEndian>()?;
-        let spec_power = reader.read_f32::<LittleEndian>()?;
-        let emissive = reader.read_f32::<LittleEndian>()?;
-
-        let diff_color = [
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-        ];
-
-        let spec_color = [
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-        ];
-
-        let self_intensity = reader.read_f32::<LittleEndian>()?;
-        let env_intensity = reader.read_f32::<LittleEndian>()?;
-
-        Ok(Self {
-            name,
-            maps,
-            flags,
-            bumpiness,
-            skin,
-            spec_level,
-            spec_power,
-            emissive,
-            diff_color,
-            spec_color,
-            self_intensity,
-            env_intensity,
-        })
     }
 }
 
@@ -515,20 +489,3 @@ impl Keyframe {
     }
 }
 
-/// Read a fixed-size string (64 bytes max, null-terminated).
-fn read_string64<R: Read>(reader: &mut R) -> Result<String> {
-    let len = reader.read_u32::<LittleEndian>()? as usize;
-    if len == 0 {
-        return Ok(String::new());
-    }
-
-    let mut bytes = vec![0u8; len];
-    reader.read_exact(&mut bytes)?;
-
-    // Remove null terminator if present
-    while bytes.last() == Some(&0) {
-        bytes.pop();
-    }
-
-    Ok(String::from_utf8(bytes)?)
-}

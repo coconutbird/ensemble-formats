@@ -2,6 +2,15 @@
 //!
 //! Reads the packed binary tree format used by Ensemble Studios games.
 //! Supports both little-endian (PC/DE) and big-endian (Xbox 360) formats.
+//!
+//! Two serialization formats are supported:
+//!
+//! 1. **Compact format** (BPackedHeader): Used by BBinaryDataTree directly (material chunks,
+//!    etc.). Identified by signature byte 0x3E (LE) or 0xE3 (BE). Uses 8-byte BPackedNode
+//!    and 8-byte BPackedNameValue structs with section-based layout.
+//!
+//! 2. **XMX variant format**: Used by XMB files after the 4-byte XMB signature. Uses 48-byte
+//!    nodes with 64-bit BPackedArray pointers and the XMX variant type encoding.
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use std::io::Cursor;
@@ -9,9 +18,13 @@ use std::io::Cursor;
 use crate::error::{Error, Result};
 use crate::types::{Attribute, Node};
 use crate::variant::{
-    unpack_float24, unpack_fract24, unpack_int24, Variant,
-    UNSIGNED_FLAG,
+    unpack_float24, unpack_fract24, unpack_int24, Variant, OFFSET_FLAG, UNSIGNED_FLAG,
 };
+
+/// BPackedHeader signature for little-endian data.
+const PACKED_HEADER_SIG_LE: u8 = 0x3E;
+/// BPackedHeader signature for big-endian data.
+const PACKED_HEADER_SIG_BE: u8 = 0xE3;
 
 /// Packed document reader for BBinaryDataTree format.
 pub struct PackedReader;
@@ -19,9 +32,9 @@ pub struct PackedReader;
 impl PackedReader {
     /// Parse little-endian packed data (PC/Definitive Edition format).
     ///
-    /// The data should start at the header (after any container-specific signature).
-    /// Expected layout: pad(4) + nodes_bpa(16) + variant_bpa(16) = 36 bytes header,
-    /// followed by node data, attributes, children, and variant data.
+    /// Auto-detects the format:
+    /// - If data starts with 0x3E: compact BPackedHeader format
+    /// - Otherwise: XMX variant format (pad + BPackedArrays)
     pub fn read_le(data: &[u8]) -> Result<Option<Node>> {
         Self::read_le_at(data, 0)
     }
@@ -34,6 +47,11 @@ impl PackedReader {
     /// This is useful when the packed data is preceded by a container-specific
     /// prefix (e.g., XMB's 4-byte signature).
     pub fn read_le_at(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
+        // Auto-detect format based on signature byte
+        if header_offset < data.len() && data[header_offset] == PACKED_HEADER_SIG_LE {
+            return read_compact_le(data, header_offset);
+        }
+
         if data.len() < header_offset + 36 {
             return Ok(None);
         }
@@ -68,13 +86,19 @@ impl PackedReader {
 
         // Read nodes (48 bytes each)
         const NODE_SIZE: usize = 48;
+
+        // Bounds check before allocating
+        let expected_end = nodes_ptr
+            .checked_add((nodes_size as usize).checked_mul(NODE_SIZE).ok_or(Error::UnexpectedEof)?)
+            .ok_or(Error::UnexpectedEof)?;
+        if expected_end > data.len() {
+            return Err(Error::UnexpectedEof);
+        }
+
         let mut packed_nodes = Vec::with_capacity(nodes_size as usize);
 
         for i in 0..nodes_size as usize {
             let node_offset = nodes_ptr + i * NODE_SIZE;
-            if node_offset + NODE_SIZE > data.len() {
-                return Err(Error::UnexpectedEof);
-            }
 
             cursor.set_position(node_offset as u64);
 
@@ -147,6 +171,11 @@ impl PackedReader {
     /// The header starts at `header_offset` within `data`. All internal pointers
     /// are absolute offsets from `data[0]`.
     pub fn read_be_at(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
+        // Auto-detect compact format
+        if header_offset < data.len() && data[header_offset] == PACKED_HEADER_SIG_BE {
+            return read_compact_be(data, header_offset);
+        }
+
         if data.len() < header_offset + 16 {
             return Ok(None);
         }
@@ -174,13 +203,19 @@ impl PackedReader {
 
         // Read nodes (28 bytes each)
         const NODE_SIZE: usize = 28;
+
+        // Bounds check before allocating
+        let expected_end = nodes_ptr
+            .checked_add((nodes_size as usize).checked_mul(NODE_SIZE).ok_or(Error::UnexpectedEof)?)
+            .ok_or(Error::UnexpectedEof)?;
+        if expected_end > data.len() {
+            return Err(Error::UnexpectedEof);
+        }
+
         let mut packed_nodes = Vec::with_capacity(nodes_size as usize);
 
         for i in 0..nodes_size as usize {
             let node_offset = nodes_ptr + i * NODE_SIZE;
-            if node_offset + NODE_SIZE > data.len() {
-                return Err(Error::UnexpectedEof);
-            }
 
             cursor.set_position(node_offset as u64);
 
@@ -613,4 +648,542 @@ fn decode_direct_string(data_bits: u32) -> Result<String> {
         bytes.push(b2);
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+// ============================================================================
+// Compact BPackedHeader format reader
+// ============================================================================
+//
+// This is the native BBinaryDataTree serialization format, used by material
+// chunks and other non-XMB packed data. The format uses:
+// - BPackedHeader (28 bytes): signature, CRC, section sizes
+// - BPackedNode (8 bytes): compact node with 16-bit indices
+// - BPackedNameValue (8 bytes): name/value pair with type flags
+//
+// Section layout after header:
+// [User sections (12 bytes each)]
+// [Node section]
+// [NameValue section]
+// [NameData section (null-terminated strings)]
+// [Padding to 16-byte boundary]
+// [ValueData section (16-byte aligned)]
+
+/// BPackedNameValue flag constants (from binaryDataTree.h).
+mod nv_flags {
+    pub const TYPE_IS_UNSIGNED: u16 = 0x0001;
+    pub const DIRECT_ENCODING: u16 = 0x0002;
+    pub const TYPE_SHIFT: u16 = 2;
+    pub const TYPE_MASK: u16 = 0x001C; // 3 bits
+    pub const TYPE_SIZE_LOG2_SHIFT: u16 = 5;
+    pub const TYPE_SIZE_LOG2_MASK: u16 = 0x00E0; // 3 bits
+    #[allow(dead_code)]
+    pub const LAST_NAME_VALUE: u16 = 0x0100;
+    pub const SIZE_SHIFT: u16 = 9;
+    pub const SIZE_MASK: u16 = 0xFE00; // 7 bits
+}
+
+/// Type class enum (from binaryDataTree.h).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+enum TypeClass {
+    Null = 0,
+    Bool = 1,
+    Int = 2,
+    Float = 3,
+    String = 4,
+}
+
+impl TypeClass {
+    fn from_flags(flags: u16) -> Self {
+        match (flags & nv_flags::TYPE_MASK) >> nv_flags::TYPE_SHIFT {
+            0 => TypeClass::Null,
+            1 => TypeClass::Bool,
+            2 => TypeClass::Int,
+            3 => TypeClass::Float,
+            4 => TypeClass::String,
+            _ => TypeClass::Null,
+        }
+    }
+}
+
+/// Compact packed node (8 bytes).
+struct CompactNode {
+    parent_index: u16,
+    child_node_index: u16,
+    name_value_ofs: u16,
+    num_name_values: u8,
+    num_children: u8,
+}
+
+/// Compact packed name-value (8 bytes).
+struct CompactNameValue {
+    value: u32,
+    name_ofs: u16,
+    flags: u16,
+}
+
+/// Read compact LE format (BPackedHeader with 0x3E signature).
+fn read_compact_le(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
+    const HEADER_SIZE: usize = 28;
+
+    if data.len() < header_offset + HEADER_SIZE {
+        return Err(Error::UnexpectedEof);
+    }
+
+    let base = header_offset;
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(base as u64);
+
+    // Parse BPackedHeader
+    let sig = cursor.read_u8()?;
+    if sig != PACKED_HEADER_SIG_LE {
+        return Err(Error::UnexpectedEof);
+    }
+    let _header_dwords = cursor.read_u8()?;
+    let _header_crc8 = cursor.read_u8()?;
+    let num_user_sections = cursor.read_u8()? as usize;
+    let _data_crc32 = cursor.read_u32::<LittleEndian>()?;
+    let _data_size = cursor.read_u32::<LittleEndian>()?;
+    let node_section_size = cursor.read_u32::<LittleEndian>()? as usize;
+    let nv_section_size = cursor.read_u32::<LittleEndian>()? as usize;
+    let name_data_size = cursor.read_u32::<LittleEndian>()? as usize;
+    let value_data_size = cursor.read_u32::<LittleEndian>()? as usize;
+
+    // Calculate section offsets
+    let user_sections_offset = base + HEADER_SIZE;
+    let node_offset = user_sections_offset + num_user_sections * 12;
+    let nv_offset = node_offset + node_section_size;
+    let name_data_offset = nv_offset + nv_section_size;
+    let value_data_offset_unaligned = name_data_offset + name_data_size;
+    let value_data_offset = if value_data_size > 0 {
+        (value_data_offset_unaligned + 15) & !15
+    } else {
+        value_data_offset_unaligned
+    };
+
+    // Bounds check
+    if value_data_offset + value_data_size > data.len() {
+        return Err(Error::UnexpectedEof);
+    }
+
+    let node_count = node_section_size / 8;
+    let nv_count = nv_section_size / 8;
+
+    if node_count == 0 {
+        return Ok(None);
+    }
+
+    // Read packed nodes
+    let mut packed_nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        let off = node_offset + i * 8;
+        packed_nodes.push(CompactNode {
+            parent_index: u16::from_le_bytes([data[off], data[off + 1]]),
+            child_node_index: u16::from_le_bytes([data[off + 2], data[off + 3]]),
+            name_value_ofs: u16::from_le_bytes([data[off + 4], data[off + 5]]),
+            num_name_values: data[off + 6],
+            num_children: data[off + 7],
+        });
+    }
+
+    // Read packed name-values
+    let mut packed_nvs = Vec::with_capacity(nv_count);
+    for i in 0..nv_count {
+        let off = nv_offset + i * 8;
+        packed_nvs.push(CompactNameValue {
+            value: u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]),
+            name_ofs: u16::from_le_bytes([data[off + 4], data[off + 5]]),
+            flags: u16::from_le_bytes([data[off + 6], data[off + 7]]),
+        });
+    }
+
+    // Section slices
+    let name_data = &data[name_data_offset..name_data_offset + name_data_size];
+    let value_data = &data[value_data_offset..value_data_offset + value_data_size];
+
+    // Build tree
+    build_compact_tree(&packed_nodes, &packed_nvs, name_data, value_data, false)
+}
+
+/// Read compact BE format (BPackedHeader with 0xE3 signature).
+fn read_compact_be(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
+    const HEADER_SIZE: usize = 28;
+
+    if data.len() < header_offset + HEADER_SIZE {
+        return Err(Error::UnexpectedEof);
+    }
+
+    let base = header_offset;
+    let mut cursor = Cursor::new(data);
+    cursor.set_position(base as u64);
+
+    let sig = cursor.read_u8()?;
+    if sig != PACKED_HEADER_SIG_BE {
+        return Err(Error::UnexpectedEof);
+    }
+    let _header_dwords = cursor.read_u8()?;
+    let _header_crc8 = cursor.read_u8()?;
+    let num_user_sections = cursor.read_u8()? as usize;
+    let _data_crc32 = cursor.read_u32::<BigEndian>()?;
+    let _data_size = cursor.read_u32::<BigEndian>()?;
+    let node_section_size = cursor.read_u32::<BigEndian>()? as usize;
+    let nv_section_size = cursor.read_u32::<BigEndian>()? as usize;
+    let name_data_size = cursor.read_u32::<BigEndian>()? as usize;
+    let value_data_size = cursor.read_u32::<BigEndian>()? as usize;
+
+    let user_sections_offset = base + HEADER_SIZE;
+    let node_offset = user_sections_offset + num_user_sections * 12;
+    let nv_offset = node_offset + node_section_size;
+    let name_data_offset = nv_offset + nv_section_size;
+    let value_data_offset_unaligned = name_data_offset + name_data_size;
+    let value_data_offset = if value_data_size > 0 {
+        (value_data_offset_unaligned + 15) & !15
+    } else {
+        value_data_offset_unaligned
+    };
+
+    if value_data_offset + value_data_size > data.len() {
+        return Err(Error::UnexpectedEof);
+    }
+
+    let node_count = node_section_size / 8;
+    let nv_count = nv_section_size / 8;
+
+    if node_count == 0 {
+        return Ok(None);
+    }
+
+    // Read packed nodes (big-endian)
+    let mut packed_nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        let off = node_offset + i * 8;
+        packed_nodes.push(CompactNode {
+            parent_index: u16::from_be_bytes([data[off], data[off + 1]]),
+            child_node_index: u16::from_be_bytes([data[off + 2], data[off + 3]]),
+            name_value_ofs: u16::from_be_bytes([data[off + 4], data[off + 5]]),
+            num_name_values: data[off + 6],
+            num_children: data[off + 7],
+        });
+    }
+
+    // Read packed name-values (big-endian)
+    let mut packed_nvs = Vec::with_capacity(nv_count);
+    for i in 0..nv_count {
+        let off = nv_offset + i * 8;
+        packed_nvs.push(CompactNameValue {
+            value: u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]),
+            name_ofs: u16::from_be_bytes([data[off + 4], data[off + 5]]),
+            flags: u16::from_be_bytes([data[off + 6], data[off + 7]]),
+        });
+    }
+
+    let name_data = &data[name_data_offset..name_data_offset + name_data_size];
+    let value_data = &data[value_data_offset..value_data_offset + value_data_size];
+
+    build_compact_tree(&packed_nodes, &packed_nvs, name_data, value_data, true)
+}
+
+/// Build tree from compact packed data.
+fn build_compact_tree(
+    nodes: &[CompactNode],
+    nvs: &[CompactNameValue],
+    name_data: &[u8],
+    value_data: &[u8],
+    big_endian: bool,
+) -> Result<Option<Node>> {
+    if nodes.is_empty() {
+        return Ok(None);
+    }
+
+    // Build Node structs
+    let mut tree_nodes: Vec<Node> = Vec::with_capacity(nodes.len());
+
+    for pn in nodes {
+        let nv_start = pn.name_value_ofs as usize;
+        let mut num_nv = pn.num_name_values as usize;
+
+        // Handle extended count (0xFF means count by scanning for cLastNameValueMask)
+        if pn.num_name_values == 0xFF {
+            num_nv = 0;
+            let scan_start = nv_start + 255;
+            if scan_start < nvs.len() {
+                let mut idx = scan_start;
+                while idx < nvs.len() {
+                    num_nv += 1;
+                    if nvs[idx].flags & nv_flags::LAST_NAME_VALUE != 0 {
+                        break;
+                    }
+                    idx += 1;
+                }
+                num_nv += 255;
+            } else {
+                num_nv = 255;
+            }
+        }
+
+        // First name-value is the node name + text
+        let (name, text) = if num_nv > 0 && nv_start < nvs.len() {
+            let nv = &nvs[nv_start];
+            let name = read_name_data_string(name_data, nv.name_ofs as usize);
+            let text = decode_compact_value(nv, value_data, big_endian);
+            (name, text)
+        } else {
+            (String::new(), Variant::Null)
+        };
+
+        // Remaining name-values are attributes
+        let mut attributes = Vec::new();
+        if num_nv > 1 {
+            let attr_start = nv_start + 1;
+            let attr_end = (nv_start + num_nv).min(nvs.len());
+            for nv in &nvs[attr_start..attr_end] {
+                let attr_name = read_name_data_string(name_data, nv.name_ofs as usize);
+                let attr_value = decode_compact_value(nv, value_data, big_endian);
+                attributes.push(Attribute {
+                    name: attr_name,
+                    value: attr_value,
+                });
+            }
+        }
+
+        tree_nodes.push(Node {
+            name,
+            text,
+            attributes,
+            children: Vec::new(),
+        });
+    }
+
+    // Build parent-child relationships in reverse order
+    for i in (0..nodes.len()).rev() {
+        let pn = &nodes[i];
+        let mut num_children = pn.num_children as usize;
+
+        // Handle extended child count (0xFF)
+        if pn.num_children == 0xFF {
+            num_children = 0;
+            let first_child = pn.child_node_index as usize;
+            let scan_start = first_child + 255;
+            if scan_start < nodes.len() {
+                let mut idx = scan_start;
+                while idx < nodes.len() && nodes[idx].parent_index as usize == i {
+                    num_children += 1;
+                    idx += 1;
+                }
+                num_children += 255;
+            } else {
+                num_children = 255;
+            }
+        }
+
+        let first_child = pn.child_node_index as usize;
+        for ci in 0..num_children {
+            let child_idx = first_child + ci;
+            if child_idx < tree_nodes.len() {
+                let child = tree_nodes[child_idx].clone();
+                tree_nodes[i].children.push(child);
+            }
+        }
+    }
+
+    // Find root (parent == 0xFFFF)
+    for (i, pn) in nodes.iter().enumerate() {
+        if pn.parent_index == 0xFFFF {
+            return Ok(Some(tree_nodes[i].clone()));
+        }
+    }
+
+    Ok(Some(tree_nodes[0].clone()))
+}
+
+/// Read a null-terminated string from the name data section.
+fn read_name_data_string(name_data: &[u8], offset: usize) -> String {
+    if offset >= name_data.len() {
+        return String::new();
+    }
+    let end = name_data[offset..]
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(name_data.len() - offset);
+    String::from_utf8_lossy(&name_data[offset..offset + end]).into_owned()
+}
+
+/// Decode a compact BPackedNameValue to a Variant.
+fn decode_compact_value(nv: &CompactNameValue, value_data: &[u8], big_endian: bool) -> Variant {
+    let flags = nv.flags;
+    let type_class = TypeClass::from_flags(flags);
+    let is_direct = (flags & nv_flags::DIRECT_ENCODING) != 0;
+    let is_unsigned = (flags & nv_flags::TYPE_IS_UNSIGNED) != 0;
+    let type_size_log2 = ((flags & nv_flags::TYPE_SIZE_LOG2_MASK) >> nv_flags::TYPE_SIZE_LOG2_SHIFT) as usize;
+    let data_size = ((flags & nv_flags::SIZE_MASK) >> nv_flags::SIZE_SHIFT) as usize;
+
+    // Get pointer to value bytes
+    let value_bytes: &[u8] = if is_direct {
+        // Value is stored directly in the mValue field (up to 4 bytes)
+        // We need to create a temporary slice from nv.value
+        // Note: this is a bit awkward since we need a reference to the bytes
+        &[]
+    } else {
+        // Value is at offset nv.value in value_data
+        let offset = nv.value as usize;
+        if offset < value_data.len() {
+            &value_data[offset..]
+        } else {
+            &[]
+        }
+    };
+
+    match type_class {
+        TypeClass::Null => Variant::Null,
+        TypeClass::Bool => {
+            if is_direct {
+                Variant::Bool(nv.value != 0)
+            } else if !value_bytes.is_empty() {
+                Variant::Bool(value_bytes[0] != 0)
+            } else {
+                Variant::Bool(false)
+            }
+        }
+        TypeClass::Int => {
+            if is_direct {
+                // Direct int: stored in nv.value (up to 4 bytes)
+                if is_unsigned {
+                    Variant::UInt(nv.value)
+                } else {
+                    // Sign extend based on type size
+                    let type_size = 1usize << type_size_log2;
+                    let v = match type_size {
+                        1 => (nv.value as u8) as i8 as i32,
+                        2 => (nv.value as u16) as i16 as i32,
+                        _ => nv.value as i32,
+                    };
+                    Variant::Int(v)
+                }
+            } else if value_bytes.len() >= (1 << type_size_log2) {
+                let type_size = 1usize << type_size_log2;
+                if is_unsigned {
+                    let v = match type_size {
+                        1 => value_bytes[0] as u32,
+                        2 => if big_endian {
+                            u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as u32
+                        } else {
+                            u16::from_le_bytes([value_bytes[0], value_bytes[1]]) as u32
+                        },
+                        4 => if big_endian {
+                            u32::from_be_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                        } else {
+                            u32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                        },
+                        _ => nv.value,
+                    };
+                    Variant::UInt(v)
+                } else {
+                    let v = match type_size {
+                        1 => value_bytes[0] as i8 as i32,
+                        2 => if big_endian {
+                            i16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i32
+                        } else {
+                            i16::from_le_bytes([value_bytes[0], value_bytes[1]]) as i32
+                        },
+                        4 => if big_endian {
+                            i32::from_be_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                        } else {
+                            i32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                        },
+                        _ => nv.value as i32,
+                    };
+                    Variant::Int(v)
+                }
+            } else {
+                Variant::Int(0)
+            }
+        }
+        TypeClass::Float => {
+            if is_direct {
+                Variant::Float(f32::from_bits(nv.value))
+            } else if type_size_log2 == 3 && value_bytes.len() >= 8 {
+                // Double
+                let v = if big_endian {
+                    f64::from_be_bytes([
+                        value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3],
+                        value_bytes[4], value_bytes[5], value_bytes[6], value_bytes[7],
+                    ])
+                } else {
+                    f64::from_le_bytes([
+                        value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3],
+                        value_bytes[4], value_bytes[5], value_bytes[6], value_bytes[7],
+                    ])
+                };
+                Variant::Double(v)
+            } else if value_bytes.len() >= 4 {
+                let v = if big_endian {
+                    f32::from_be_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                } else {
+                    f32::from_le_bytes([value_bytes[0], value_bytes[1], value_bytes[2], value_bytes[3]])
+                };
+                Variant::Float(v)
+            } else {
+                Variant::Float(0.0)
+            }
+        }
+        TypeClass::String => {
+            if is_direct {
+                // Direct string: up to 4 bytes in nv.value
+                let bytes = nv.value.to_le_bytes();
+                let end = bytes.iter().position(|&b| b == 0).unwrap_or(4);
+                Variant::String(String::from_utf8_lossy(&bytes[..end]).into_owned())
+            } else {
+                // String in value data at offset nv.value
+                let offset = nv.value as usize;
+                // Determine actual size (may be in size field or have sentinel)
+                let mut actual_size = data_size;
+                if actual_size == 127 && offset >= 4 {
+                    // Extended size: stored as u32 at offset - 4
+                    actual_size = if big_endian {
+                        u32::from_be_bytes([
+                            value_data[offset - 4], value_data[offset - 3],
+                            value_data[offset - 2], value_data[offset - 1],
+                        ]) as usize
+                    } else {
+                        u32::from_le_bytes([
+                            value_data[offset - 4], value_data[offset - 3],
+                            value_data[offset - 2], value_data[offset - 1],
+                        ]) as usize
+                    };
+                }
+
+                if type_size_log2 > 0 {
+                    // Wide string (UTF-16)
+                    let byte_count = actual_size;
+                    if offset + byte_count <= value_data.len() {
+                        let char_count = byte_count / 2;
+                        let mut chars = Vec::with_capacity(char_count);
+                        for i in 0..char_count {
+                            let c = if big_endian {
+                                u16::from_be_bytes([value_data[offset + i * 2], value_data[offset + i * 2 + 1]])
+                            } else {
+                                u16::from_le_bytes([value_data[offset + i * 2], value_data[offset + i * 2 + 1]])
+                            };
+                            if c == 0 { break; }
+                            chars.push(c);
+                        }
+                        Variant::String(String::from_utf16_lossy(&chars))
+                    } else {
+                        Variant::String(String::new())
+                    }
+                } else {
+                    // Narrow string (ASCII/UTF-8)
+                    if offset < value_data.len() {
+                        let end = value_data[offset..]
+                            .iter()
+                            .position(|&b| b == 0)
+                            .unwrap_or(actual_size.min(value_data.len() - offset));
+                        Variant::String(String::from_utf8_lossy(&value_data[offset..offset + end]).into_owned())
+                    } else {
+                        Variant::String(String::new())
+                    }
+                }
+            }
+        }
+    }
 }

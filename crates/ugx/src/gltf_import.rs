@@ -526,9 +526,8 @@ fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
 
             Material {
                 name: mat.name.clone().unwrap_or_default(),
-                diff_color: [base_color[0], base_color[1], base_color[2]],
                 spec_power: (1.0 - roughness) * 100.0,
-                spec_level: 0.0,
+                opacity: base_color[3],
                 ..Default::default()
             }
         })

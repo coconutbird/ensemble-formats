@@ -13,6 +13,10 @@ pub enum Error {
     #[error("ECF error: {0}")]
     Ecf(#[from] ecf::Error),
 
+    /// BDT error.
+    #[error("BDT error: {0}")]
+    Bdt(#[from] bdt::Error),
+
     /// Invalid UGX version.
     #[error("Invalid UGX version: expected 0x{expected:08X}, got 0x{actual:08X}")]
     InvalidVersion { expected: u32, actual: u32 },
