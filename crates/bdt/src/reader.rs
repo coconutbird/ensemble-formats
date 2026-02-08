@@ -303,6 +303,7 @@ fn build_tree(
     }
 
     let mut nodes: Vec<Node> = Vec::with_capacity(packed_nodes.len());
+    let mut child_indices: Vec<Vec<usize>> = Vec::with_capacity(packed_nodes.len());
 
     for pn in packed_nodes {
         let name = decode_variant_string(pn.name_variant, variant_data)?;
@@ -318,6 +319,7 @@ fn build_tree(
             });
         }
 
+        child_indices.push(pn.children.iter().map(|&c| c as usize).collect());
         nodes.push(Node {
             name,
             text,
@@ -326,11 +328,29 @@ fn build_tree(
         });
     }
 
-    // Build parent-child relationships in REVERSE order so that leaf nodes
-    // are fully built before their parents clone them
-    for (i, pn) in packed_nodes.iter().enumerate().rev() {
-        let child_indices: Vec<usize> = pn.children.iter().map(|&c| c as usize).collect();
-        for &child_idx in &child_indices {
+    // Find root (node with parent 0xFFFFFFFF or parent pointing to itself)
+    let root = packed_nodes
+        .iter()
+        .enumerate()
+        .find(|(i, pn)| pn.parent_node == 0xFFFFFFFF || pn.parent_node as usize == *i)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    Ok(assemble_tree(nodes, &child_indices, root))
+}
+
+/// Assemble a tree from flat nodes by cloning children into parents.
+///
+/// `child_indices[i]` lists the child node indices for node `i`.
+/// Children are attached in reverse order so leaf nodes are fully built
+/// before their parents clone them.
+fn assemble_tree(mut nodes: Vec<Node>, child_indices: &[Vec<usize>], root: usize) -> Option<Node> {
+    if nodes.is_empty() {
+        return None;
+    }
+
+    for i in (0..nodes.len()).rev() {
+        for &child_idx in &child_indices[i] {
             if child_idx < nodes.len() {
                 let child = nodes[child_idx].clone();
                 nodes[i].children.push(child);
@@ -338,15 +358,7 @@ fn build_tree(
         }
     }
 
-    // Find root (node with parent 0xFFFFFFFF or parent pointing to itself)
-    for (i, pn) in packed_nodes.iter().enumerate() {
-        if pn.parent_node == 0xFFFFFFFF || pn.parent_node as usize == i {
-            return Ok(Some(nodes[i].clone()));
-        }
-    }
-
-    // Default to first node
-    Ok(Some(nodes[0].clone()))
+    Some(nodes[root].clone())
 }
 
 // ============================================================================
@@ -719,20 +731,20 @@ fn read_compact(data: &[u8], header_offset: usize, big_endian: bool) -> Result<O
 
 /// Build tree from compact packed data.
 fn build_compact_tree(
-    nodes: &[CompactNode],
+    compact_nodes: &[CompactNode],
     nvs: &[CompactNameValue],
     name_data: &[u8],
     value_data: &[u8],
     big_endian: bool,
 ) -> Result<Option<Node>> {
-    if nodes.is_empty() {
+    if compact_nodes.is_empty() {
         return Ok(None);
     }
 
-    // Build Node structs
-    let mut tree_nodes: Vec<Node> = Vec::with_capacity(nodes.len());
+    let mut tree_nodes: Vec<Node> = Vec::with_capacity(compact_nodes.len());
+    let mut child_indices: Vec<Vec<usize>> = Vec::with_capacity(compact_nodes.len());
 
-    for pn in nodes {
+    for (i, pn) in compact_nodes.iter().enumerate() {
         let nv_start = pn.name_value_ofs as usize;
         let mut num_nv = pn.num_name_values as usize;
 
@@ -758,7 +770,8 @@ fn build_compact_tree(
         // First name-value is the node name + text
         let (name, text) = if num_nv > 0 && nv_start < nvs.len() {
             let nv = &nvs[nv_start];
-            let name = read_name_data_string(name_data, nv.name_ofs as usize);
+            let name =
+                read_null_terminated_string(name_data, nv.name_ofs as usize).unwrap_or_default();
             let text = decode_compact_value(nv, value_data, big_endian);
             (name, text)
         } else {
@@ -771,7 +784,8 @@ fn build_compact_tree(
             let attr_start = nv_start + 1;
             let attr_end = (nv_start + num_nv).min(nvs.len());
             for nv in &nvs[attr_start..attr_end] {
-                let attr_name = read_name_data_string(name_data, nv.name_ofs as usize);
+                let attr_name = read_null_terminated_string(name_data, nv.name_ofs as usize)
+                    .unwrap_or_default();
                 let attr_value = decode_compact_value(nv, value_data, big_endian);
                 attributes.push(Attribute {
                     name: attr_name,
@@ -779,6 +793,26 @@ fn build_compact_tree(
                 });
             }
         }
+
+        // Compute child indices for this node
+        let mut num_children = pn.num_children as usize;
+        if pn.num_children == 0xFF {
+            num_children = 0;
+            let first_child = pn.child_node_index as usize;
+            let scan_start = first_child + 255;
+            if scan_start < compact_nodes.len() {
+                let mut idx = scan_start;
+                while idx < compact_nodes.len() && compact_nodes[idx].parent_index as usize == i {
+                    num_children += 1;
+                    idx += 1;
+                }
+                num_children += 255;
+            } else {
+                num_children = 255;
+            }
+        }
+        let first_child = pn.child_node_index as usize;
+        child_indices.push((0..num_children).map(|ci| first_child + ci).collect());
 
         tree_nodes.push(Node {
             name,
@@ -788,58 +822,15 @@ fn build_compact_tree(
         });
     }
 
-    // Build parent-child relationships in reverse order
-    for i in (0..nodes.len()).rev() {
-        let pn = &nodes[i];
-        let mut num_children = pn.num_children as usize;
-
-        // Handle extended child count (0xFF)
-        if pn.num_children == 0xFF {
-            num_children = 0;
-            let first_child = pn.child_node_index as usize;
-            let scan_start = first_child + 255;
-            if scan_start < nodes.len() {
-                let mut idx = scan_start;
-                while idx < nodes.len() && nodes[idx].parent_index as usize == i {
-                    num_children += 1;
-                    idx += 1;
-                }
-                num_children += 255;
-            } else {
-                num_children = 255;
-            }
-        }
-
-        let first_child = pn.child_node_index as usize;
-        for ci in 0..num_children {
-            let child_idx = first_child + ci;
-            if child_idx < tree_nodes.len() {
-                let child = tree_nodes[child_idx].clone();
-                tree_nodes[i].children.push(child);
-            }
-        }
-    }
-
     // Find root (parent == 0xFFFF)
-    for (i, pn) in nodes.iter().enumerate() {
-        if pn.parent_index == 0xFFFF {
-            return Ok(Some(tree_nodes[i].clone()));
-        }
-    }
-
-    Ok(Some(tree_nodes[0].clone()))
-}
-
-/// Read a null-terminated string from the name data section.
-fn read_name_data_string(name_data: &[u8], offset: usize) -> String {
-    if offset >= name_data.len() {
-        return String::new();
-    }
-    let end = name_data[offset..]
+    let root = compact_nodes
         .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(name_data.len() - offset);
-    String::from_utf8_lossy(&name_data[offset..offset + end]).into_owned()
+        .enumerate()
+        .find(|(_, pn)| pn.parent_index == 0xFFFF)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    Ok(assemble_tree(tree_nodes, &child_indices, root))
 }
 
 /// Decode a compact BPackedNameValue to a Variant.
