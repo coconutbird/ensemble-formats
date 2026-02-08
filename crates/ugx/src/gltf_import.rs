@@ -537,7 +537,20 @@ fn import_skeleton(
     Ok((bones, granny_bones))
 }
 
-/// Import materials from glTF.
+/// Resolve a glTF texture index to the image URI (or name as fallback).
+fn resolve_texture_uri(root: &gltf_json::Root, texture_idx: usize) -> String {
+    let texture = &root.textures[texture_idx];
+    let image = &root.images[texture.source.value()];
+    // Prefer name (full path preserved by our exporter), fall back to URI
+    image
+        .name
+        .as_deref()
+        .or(image.uri.as_deref())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Import materials from glTF, including texture map references.
 fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
     root.materials
         .iter()
@@ -545,10 +558,72 @@ fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
             let base_color = mat.pbr_metallic_roughness.base_color_factor.0;
             let roughness = mat.pbr_metallic_roughness.roughness_factor.0;
 
+            let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
+
+            // baseColorTexture → Diffuse
+            if let Some(ref info) = mat.pbr_metallic_roughness.base_color_texture {
+                let name = resolve_texture_uri(root, info.index.value());
+                if !name.is_empty() {
+                    maps[MapType::Diffuse as usize].push(Map {
+                        name,
+                        channel: info.tex_coord as i16,
+                        flags: 0,
+                    });
+                }
+            }
+
+            // normalTexture → Normal
+            if let Some(ref info) = mat.normal_texture {
+                let name = resolve_texture_uri(root, info.index.value());
+                if !name.is_empty() {
+                    maps[MapType::Normal as usize].push(Map {
+                        name,
+                        channel: info.tex_coord as i16,
+                        flags: 0,
+                    });
+                }
+            }
+
+            // occlusionTexture → AO
+            if let Some(ref info) = mat.occlusion_texture {
+                let name = resolve_texture_uri(root, info.index.value());
+                if !name.is_empty() {
+                    maps[MapType::AO as usize].push(Map {
+                        name,
+                        channel: info.tex_coord as i16,
+                        flags: 0,
+                    });
+                }
+            }
+
+            // emissiveTexture → Emissive
+            if let Some(ref info) = mat.emissive_texture {
+                let name = resolve_texture_uri(root, info.index.value());
+                if !name.is_empty() {
+                    maps[MapType::Emissive as usize].push(Map {
+                        name,
+                        channel: info.tex_coord as i16,
+                        flags: 0,
+                    });
+                }
+            }
+
+            // Alpha mode → blend_type
+            let blend_type = if let gltf_json::validation::Checked::Valid(
+                gltf_json::material::AlphaMode::Blend,
+            ) = mat.alpha_mode
+            {
+                1
+            } else {
+                0
+            };
+
             Material {
                 name: mat.name.clone().unwrap_or_default(),
+                maps,
                 spec_power: (1.0 - roughness) * 100.0,
                 opacity: base_color[3],
+                blend_type,
                 ..Default::default()
             }
         })
@@ -1582,5 +1657,105 @@ mod tests {
         if !tested {
             eprintln!("No foxcannon UGX files found in foxcannon01/ - test skipped");
         }
+    }
+
+    #[test]
+    fn test_material_texture_roundtrip() {
+        use crate::gltf_export::{export_to_gltf, GltfExportOptions};
+
+        // Build a UGX with materials that have texture maps
+        let mut geom = make_test_geom();
+        geom.materials = vec![
+            Material {
+                name: "mat_diffuse_normal".into(),
+                maps: {
+                    let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
+                    maps[MapType::Diffuse as usize].push(Map {
+                        name: r"\textures\diffuse_01".into(),
+                        channel: 0,
+                        flags: 0,
+                    });
+                    maps[MapType::Normal as usize].push(Map {
+                        name: r"\textures\normal_01".into(),
+                        channel: 0,
+                        flags: 0,
+                    });
+                    maps
+                },
+                spec_power: 50.0,
+                opacity: 1.0,
+                blend_type: 0,
+                ..Default::default()
+            },
+            Material {
+                name: "mat_emissive_ao".into(),
+                maps: {
+                    let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
+                    maps[MapType::Emissive as usize].push(Map {
+                        name: r"\textures\emissive_01".into(),
+                        channel: 1,
+                        flags: 0,
+                    });
+                    maps[MapType::AO as usize].push(Map {
+                        name: r"\textures\ao_01".into(),
+                        channel: 0,
+                        flags: 0,
+                    });
+                    maps
+                },
+                spec_power: 10.0,
+                opacity: 0.8,
+                blend_type: 1,
+                ..Default::default()
+            },
+        ];
+
+        // Export to glTF with materials
+        let export_opts = GltfExportOptions {
+            embed_buffers: false,
+            include_materials: true,
+            include_skeleton: false,
+        };
+        let exported = export_to_gltf(&geom, &export_opts).unwrap();
+
+        // Import back
+        let import_opts = GltfImportOptions {
+            include_skeleton: false,
+            include_materials: true,
+        };
+        let imported =
+            import_from_gltf(&exported.json, exported.buffer.as_deref(), &import_opts).unwrap();
+
+        assert_eq!(imported.materials.len(), 2);
+
+        // First material: diffuse + normal, opaque
+        let m0 = &imported.materials[0];
+        assert_eq!(m0.name, "mat_diffuse_normal");
+        assert_eq!(m0.maps[MapType::Diffuse as usize].len(), 1);
+        assert_eq!(
+            m0.maps[MapType::Diffuse as usize][0].name,
+            r"\textures\diffuse_01"
+        );
+        assert_eq!(m0.maps[MapType::Diffuse as usize][0].channel, 0);
+        assert_eq!(m0.maps[MapType::Normal as usize].len(), 1);
+        assert_eq!(
+            m0.maps[MapType::Normal as usize][0].name,
+            r"\textures\normal_01"
+        );
+        assert_eq!(m0.blend_type, 0);
+
+        // Second material: emissive + AO, blend
+        let m1 = &imported.materials[1];
+        assert_eq!(m1.name, "mat_emissive_ao");
+        assert_eq!(m1.maps[MapType::Emissive as usize].len(), 1);
+        assert_eq!(
+            m1.maps[MapType::Emissive as usize][0].name,
+            r"\textures\emissive_01"
+        );
+        assert_eq!(m1.maps[MapType::Emissive as usize][0].channel, 1);
+        assert_eq!(m1.maps[MapType::AO as usize].len(), 1);
+        assert_eq!(m1.maps[MapType::AO as usize][0].name, r"\textures\ao_01");
+        assert_eq!(m1.blend_type, 1);
+        assert!((m1.opacity - 0.8).abs() < 0.01);
     }
 }
