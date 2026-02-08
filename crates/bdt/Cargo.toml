@@ -1,0 +1,12 @@
+[package]
+name = "bdt"
+description = "BBinaryDataTree packed document format for Ensemble Studios games"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+byteorder.workspace = true
+thiserror.workspace = true

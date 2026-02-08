@@ -27,8 +27,9 @@ const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
 #[allow(dead_code)]
 const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 
-/// Geometry header signature.
-const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
+/// Geometry header signatures (version 4 = original, version 6 = Definitive Edition).
+const GEOM_HEADER_SIGNATURE_V4: u32 = 0xC2340004;
+const GEOM_HEADER_SIGNATURE_V6: u32 = 0xC2340006;
 
 /// Parsed UGX geometry data.
 #[derive(Debug, Clone)]
@@ -127,11 +128,11 @@ impl UgxGeom {
     ) -> Result<Self> {
         let mut cursor = Cursor::new(data);
 
-        // Read and verify header signature
+        // Read and verify header signature (accept both v4 and v6)
         let signature = cursor.read_u32::<LittleEndian>()?;
-        if signature != GEOM_HEADER_SIGNATURE {
+        if signature != GEOM_HEADER_SIGNATURE_V4 && signature != GEOM_HEADER_SIGNATURE_V6 {
             return Err(Error::InvalidSignature {
-                expected: GEOM_HEADER_SIGNATURE,
+                expected: GEOM_HEADER_SIGNATURE_V4,
                 actual: signature,
             });
         }
@@ -605,5 +606,208 @@ impl UgxGeom {
         }
 
         Ok(bones)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn f16_to_f32(bits: u16) -> f32 {
+        half::f16::from_bits(bits).to_f32()
+    }
+
+    #[test]
+    fn dump_v6_granny_chunk() {
+        let path = "../../foxcannon01/mesh_turret_0.ugx";
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(_) => { eprintln!("File not found, skipping"); return; }
+        };
+
+        let mut cursor = Cursor::new(&data);
+        let mut ecf = ecf::EcfReader::new(&mut cursor).unwrap();
+        let granny = ecf.read_chunk_data_by_id(ECF_GRANNY_CHUNK_ID).unwrap();
+
+        // IB analysis
+        let ib = ecf.read_chunk_data_by_id(ECF_IB_CHUNK_ID).unwrap();
+        let ib_u16: Vec<u16> = ib.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let num_unique = *ib_u16.iter().max().unwrap_or(&0) as usize + 1;
+        eprintln!("IB: {} indices, {} tris, {} unique verts", ib_u16.len(), ib_u16.len() / 3, num_unique);
+        eprintln!("Granny: {} bytes\n", granny.len());
+
+        // Dump the ENTIRE granny chunk in annotated hex, looking for data regions
+        // Key known offsets:
+        // 0x00-0x5F: File info header
+        // 0xA0-0x28C: Skeleton (3 bones × 164 bytes)
+        // 0x2D0-0x2DF: Mesh ptr array (1 mesh)
+        // 0x2E0-0x3xx: Mesh struct
+        // Strings near end (0x2510+)
+
+        // Find big gaps of non-pointer, non-zero data
+        // Dump everything from 0x380 to 0x2500 as hex in 24-byte rows (candidate vertex stride)
+        eprintln!("Data from 0x380 to 0x600 (hex, 24-byte rows):");
+        let start = 0x380usize;
+        let end = 0x600usize.min(granny.len());
+        for i in (start..end).step_by(24) {
+            let row_end = (i + 24).min(end);
+            let row = &granny[i..row_end];
+            let hex: Vec<String> = row.iter().map(|b| format!("{:02X}", b)).collect();
+
+            // Try reading as f16×4 + f32×3 + f16×2 (=24 bytes: pos + normal + uv)
+            let mut annotation = String::new();
+            if row.len() >= 24 {
+                let hx = f16_to_f32(u16::from_le_bytes([row[0], row[1]]));
+                let hy = f16_to_f32(u16::from_le_bytes([row[2], row[3]]));
+                let hz = f16_to_f32(u16::from_le_bytes([row[4], row[5]]));
+                let hw = f16_to_f32(u16::from_le_bytes([row[6], row[7]]));
+                if hx.is_finite() && hy.is_finite() && hz.is_finite() && hx.abs() < 100.0 && hy.abs() < 100.0 && hz.abs() < 100.0 {
+                    annotation += &format!("f16: ({:.3},{:.3},{:.3},{:.3}) ", hx, hy, hz, hw);
+                }
+                let fx = f32::from_le_bytes([row[0], row[1], row[2], row[3]]);
+                let fy = f32::from_le_bytes([row[4], row[5], row[6], row[7]]);
+                let fz = f32::from_le_bytes([row[8], row[9], row[10], row[11]]);
+                if fx.is_finite() && fy.is_finite() && fz.is_finite() && fx.abs() < 100.0 && fy.abs() < 100.0 && fz.abs() < 100.0 {
+                    annotation += &format!("f32: ({:.3},{:.3},{:.3}) ", fx, fy, fz);
+                }
+            }
+            eprintln!("  {:04X}: {} {}", i, hex.join(" "), annotation);
+        }
+
+        // Also scan with NO bounding box constraint - just find runs of "reasonable" f32s
+        eprintln!("\nScanning granny for runs of reasonable f32 triples (any range < 100)...");
+        for stride in [12usize, 24, 32, 36, 44, 48] {
+            let mut offset = 0x100;
+            while offset + 12 <= granny.len() {
+                let x = f32::from_le_bytes(granny[offset..offset+4].try_into().unwrap());
+                let y = f32::from_le_bytes(granny[offset+4..offset+8].try_into().unwrap());
+                let z = f32::from_le_bytes(granny[offset+8..offset+12].try_into().unwrap());
+
+                if x.is_finite() && y.is_finite() && z.is_finite()
+                    && x.abs() < 100.0 && y.abs() < 100.0 && z.abs() < 100.0
+                    && (x.abs() > 0.01 || y.abs() > 0.01 || z.abs() > 0.01) {
+                    let mut count = 1;
+                    while offset + count * stride + 12 <= granny.len() {
+                        let nx = f32::from_le_bytes(granny[offset+count*stride..offset+count*stride+4].try_into().unwrap());
+                        let ny = f32::from_le_bytes(granny[offset+count*stride+4..offset+count*stride+8].try_into().unwrap());
+                        let nz = f32::from_le_bytes(granny[offset+count*stride+8..offset+count*stride+12].try_into().unwrap());
+                        if nx.is_finite() && ny.is_finite() && nz.is_finite()
+                            && nx.abs() < 100.0 && ny.abs() < 100.0 && nz.abs() < 100.0
+                            && (nx.abs() > 0.01 || ny.abs() > 0.01 || nz.abs() > 0.01) {
+                            count += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if count >= 100 {
+                        eprintln!("  stride={}: {} positions at granny+0x{:X}", stride, count, offset);
+                        for vi in 0..3 {
+                            let vx = f32::from_le_bytes(granny[offset+vi*stride..offset+vi*stride+4].try_into().unwrap());
+                            let vy = f32::from_le_bytes(granny[offset+vi*stride+4..offset+vi*stride+8].try_into().unwrap());
+                            let vz = f32::from_le_bytes(granny[offset+vi*stride+8..offset+vi*stride+12].try_into().unwrap());
+                            eprintln!("    v[{}]: ({:.4}, {:.4}, {:.4})", vi, vx, vy, vz);
+                        }
+                    }
+                }
+                offset += 4;
+            }
+        }
+
+        // Same for f16 triples (any range < 100)
+        eprintln!("\nScanning granny for runs of reasonable f16 triples (any range < 100)...");
+        for stride in [8usize, 12, 16, 20, 24, 28, 32, 36, 44] {
+            let mut offset = 0x100;
+            while offset + 6 <= granny.len() {
+                let x = f16_to_f32(u16::from_le_bytes([granny[offset], granny[offset+1]]));
+                let y = f16_to_f32(u16::from_le_bytes([granny[offset+2], granny[offset+3]]));
+                let z = f16_to_f32(u16::from_le_bytes([granny[offset+4], granny[offset+5]]));
+
+                if x.is_finite() && y.is_finite() && z.is_finite()
+                    && x.abs() < 100.0 && y.abs() < 100.0 && z.abs() < 100.0
+                    && (x.abs() > 0.01 || y.abs() > 0.01 || z.abs() > 0.01) {
+                    let mut count = 1;
+                    while offset + count * stride + 6 <= granny.len() {
+                        let nx = f16_to_f32(u16::from_le_bytes([granny[offset+count*stride], granny[offset+count*stride+1]]));
+                        let ny = f16_to_f32(u16::from_le_bytes([granny[offset+count*stride+2], granny[offset+count*stride+3]]));
+                        let nz = f16_to_f32(u16::from_le_bytes([granny[offset+count*stride+4], granny[offset+count*stride+5]]));
+                        if nx.is_finite() && ny.is_finite() && nz.is_finite()
+                            && nx.abs() < 100.0 && ny.abs() < 100.0 && nz.abs() < 100.0
+                            && (nx.abs() > 0.01 || ny.abs() > 0.01 || nz.abs() > 0.01) {
+                            count += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if count >= 100 {
+                        eprintln!("  stride={}: {} half-positions at granny+0x{:X}", stride, count, offset);
+                        for vi in 0..3 {
+                            let vx = f16_to_f32(u16::from_le_bytes([granny[offset+vi*stride], granny[offset+vi*stride+1]]));
+                            let vy = f16_to_f32(u16::from_le_bytes([granny[offset+vi*stride+2], granny[offset+vi*stride+3]]));
+                            let vz = f16_to_f32(u16::from_le_bytes([granny[offset+vi*stride+4], granny[offset+vi*stride+5]]));
+                            eprintln!("    v[{}]: ({:.4}, {:.4}, {:.4})", vi, vx, vy, vz);
+                        }
+                    }
+                }
+                offset += 2;
+            }
+        }
+    }
+
+    #[test]
+    fn dump_foxcannon_vs_v4() {
+        let v6_path = "../../foxcannon01/mesh_turret_0.ugx";
+        let v4_path = "../../test_ugx/art/covenant/air/banshee_01/banshee_damage_01.ugx";
+
+        for (label, path) in [("V6 foxcannon", v6_path), ("V4 banshee", v4_path)] {
+            let data = match std::fs::read(path) {
+                Ok(d) => d,
+                Err(_) => { eprintln!("  {} - file not found, skipping", label); continue; }
+            };
+
+            eprintln!("\n=== {} ({} bytes total) ===", label, data.len());
+
+            // Dump ECF chunk info
+            let mut cursor = Cursor::new(&data);
+            if let Ok(mut ecf) = ecf::EcfReader::new(&mut cursor) {
+                eprintln!("  ECF chunks ({} total):", ecf.chunks().len());
+                for (i, chunk) in ecf.chunks().iter().enumerate() {
+                    eprintln!("    [{}] id=0x{:03X} offset={} size={} flags=0x{:02X} res_flags=0x{:04X}",
+                        i, chunk.id, chunk.offset, chunk.size, chunk.flags, chunk.resource_flags);
+                }
+
+                // Dump first 256 bytes of cached data (0x700)
+                if let Ok(cached) = ecf.read_chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID) {
+                    let dump_len = 320.min(cached.len());
+                    eprintln!("  Cached data (0x700) first {} bytes:", dump_len);
+                    let hex: Vec<String> = cached[..dump_len].iter().map(|b| format!("{:02X}", b)).collect();
+                    for (i, row) in hex.chunks(16).enumerate() {
+                        eprintln!("    {:04X}: {}", i * 16, row.join(" "));
+                    }
+
+                    // Parse header manually for comparison
+                    let sig = u32::from_le_bytes([cached[0], cached[1], cached[2], cached[3]]);
+                    eprintln!("  Header signature: 0x{:08X}", sig);
+
+                    // Section array at 0x40
+                    let sec_count = u32::from_le_bytes([cached[0x40], cached[0x41], cached[0x42], cached[0x43]]);
+                    let sec_offset = u64::from_le_bytes([
+                        cached[0x48], cached[0x49], cached[0x4A], cached[0x4B],
+                        cached[0x4C], cached[0x4D], cached[0x4E], cached[0x4F],
+                    ]);
+                    eprintln!("  Sections: count={}, offset=0x{:X}", sec_count, sec_offset);
+
+                    // Dump section data at offset
+                    if sec_count > 0 && (sec_offset as usize) < cached.len() {
+                        let sec_start = sec_offset as usize;
+                        let sec_dump = 160.min(cached.len() - sec_start);
+                        eprintln!("  Section 0 raw data at 0x{:X} ({} bytes):", sec_start, sec_dump);
+                        let sec_hex: Vec<String> = cached[sec_start..sec_start+sec_dump].iter().map(|b| format!("{:02X}", b)).collect();
+                        for (i, row) in sec_hex.chunks(16).enumerate() {
+                            eprintln!("    +{:04X}: {}", i * 16, row.join(" "));
+                        }
+                    }
+                }
+            }
+        }
     }
 }

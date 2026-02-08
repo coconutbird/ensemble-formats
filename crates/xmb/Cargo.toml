@@ -5,6 +5,7 @@ edition.workspace = true
 description = "XMB binary XML format reader/writer for Halo Wars (Ensemble Studios)"
 
 [dependencies]
+bdt.workspace = true
 ecf.workspace = true
 byteorder.workspace = true
 thiserror.workspace = true

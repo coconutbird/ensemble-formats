@@ -1,7 +1,9 @@
 //! Core XMB data types.
 
+pub use bdt::{Attribute, Node};
+
 use crate::error::{Error, Result};
-use crate::variant::Variant;
+use bdt::Variant;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 use std::io::{BufRead, Cursor, Write};
@@ -23,140 +25,6 @@ impl XmbFormat {
 
     pub fn is_pc(&self) -> bool {
         matches!(self, XmbFormat::PC)
-    }
-}
-
-/// An attribute on an XML node.
-#[derive(Debug, Clone, Default)]
-pub struct Attribute {
-    pub name: String,
-    pub value: Variant,
-}
-
-impl Attribute {
-    pub fn new(name: impl Into<String>, value: Variant) -> Self {
-        Self {
-            name: name.into(),
-            value,
-        }
-    }
-
-    pub fn with_string(name: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            value: Variant::String(value.into()),
-        }
-    }
-
-    pub fn value_string(&self) -> String {
-        self.value.to_string_value()
-    }
-}
-
-/// A node in the XML tree.
-#[derive(Debug, Clone, Default)]
-pub struct Node {
-    pub name: String,
-    pub text: Variant,
-    pub attributes: Vec<Attribute>,
-    pub children: Vec<Node>,
-}
-
-impl Node {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            text: Variant::Null,
-            attributes: Vec::new(),
-            children: Vec::new(),
-        }
-    }
-
-    pub fn with_text(name: impl Into<String>, text: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            text: Variant::String(text.into()),
-            attributes: Vec::new(),
-            children: Vec::new(),
-        }
-    }
-
-    pub fn add_attribute(&mut self, attr: Attribute) {
-        self.attributes.push(attr);
-    }
-
-    pub fn add_child(&mut self, child: Node) {
-        self.children.push(child);
-    }
-
-    pub fn get_attribute(&self, name: &str) -> Option<&Attribute> {
-        self.attributes.iter().find(|a| a.name == name)
-    }
-
-    pub fn text_string(&self) -> String {
-        self.text.to_string_value()
-    }
-
-    pub fn has_children(&self) -> bool {
-        !self.children.is_empty()
-    }
-
-    pub fn has_attributes(&self) -> bool {
-        !self.attributes.is_empty()
-    }
-
-    pub fn node_count(&self) -> usize {
-        1 + self.children.iter().map(|c| c.node_count()).sum::<usize>()
-    }
-
-    pub fn to_xml(&self) -> String {
-        let mut buffer = Cursor::new(Vec::new());
-        self.write_xml_to(&mut buffer)
-            .expect("Failed to write XML to buffer");
-        String::from_utf8(buffer.into_inner()).expect("Invalid UTF-8 in XML output")
-    }
-
-    pub fn write_xml_to<W: Write>(&self, writer: &mut W) -> Result<()> {
-        let mut xml_writer = Writer::new_with_indent(writer, b' ', 4);
-        self.write_node_xml(&mut xml_writer)?;
-        Ok(())
-    }
-
-    fn write_node_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        let has_text = !matches!(self.text, Variant::Null);
-        let has_children = !self.children.is_empty();
-
-        let mut elem = BytesStart::new(&self.name);
-        for attr in &self.attributes {
-            elem.push_attribute((attr.name.as_str(), attr.value.to_string_value().as_str()));
-        }
-
-        if !has_text && !has_children {
-            writer
-                .write_event(Event::Empty(elem))
-                .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-        } else {
-            writer
-                .write_event(Event::Start(elem.borrow()))
-                .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-
-            if has_text {
-                let text = self.text.to_string_value();
-                writer
-                    .write_event(Event::Text(BytesText::new(&text)))
-                    .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-            }
-
-            for child in &self.children {
-                child.write_node_xml(writer)?;
-            }
-
-            writer
-                .write_event(Event::End(BytesEnd::new(&self.name)))
-                .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-        }
-
-        Ok(())
     }
 }
 
@@ -230,7 +98,7 @@ impl XmbData {
         xml_writer.get_mut().write_all(b"\n").map_err(Error::Io)?;
 
         if let Some(root) = &self.root {
-            root.write_node_xml(&mut xml_writer)?;
+            write_node_xml(root, &mut xml_writer)?;
         }
 
         Ok(())
@@ -316,6 +184,47 @@ impl XmbData {
             source_file: None,
         })
     }
+}
+
+// ============================================================================
+// XML helpers
+// ============================================================================
+
+fn write_node_xml<W: Write>(node: &Node, writer: &mut Writer<W>) -> Result<()> {
+    let has_text = !matches!(node.text, Variant::Null);
+    let has_children = !node.children.is_empty();
+
+    let mut elem = BytesStart::new(&node.name);
+    for attr in &node.attributes {
+        elem.push_attribute((attr.name.as_str(), attr.value.to_string_value().as_str()));
+    }
+
+    if !has_text && !has_children {
+        writer
+            .write_event(Event::Empty(elem))
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    } else {
+        writer
+            .write_event(Event::Start(elem.borrow()))
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+
+        if has_text {
+            let text = node.text.to_string_value();
+            writer
+                .write_event(Event::Text(BytesText::new(&text)))
+                .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        }
+
+        for child in &node.children {
+            write_node_xml(child, writer)?;
+        }
+
+        writer
+            .write_event(Event::End(BytesEnd::new(&node.name)))
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+    }
+
+    Ok(())
 }
 
 fn parse_start_element(e: &BytesStart) -> Result<Node> {

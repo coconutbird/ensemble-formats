@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/bdt",
     "crates/ecf",
     "crates/era",
     "crates/xmb",
@@ -19,6 +20,7 @@ authors = ["coconutbird"]
 
 [workspace.dependencies]
 # Internal crates
+bdt = { path = "crates/bdt" }
 ecf = { path = "crates/ecf" }
 era = { path = "crates/era" }
 xmb = { path = "crates/xmb" }

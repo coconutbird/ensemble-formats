@@ -16,6 +16,10 @@ pub enum Error {
     #[error("ECF error: {0}")]
     Ecf(#[from] ecf::Error),
 
+    /// BDT format error.
+    #[error("BDT error: {0}")]
+    Bdt(#[from] bdt::Error),
+
     /// Invalid XMB signature.
     #[error("Invalid XMB signature: expected 0x{expected:08X}, got 0x{actual:08X}")]
     InvalidXmbSignature { expected: u32, actual: u32 },

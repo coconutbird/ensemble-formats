@@ -15,7 +15,7 @@ const ECF_IB_CHUNK_ID: u64 = 0x00000701;
 const ECF_VB_CHUNK_ID: u64 = 0x00000702;
 const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
 
-/// Geometry header signature.
+/// Geometry header signature (v4 = original format, writer always writes v4).
 const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
 
 /// Write a UGX geometry to bytes (ECF container).

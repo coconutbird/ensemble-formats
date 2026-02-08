@@ -1180,4 +1180,159 @@ mod tests {
             eprintln!("Place UGX files in test_ugx/ directory to enable real file testing");
         }
     }
+
+    /// Round-trip foxcannon UGX files and export glTF (with and without skeleton) to disk.
+    #[test]
+    fn test_foxcannon_roundtrip_and_export() {
+        let dir = "../../foxcannon01";
+        let files = [
+            "mesh_barrel_0.ugx",
+            "mesh_chassis_front_0.ugx",
+            "mesh_foxcannon01.ugx",
+            "mesh_turret_0.ugx",
+        ];
+
+        let mut tested = false;
+        for filename in &files {
+            let path = format!("{}/{}", dir, filename);
+            let data = match std::fs::read(&path) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let original = match UgxGeom::read(&data) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("Failed to read {}: {}", path, e);
+                    continue;
+                }
+            };
+
+            let stem = filename.trim_end_matches(".ugx");
+            eprintln!("\n=== Foxcannon: {} ===", filename);
+            eprintln!("  Sections: {}, Bones: {}, Granny bones: {}",
+                original.sections.len(), original.bones.len(), original.granny_bones.len());
+            eprintln!("  Total vertices: {}, Total triangles: {}",
+                original.total_vertices(), original.total_triangles());
+
+            // Export glTF WITHOUT skeleton
+            {
+                let opts = GltfExportOptions {
+                    embed_buffers: false,
+                    include_materials: false,
+                    include_skeleton: false,
+                };
+                let buffer_name = format!("{}_no_bones.bin", stem);
+                let export = crate::export_to_gltf_with_buffer_name(&original, &opts, &buffer_name).unwrap();
+                let json_path = format!("{}/{}_no_bones.gltf", dir, stem);
+                let bin_path = format!("{}/{}", dir, buffer_name);
+                std::fs::write(&json_path, &export.json).unwrap();
+                if let Some(ref buf) = export.buffer {
+                    std::fs::write(&bin_path, buf).unwrap();
+                }
+                eprintln!("  Exported (no bones): {}", json_path);
+            }
+
+            // Export glTF WITH skeleton
+            {
+                let opts = GltfExportOptions {
+                    embed_buffers: false,
+                    include_materials: false,
+                    include_skeleton: true,
+                };
+                let buffer_name = format!("{}_with_bones.bin", stem);
+                let export = crate::export_to_gltf_with_buffer_name(&original, &opts, &buffer_name).unwrap();
+                let json_path = format!("{}/{}_with_bones.gltf", dir, stem);
+                let bin_path = format!("{}/{}", dir, buffer_name);
+                std::fs::write(&json_path, &export.json).unwrap();
+                if let Some(ref buf) = export.buffer {
+                    std::fs::write(&bin_path, buf).unwrap();
+                }
+                eprintln!("  Exported (with bones): {}", json_path);
+            }
+
+            // Round-trip: export → import → write UGX → read back
+            let export_opts = GltfExportOptions {
+                embed_buffers: false,
+                include_materials: false,
+                include_skeleton: true,
+            };
+            let export = crate::export_to_gltf(&original, &export_opts).unwrap();
+
+            let import_opts = GltfImportOptions {
+                include_skeleton: true,
+                include_materials: false,
+            };
+            let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+            // Verify section structure
+            assert_eq!(imported.sections.len(), original.sections.len(),
+                "{}: section count mismatch", filename);
+            for (si, (orig_sec, imp_sec)) in original.sections.iter().zip(imported.sections.iter()).enumerate() {
+                assert_eq!(imp_sec.num_verts, orig_sec.num_verts,
+                    "{}: section {} vertex count mismatch", filename, si);
+                assert_eq!(imp_sec.num_tris, orig_sec.num_tris,
+                    "{}: section {} triangle count mismatch", filename, si);
+            }
+
+            // Verify vertex data per section
+            for si in 0..original.sections.len() {
+                let orig_verts = original.unpack_section_vertices(si).unwrap();
+                let imp_verts = imported.unpack_section_vertices(si).unwrap();
+                for (vi, (ov, iv)) in orig_verts.iter().zip(imp_verts.iter()).enumerate() {
+                    for c in 0..3 {
+                        assert!(
+                            (ov.position[c] - iv.position[c]).abs() < 0.01,
+                            "{}: section {} vertex {} position[{}] mismatch: {} vs {}",
+                            filename, si, vi, c, ov.position[c], iv.position[c]
+                        );
+                    }
+                }
+
+                let orig_idx = original.get_section_indices(si);
+                let imp_idx = imported.get_section_indices(si);
+                assert_eq!(imp_idx, orig_idx, "{}: section {} index mismatch", filename, si);
+            }
+
+            // Verify bone hierarchy
+            if !original.bones.is_empty() {
+                assert_eq!(imported.bones.len(), original.bones.len(),
+                    "{}: bone count mismatch", filename);
+                for (bi, (ob, ib)) in original.bones.iter().zip(imported.bones.iter()).enumerate() {
+                    assert_eq!(ob.name, ib.name, "{}: bone {} name mismatch", filename, bi);
+                    assert_eq!(ob.parent_index, ib.parent_index,
+                        "{}: bone {} parent mismatch", filename, bi);
+                }
+            }
+
+            // Write to UGX and read back
+            let ugx_bytes = crate::write_ugx(&imported).unwrap();
+            let re_read = UgxGeom::read(&ugx_bytes).unwrap();
+
+            assert_eq!(re_read.sections.len(), imported.sections.len(),
+                "{}: write roundtrip section count mismatch", filename);
+            for si in 0..imported.sections.len() {
+                let imp_verts = imported.unpack_section_vertices(si).unwrap();
+                let rr_verts = re_read.unpack_section_vertices(si).unwrap();
+                assert_eq!(rr_verts.len(), imp_verts.len(),
+                    "{}: write roundtrip section {} vertex count mismatch", filename, si);
+                for (vi, (iv, rv)) in imp_verts.iter().zip(rr_verts.iter()).enumerate() {
+                    for c in 0..3 {
+                        assert!(
+                            (iv.position[c] - rv.position[c]).abs() < 1e-4,
+                            "{}: write roundtrip section {} vertex {} position[{}]: {} vs {}",
+                            filename, si, vi, c, iv.position[c], rv.position[c]
+                        );
+                    }
+                }
+            }
+
+            eprintln!("  PASSED round-trip");
+            tested = true;
+        }
+
+        if !tested {
+            eprintln!("No foxcannon UGX files found in foxcannon01/ - test skipped");
+        }
+    }
 }
