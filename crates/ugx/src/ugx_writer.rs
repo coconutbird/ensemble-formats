@@ -1,12 +1,14 @@
 //! UGX file writer.
 //!
 //! Serializes a `UgxGeom` into UGX binary format (ECF container).
-//! Writes chunks 0x700 (cached data), 0x701 (index buffer), 0x702 (vertex buffer).
+//! Writes chunks 0x700 (cached data), 0x701 (index buffer), 0x702 (vertex buffer),
+//! 0x703 (granny bones), and 0x704 (materials).
 
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{Cursor, Seek, Write};
 
 use crate::error::Result;
+use crate::types::{MapType, Material};
 use crate::ugx::UgxGeom;
 
 /// ECF chunk IDs for UGX.
@@ -14,6 +16,7 @@ const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
 const ECF_IB_CHUNK_ID: u64 = 0x00000701;
 const ECF_VB_CHUNK_ID: u64 = 0x00000702;
 const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
+const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 
 /// Geometry header signature (v4 = original format, writer always writes v4).
 const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
@@ -34,6 +37,12 @@ pub fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
     if !geom.granny_bones.is_empty() {
         let granny_data = build_granny_data(geom)?;
         ecf.add_chunk(ECF_GRANNY_CHUNK_ID, granny_data);
+    }
+
+    // Write materials chunk if we have materials
+    if !geom.materials.is_empty() {
+        let mat_data = build_material_data(geom)?;
+        ecf.add_chunk(ECF_MATERIAL_CHUNK_ID, mat_data);
     }
 
     ecf.finalize()?;
@@ -611,6 +620,108 @@ fn fixup_packed_array_header(
     Ok(())
 }
 
+/// Build the material chunk (0x704) as a BBinaryDataTree packed document.
+///
+/// Tree structure:
+/// ```text
+/// <Materials>
+///   <Material @Name="name" @Ver=4>
+///     <NameValues>
+///       <SpecPower> text=Float(...)
+///       <Flags> text=UInt(...)
+///       <BlendType> text=UInt(...)
+///       <Opacity> text=UInt(0-255)
+///     <Maps>
+///       <diffuse @UVWVel=Float(0.0)>
+///         <Map @Name="texture_path" @Channel=Int(0) @Flags=UInt(7)>
+///       ...
+/// ```
+fn build_material_data(geom: &UgxGeom) -> Result<Vec<u8>> {
+    let mut root = bdt::Node::new("Materials");
+
+    for mat in &geom.materials {
+        root.children.push(build_material_node(mat));
+    }
+
+    let data = bdt::PackedWriter::write_le(&root)?;
+    Ok(data)
+}
+
+/// Build a single material BDT node.
+fn build_material_node(mat: &Material) -> bdt::Node {
+    let mut node = bdt::Node::new("Material");
+    node.attributes
+        .push(bdt::Attribute::with_string("Name", &mat.name));
+    node.attributes.push(bdt::Attribute::new(
+        "Ver",
+        bdt::Variant::Int(4),
+    ));
+
+    // NameValues child with material properties
+    let mut nv = bdt::Node::new("NameValues");
+
+    let mut spec_node = bdt::Node::new("SpecPower");
+    spec_node.text = bdt::Variant::Float(mat.spec_power);
+    nv.children.push(spec_node);
+
+    let mut flags_node = bdt::Node::new("Flags");
+    flags_node.text = bdt::Variant::UInt(mat.flags);
+    nv.children.push(flags_node);
+
+    let mut blend_node = bdt::Node::new("BlendType");
+    blend_node.text = bdt::Variant::UInt(mat.blend_type as u32);
+    nv.children.push(blend_node);
+
+    let mut opacity_node = bdt::Node::new("Opacity");
+    opacity_node.text = bdt::Variant::UInt((mat.opacity * 255.0) as u32);
+    nv.children.push(opacity_node);
+
+    node.children.push(nv);
+
+    // Maps child with texture map slots
+    let mut maps = bdt::Node::new("Maps");
+
+    for map_type in MapType::ALL {
+        let idx = map_type as usize;
+        let uvw = mat.uvw_velocity[idx];
+        let has_maps = !mat.maps[idx].is_empty();
+        let has_uvw = uvw[0] != 0.0 || uvw[1] != 0.0 || uvw[2] != 0.0;
+
+        // Only write map type nodes that have data
+        if !has_maps && !has_uvw {
+            continue;
+        }
+
+        let mut type_node = bdt::Node::new(map_type.name());
+        type_node.attributes.push(bdt::Attribute::new(
+            "UVWVel",
+            bdt::Variant::Float(uvw[0]),
+        ));
+
+        for map in &mat.maps[idx] {
+            let mut map_node = bdt::Node::new("Map");
+            map_node
+                .attributes
+                .push(bdt::Attribute::with_string("Name", &map.name));
+            map_node.attributes.push(bdt::Attribute::new(
+                "Channel",
+                bdt::Variant::Int(map.channel as i32),
+            ));
+            map_node.attributes.push(bdt::Attribute::new(
+                "Flags",
+                bdt::Variant::UInt(map.flags as u32),
+            ));
+            type_node.children.push(map_node);
+        }
+
+        maps.children.push(type_node);
+    }
+
+    node.children.push(maps);
+
+    node
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,6 +926,114 @@ mod tests {
         let orig_indices = original.get_section_indices(0);
         let read_indices = read_back.get_section_indices(0);
         assert_eq!(read_indices, orig_indices);
+    }
+
+    #[test]
+    fn test_write_read_materials_roundtrip() {
+        let mut geom = make_test_geom();
+
+        // Add materials with various properties and texture maps
+        geom.materials = vec![
+            Material {
+                name: "terrain_grass".to_string(),
+                spec_power: 25.0,
+                flags: 3,
+                blend_type: 1,
+                opacity: 0.8,
+                maps: {
+                    let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
+                    maps[MapType::Diffuse as usize] = vec![Map {
+                        name: "art/textures/grass_diff.ddx".to_string(),
+                        channel: 0,
+                        flags: 7,
+                    }];
+                    maps[MapType::Normal as usize] = vec![Map {
+                        name: "art/textures/grass_norm.ddx".to_string(),
+                        channel: 0,
+                        flags: 7,
+                    }];
+                    maps
+                },
+                uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
+            },
+            Material {
+                name: "metal_plate".to_string(),
+                spec_power: 50.0,
+                flags: 0,
+                blend_type: 0,
+                opacity: 1.0,
+                maps: {
+                    let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
+                    maps[MapType::Diffuse as usize] = vec![Map {
+                        name: "art/textures/metal_diff.ddx".to_string(),
+                        channel: 0,
+                        flags: 7,
+                    }];
+                    maps[MapType::Gloss as usize] = vec![Map {
+                        name: "art/textures/metal_gloss.ddx".to_string(),
+                        channel: 1,
+                        flags: 3,
+                    }];
+                    maps
+                },
+                uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
+            },
+        ];
+
+        // Write to bytes
+        let bytes = write_ugx(&geom).unwrap();
+
+        // Read back
+        let read_back = UgxGeom::read(&bytes).unwrap();
+
+        // Verify material count
+        assert_eq!(read_back.materials.len(), 2);
+
+        // Verify first material
+        let m0 = &read_back.materials[0];
+        assert_eq!(m0.name, "terrain_grass");
+        assert!((m0.spec_power - 25.0).abs() < 0.1);
+        assert_eq!(m0.flags, 3);
+        assert_eq!(m0.blend_type, 1);
+        // Opacity roundtrips through UInt(0-255): 0.8 * 255 = 204, 204/255 = 0.8
+        assert!((m0.opacity - 0.8).abs() < 0.01);
+
+        // Verify first material's diffuse map
+        assert_eq!(m0.maps[MapType::Diffuse as usize].len(), 1);
+        assert_eq!(
+            m0.maps[MapType::Diffuse as usize][0].name,
+            "art/textures/grass_diff.ddx"
+        );
+        assert_eq!(m0.maps[MapType::Diffuse as usize][0].channel, 0);
+        assert_eq!(m0.maps[MapType::Diffuse as usize][0].flags, 7);
+
+        // Verify first material's normal map
+        assert_eq!(m0.maps[MapType::Normal as usize].len(), 1);
+        assert_eq!(
+            m0.maps[MapType::Normal as usize][0].name,
+            "art/textures/grass_norm.ddx"
+        );
+
+        // Verify second material
+        let m1 = &read_back.materials[1];
+        assert_eq!(m1.name, "metal_plate");
+        assert!((m1.spec_power - 50.0).abs() < 0.1);
+        assert_eq!(m1.flags, 0);
+        assert_eq!(m1.blend_type, 0);
+        assert!((m1.opacity - 1.0).abs() < 0.01);
+
+        // Verify second material's gloss map
+        assert_eq!(m1.maps[MapType::Gloss as usize].len(), 1);
+        assert_eq!(
+            m1.maps[MapType::Gloss as usize][0].name,
+            "art/textures/metal_gloss.ddx"
+        );
+        assert_eq!(m1.maps[MapType::Gloss as usize][0].channel, 1);
+        assert_eq!(m1.maps[MapType::Gloss as usize][0].flags, 3);
+
+        // Verify empty map slots stay empty
+        assert!(m0.maps[MapType::Gloss as usize].is_empty());
+        assert!(m1.maps[MapType::Normal as usize].is_empty());
     }
 
     #[test]
