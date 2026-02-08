@@ -952,6 +952,34 @@ mod tests {
             );
         }
 
+        // Verify granny bones survived the round trip
+        assert_eq!(
+            re_read.granny_bones.len(), original.granny_bones.len(),
+            "granny_bones count mismatch: {} vs {}", re_read.granny_bones.len(), original.granny_bones.len()
+        );
+        for (bi, (orig_gb, fin_gb)) in original.granny_bones.iter().zip(re_read.granny_bones.iter()).enumerate() {
+            assert_eq!(
+                orig_gb.name, fin_gb.name,
+                "granny_bone {} name mismatch: {:?} vs {:?}", bi, orig_gb.name, fin_gb.name
+            );
+            assert_eq!(
+                orig_gb.parent_index, fin_gb.parent_index,
+                "granny_bone {} parent_index mismatch: {} vs {}", bi, orig_gb.parent_index, fin_gb.parent_index
+            );
+            // Compare inverse world matrices
+            for row in 0..4 {
+                for col in 0..4 {
+                    assert!(
+                        (orig_gb.inverse_world_matrix.rows[row][col] - fin_gb.inverse_world_matrix.rows[row][col]).abs() < 1e-4,
+                        "granny_bone {} matrix[{}][{}] mismatch: {} vs {}",
+                        bi, row, col,
+                        orig_gb.inverse_world_matrix.rows[row][col],
+                        fin_gb.inverse_world_matrix.rows[row][col]
+                    );
+                }
+            }
+        }
+
         // Verify bounding volumes are reasonable
         assert!(re_read.bounding_sphere.radius > 0.0, "bounding sphere radius should be positive");
         for i in 0..3 {

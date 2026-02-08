@@ -13,6 +13,7 @@ use crate::ugx::UgxGeom;
 const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
 const ECF_IB_CHUNK_ID: u64 = 0x00000701;
 const ECF_VB_CHUNK_ID: u64 = 0x00000702;
+const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
 
 /// Geometry header signature.
 const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
@@ -29,6 +30,12 @@ pub fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
     ecf.add_chunk(ECF_IB_CHUNK_ID, ib_data);
     ecf.add_chunk(ECF_VB_CHUNK_ID, geom.vertex_buffer.clone());
 
+    // Write granny bones chunk if we have granny bone data
+    if !geom.granny_bones.is_empty() {
+        let granny_data = build_granny_data(geom)?;
+        ecf.add_chunk(ECF_GRANNY_CHUNK_ID, granny_data);
+    }
+
     ecf.finalize()?;
 
     Ok(output.into_inner())
@@ -41,6 +48,285 @@ fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
         buf.extend_from_slice(&idx.to_le_bytes());
     }
     buf
+}
+
+/// Granny bone size in bytes.
+///
+/// Per-bone layout (164 bytes):
+/// - `+0x00` (8 bytes): u64 name string offset
+/// - `+0x08` (4 bytes): i32 parent index
+/// - `+0x0C` (4 bytes): u32 local transform flags (bit 0=position, 1=orientation, 2=scale_shear)
+/// - `+0x10` (12 bytes): f32×3 local position
+/// - `+0x1C` (16 bytes): f32×4 local orientation (quaternion xyzw)
+/// - `+0x2C` (36 bytes): f32×9 local scale_shear (3×3 row-major)
+/// - `+0x50` (64 bytes): f32×16 inverse world matrix (4×4 row-major)
+/// - `+0x90` (4 bytes): f32 LOD error
+/// - `+0x94` (16 bytes): extended data (zeros)
+const GRANNY_BONE_SIZE: usize = 164;
+
+/// Granny local transform flags.
+const GRANNY_HAS_POSITION: u32 = 0x1;
+const GRANNY_HAS_ORIENTATION: u32 = 0x2;
+const GRANNY_HAS_SCALE_SHEAR: u32 = 0x4;
+
+/// Build the granny bones chunk (0x703).
+///
+/// Produces a Granny2-compatible serialized chunk with:
+/// - File info header with skeleton and mesh array pointers
+/// - Skeleton struct with bone count and array pointer
+/// - Bone array with names, parent indices, computed local transforms, and inverse world matrices
+/// - Mesh pointer array with section names
+/// - String table
+///
+/// Local transforms are computed from inverse world matrices: for each bone,
+/// `local = parent_world_inverse * world` where `world = inverse(inverse_world)`.
+fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
+    use crate::types::Matrix4x4;
+
+    let bone_count = geom.granny_bones.len();
+    let section_count = geom.sections.len();
+
+    // ---- Compute local transforms from inverse world matrices ----
+    // world[i] = inverse(inverse_world[i])
+    // local[i] = inverse_world[parent] * world[i]   (for non-root bones)
+    // local[i] = world[i]                            (for root bones)
+    let world_matrices: Vec<Matrix4x4> = geom.granny_bones.iter().map(|bone| {
+        bone.inverse_world_matrix.inverse().unwrap_or_default()
+    }).collect();
+
+    struct LocalTransform {
+        flags: u32,
+        position: [f32; 3],
+        orientation: [f32; 4], // quaternion xyzw
+        scale_shear: [[f32; 3]; 3], // 3×3 row-major
+    }
+
+    let local_transforms: Vec<LocalTransform> = geom.granny_bones.iter().enumerate().map(|(i, bone)| {
+        let local_matrix = if bone.parent_index >= 0 && (bone.parent_index as usize) < bone_count {
+            let parent_idx = bone.parent_index as usize;
+            // local = parent_inverse_world * child_world
+            geom.granny_bones[parent_idx].inverse_world_matrix.multiply(&world_matrices[i])
+        } else {
+            world_matrices[i].clone()
+        };
+
+        // Extract position from row 3 (translation row in row-major DX convention)
+        let position = local_matrix.translation();
+
+        // Extract the upper-left 3×3 for rotation + scale
+        let m = &local_matrix.rows;
+        // Column lengths = scale factors
+        let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+        let sy = (m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1]).sqrt();
+        let sz = (m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2]).sqrt();
+
+        // Build a pure rotation matrix by removing scale
+        let rot_matrix = if sx > 1e-7 && sy > 1e-7 && sz > 1e-7 {
+            Matrix4x4 {
+                rows: [
+                    [m[0][0] / sx, m[0][1] / sy, m[0][2] / sz, 0.0],
+                    [m[1][0] / sx, m[1][1] / sy, m[1][2] / sz, 0.0],
+                    [m[2][0] / sx, m[2][1] / sy, m[2][2] / sz, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            }
+        } else {
+            Matrix4x4::identity()
+        };
+
+        let orientation = rot_matrix.to_quaternion();
+
+        // Scale_shear: Granny stores this as the 3×3 matrix S where M_3x3 = R * S
+        // So S = R^T * M_3x3 (since R is orthogonal, R^-1 = R^T)
+        let rt = rot_matrix.transpose();
+        let scale_shear = [
+            [
+                rt.rows[0][0] * m[0][0] + rt.rows[0][1] * m[1][0] + rt.rows[0][2] * m[2][0],
+                rt.rows[0][0] * m[0][1] + rt.rows[0][1] * m[1][1] + rt.rows[0][2] * m[2][1],
+                rt.rows[0][0] * m[0][2] + rt.rows[0][1] * m[1][2] + rt.rows[0][2] * m[2][2],
+            ],
+            [
+                rt.rows[1][0] * m[0][0] + rt.rows[1][1] * m[1][0] + rt.rows[1][2] * m[2][0],
+                rt.rows[1][0] * m[0][1] + rt.rows[1][1] * m[1][1] + rt.rows[1][2] * m[2][1],
+                rt.rows[1][0] * m[0][2] + rt.rows[1][1] * m[1][2] + rt.rows[1][2] * m[2][2],
+            ],
+            [
+                rt.rows[2][0] * m[0][0] + rt.rows[2][1] * m[1][0] + rt.rows[2][2] * m[2][0],
+                rt.rows[2][0] * m[0][1] + rt.rows[2][1] * m[1][1] + rt.rows[2][2] * m[2][1],
+                rt.rows[2][0] * m[0][2] + rt.rows[2][1] * m[1][2] + rt.rows[2][2] * m[2][2],
+            ],
+        ];
+
+        // Determine which flags to set based on whether values differ from defaults
+        let mut flags = 0u32;
+        if position[0].abs() > 1e-7 || position[1].abs() > 1e-7 || position[2].abs() > 1e-7 {
+            flags |= GRANNY_HAS_POSITION;
+        }
+        if (orientation[0].abs() > 1e-7) || (orientation[1].abs() > 1e-7)
+            || (orientation[2].abs() > 1e-7) || ((orientation[3] - 1.0).abs() > 1e-7) {
+            flags |= GRANNY_HAS_ORIENTATION;
+        }
+        let is_identity_scale =
+            (scale_shear[0][0] - 1.0).abs() < 1e-5 && scale_shear[0][1].abs() < 1e-5 && scale_shear[0][2].abs() < 1e-5
+            && scale_shear[1][0].abs() < 1e-5 && (scale_shear[1][1] - 1.0).abs() < 1e-5 && scale_shear[1][2].abs() < 1e-5
+            && scale_shear[2][0].abs() < 1e-5 && scale_shear[2][1].abs() < 1e-5 && (scale_shear[2][2] - 1.0).abs() < 1e-5;
+        if !is_identity_scale {
+            flags |= GRANNY_HAS_SCALE_SHEAR;
+        }
+
+        LocalTransform { flags, position, orientation, scale_shear }
+    }).collect();
+
+    // ---- Layout ----
+    // [0x00..0x60]: File info header (96 bytes)
+    //   [0x10..0x18]: u64 filename string offset
+    //   [0x30..0x34]: u32 skeleton count (1)
+    //   [0x34..0x3C]: u64 skeleton offset
+    //   [0x54..0x58]: i32 mesh count
+    //   [0x58..0x60]: u64 mesh array ptr
+    // [0x60..0x80]: Skeleton struct (32 bytes)
+    //   [+0x00..+0x08]: u64 name string offset
+    //   [+0x08..+0x10]: padding
+    //   [+0x10..+0x18]: u64 bone name (reuse first bone name)
+    //   [+0x18..+0x1C]: u32 bone count
+    //   [+0x1C..+0x24]: u64 bones array offset
+    // [0x84..0x88]: padding to align bones to 8 bytes
+    // [0x88..]: Bone array (bone_count × 164 bytes)
+    // After bones: Mesh pointer array (section_count × 8 bytes)
+    // After mesh ptrs: Mesh structs (section_count × 8 bytes)
+    // String table
+
+    let header_size: usize = 96; // 0x60
+    let skeleton_offset: u64 = header_size as u64;
+    let skeleton_size: usize = 36;
+    // Align bones start to 8 bytes
+    let bones_start_unaligned = header_size + skeleton_size;
+    let bones_start = (bones_start_unaligned + 7) & !7; // 136 = 0x88
+    let bones_end = bones_start + bone_count * GRANNY_BONE_SIZE;
+
+    let mesh_ptrs_start = bones_end;
+    let mesh_structs_start = mesh_ptrs_start + section_count * 8;
+    let strings_start = mesh_structs_start + section_count * 8;
+
+    let mut buf = vec![0u8; strings_start];
+    let mut cursor = Cursor::new(&mut buf);
+
+    // ---- File info header [0x00..0x60] ----
+    // [0x30]: u32 skeleton_count = 1
+    cursor.seek(std::io::SeekFrom::Start(0x30))?;
+    cursor.write_u32::<LittleEndian>(1)?;
+    // [0x34]: u64 skeleton_offset
+    cursor.write_u64::<LittleEndian>(skeleton_offset)?;
+    // [0x54]: i32 mesh_count
+    cursor.seek(std::io::SeekFrom::Start(0x54))?;
+    cursor.write_i32::<LittleEndian>(section_count as i32)?;
+    // [0x58]: u64 mesh_pointer_array_offset
+    cursor.write_u64::<LittleEndian>(mesh_ptrs_start as u64)?;
+
+    // ---- Skeleton struct [0x60..] ----
+    // +0x18: u32 bone_count
+    cursor.seek(std::io::SeekFrom::Start(skeleton_offset + 0x18))?;
+    cursor.write_u32::<LittleEndian>(bone_count as u32)?;
+    // +0x1C: u64 bones_array_offset
+    cursor.write_u64::<LittleEndian>(bones_start as u64)?;
+
+    // ---- Bone array ----
+    struct StringFixup {
+        position: usize,
+        string: String,
+    }
+    let mut string_fixups: Vec<StringFixup> = Vec::new();
+
+    for (i, bone) in geom.granny_bones.iter().enumerate() {
+        let base = bones_start + i * GRANNY_BONE_SIZE;
+        let lt = &local_transforms[i];
+
+        // +0x00: u64 name offset (placeholder)
+        string_fixups.push(StringFixup {
+            position: base,
+            string: bone.name.clone(),
+        });
+
+        // +0x08: i32 parent_index
+        cursor.seek(std::io::SeekFrom::Start((base + 0x08) as u64))?;
+        cursor.write_i32::<LittleEndian>(bone.parent_index)?;
+
+        // +0x0C: u32 local_transform_flags
+        cursor.write_u32::<LittleEndian>(lt.flags)?;
+
+        // +0x10: f32×3 local position
+        for &v in &lt.position {
+            cursor.write_f32::<LittleEndian>(v)?;
+        }
+
+        // +0x1C: f32×4 local orientation (quaternion xyzw)
+        for &v in &lt.orientation {
+            cursor.write_f32::<LittleEndian>(v)?;
+        }
+
+        // +0x2C: f32×9 local scale_shear (3×3 row-major)
+        for row in &lt.scale_shear {
+            for &v in row {
+                cursor.write_f32::<LittleEndian>(v)?;
+            }
+        }
+
+        // +0x50: f32×16 inverse_world_matrix (4×4 row-major)
+        for row in &bone.inverse_world_matrix.rows {
+            for &val in row {
+                cursor.write_f32::<LittleEndian>(val)?;
+            }
+        }
+
+        // +0x90: f32 LOD_error
+        // Compute as bounding sphere radius — a reasonable default for bones
+        cursor.write_f32::<LittleEndian>(geom.bounding_sphere.radius)?;
+
+        // +0x94: 16 bytes extended data (already zeros from initialization)
+    }
+
+    // ---- Mesh pointer array + mesh structs ----
+    for i in 0..section_count {
+        let ptr_pos = mesh_ptrs_start + i * 8;
+        let struct_pos = mesh_structs_start + i * 8;
+
+        cursor.seek(std::io::SeekFrom::Start(ptr_pos as u64))?;
+        cursor.write_u64::<LittleEndian>(struct_pos as u64)?;
+
+        string_fixups.push(StringFixup {
+            position: struct_pos,
+            string: format!("mesh_{}", i),
+        });
+    }
+
+    // ---- String table ----
+    // Also add skeleton name and filename to fixups
+    let skeleton_name = "Skeleton".to_string();
+    string_fixups.push(StringFixup {
+        position: skeleton_offset as usize, // skeleton +0x00: name offset
+        string: skeleton_name,
+    });
+
+    drop(cursor);
+
+    let mut string_offsets: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for fixup in &string_fixups {
+        if !string_offsets.contains_key(&fixup.string) {
+            let offset = buf.len();
+            string_offsets.insert(fixup.string.clone(), offset);
+            buf.extend_from_slice(fixup.string.as_bytes());
+            buf.push(0); // null terminator
+        }
+    }
+
+    // ---- Fix up string offsets ----
+    for fixup in &string_fixups {
+        let string_offset = string_offsets[&fixup.string] as u64;
+        let pos = fixup.position;
+        buf[pos..pos + 8].copy_from_slice(&string_offset.to_le_bytes());
+    }
+
+    Ok(buf)
 }
 
 /// Build the cached data chunk (0x700).
@@ -289,6 +575,7 @@ fn fixup_packed_array_header(
 mod tests {
     use super::*;
     use crate::types::*;
+    use crate::ugx::GrannyBone;
     use crate::univert_packer::{UnivertPacker, UnpackedVertex, MAX_UV};
     use crate::vertex_element::VertexElementType;
 
@@ -466,5 +753,82 @@ mod tests {
         let orig_indices = original.get_section_indices(0);
         let read_indices = read_back.get_section_indices(0);
         assert_eq!(read_indices, orig_indices);
+    }
+
+    #[test]
+    fn test_write_read_granny_bones_roundtrip() {
+        let mut geom = make_test_geom();
+
+        // Add granny bones with non-identity matrices
+        geom.granny_bones = vec![
+            GrannyBone {
+                name: "root".to_string(),
+                parent_index: -1,
+                inverse_world_matrix: Matrix4x4 {
+                    rows: [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+            },
+            GrannyBone {
+                name: "spine".to_string(),
+                parent_index: 0,
+                inverse_world_matrix: Matrix4x4 {
+                    rows: [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, -1.0, 0.0, 0.0],
+                        [0.5, -2.0, 1.5, 1.0],
+                    ],
+                },
+            },
+        ];
+
+        // Write to UGX bytes
+        let bytes = write_ugx(&geom).unwrap();
+
+        // Read back
+        let read_back = UgxGeom::read(&bytes).unwrap();
+
+        // Verify granny bones survived
+        assert_eq!(read_back.granny_bones.len(), 2);
+
+        let gb0 = &read_back.granny_bones[0];
+        assert_eq!(gb0.name, "root");
+        assert_eq!(gb0.parent_index, -1);
+        // Identity matrix
+        for row in 0..4 {
+            for col in 0..4 {
+                let expected = if row == col { 1.0 } else { 0.0 };
+                assert!(
+                    (gb0.inverse_world_matrix.rows[row][col] - expected).abs() < 1e-6,
+                    "gb0 matrix[{}][{}] = {}, expected {}",
+                    row, col, gb0.inverse_world_matrix.rows[row][col], expected
+                );
+            }
+        }
+
+        let gb1 = &read_back.granny_bones[1];
+        assert_eq!(gb1.name, "spine");
+        assert_eq!(gb1.parent_index, 0);
+        // Non-identity matrix
+        let expected_rows = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0, 0.0],
+            [0.5, -2.0, 1.5, 1.0],
+        ];
+        for row in 0..4 {
+            for col in 0..4 {
+                assert!(
+                    (gb1.inverse_world_matrix.rows[row][col] - expected_rows[row][col]).abs() < 1e-6,
+                    "gb1 matrix[{}][{}] = {}, expected {}",
+                    row, col, gb1.inverse_world_matrix.rows[row][col], expected_rows[row][col]
+                );
+            }
+        }
     }
 }
