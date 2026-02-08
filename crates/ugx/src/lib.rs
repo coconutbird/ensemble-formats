@@ -37,6 +37,12 @@ pub use ugx::UgxGeom;
 mod gltf_export;
 pub use gltf_export::{export_to_gltf, export_to_gltf_with_buffer_name, GltfExport, GltfExportOptions};
 
+mod gltf_import;
+pub use gltf_import::{import_from_gltf, GltfImportOptions};
+
+mod ugx_writer;
+pub use ugx_writer::write_ugx;
+
 #[cfg(test)]
 mod tests {
     use super::*;

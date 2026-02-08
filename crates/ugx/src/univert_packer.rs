@@ -5,7 +5,7 @@
 //! in what order, along with type specifiers for each attribute.
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::Read;
+use std::io::{Read, Write};
 
 use crate::error::Result;
 use crate::vertex_element::VertexElementType;
@@ -257,6 +257,59 @@ impl UnivertPacker {
         Ok(vertex)
     }
 
+    /// Pack a single vertex into raw bytes (inverse of `unpack_vertex()`).
+    pub fn pack_vertex<W: Write>(&self, writer: &mut W, vertex: &UnpackedVertex) -> Result<()> {
+        let mut chars = self.pack_order.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            match c.to_ascii_uppercase() {
+                'P' => {
+                    let v = [vertex.position[0], vertex.position[1], vertex.position[2], 1.0];
+                    self.pos_type.pack(writer, v)?;
+                }
+                'B' => {
+                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    self.basis_type.pack(writer, vertex.tangent)?;
+                    self.basis_type.pack(writer, vertex.binormal)?;
+                }
+                'A' => {
+                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    self.tangent_type.pack(writer, vertex.tangent)?;
+                }
+                'X' => {
+                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    let scale = [vertex.tangent[3], vertex.binormal[3], 0.0, 1.0];
+                    self.basis_scale_type.pack(writer, scale)?;
+                }
+                'N' => {
+                    let v = [vertex.normal[0], vertex.normal[1], vertex.normal[2], 1.0];
+                    self.normal_type.pack(writer, v)?;
+                }
+                'T' => {
+                    let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+                    if idx < MAX_UV && idx < 4 {
+                        let v = [vertex.texcoords[idx][0], vertex.texcoords[idx][1], 0.0, 1.0];
+                        self.uv_types[idx].pack(writer, v)?;
+                    }
+                }
+                'S' => {
+                    self.indices_type.pack_as_indices(writer, vertex.bone_indices)?;
+                    self.weights_type.pack(writer, vertex.bone_weights)?;
+                }
+                'D' => {
+                    self.diffuse_type.pack(writer, vertex.diffuse)?;
+                }
+                'I' => {
+                    let v = [vertex.index as f32, 0.0, 0.0, 1.0];
+                    self.index_type.pack(writer, v)?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
     /// Check if this packer is empty (no pack order).
     pub fn is_empty(&self) -> bool {
         self.pack_order.is_empty()
@@ -309,5 +362,71 @@ mod tests {
 
         // Position (12) + Normal (12) + UV (8) + Indices (4) + Weights (4) = 40
         assert_eq!(packer.vertex_size(), 40);
+    }
+
+    #[test]
+    fn test_pack_unpack_vertex_roundtrip() {
+        use std::io::Cursor;
+
+        let mut packer = UnivertPacker::default();
+        packer.pack_order = "PNT0".to_string();
+        packer.pos_type = VertexElementType::Float3;
+        packer.normal_type = VertexElementType::Float3;
+        packer.uv_types = [VertexElementType::Float2; MAX_UV];
+
+        let original = UnpackedVertex {
+            position: [1.0, 2.0, 3.0],
+            normal: [0.0, 1.0, 0.0],
+            texcoords: [[0.5, 0.75], [0.0; 2], [0.0; 2], [0.0; 2]],
+            num_texcoords: 1,
+            ..Default::default()
+        };
+
+        let mut buf = Vec::new();
+        packer.pack_vertex(&mut buf, &original).unwrap();
+        assert_eq!(buf.len(), packer.vertex_size());
+
+        let mut cursor = Cursor::new(&buf);
+        let unpacked = packer.unpack_vertex(&mut cursor).unwrap();
+
+        assert_eq!(unpacked.position, original.position);
+        assert_eq!(unpacked.normal, original.normal);
+        assert_eq!(unpacked.texcoords[0], original.texcoords[0]);
+    }
+
+    #[test]
+    fn test_pack_unpack_vertex_with_skin_roundtrip() {
+        use std::io::Cursor;
+
+        let mut packer = UnivertPacker::default();
+        packer.pack_order = "PNT0S".to_string();
+        packer.pos_type = VertexElementType::Float3;
+        packer.normal_type = VertexElementType::Float3;
+        packer.uv_types = [VertexElementType::Float2; MAX_UV];
+        packer.indices_type = VertexElementType::UByte4;
+        packer.weights_type = VertexElementType::Float4;
+
+        let original = UnpackedVertex {
+            position: [-1.0, 5.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            texcoords: [[0.25, 0.5], [0.0; 2], [0.0; 2], [0.0; 2]],
+            num_texcoords: 1,
+            bone_indices: [3, 1, 0, 0],
+            bone_weights: [0.7, 0.3, 0.0, 0.0],
+            ..Default::default()
+        };
+
+        let mut buf = Vec::new();
+        packer.pack_vertex(&mut buf, &original).unwrap();
+        assert_eq!(buf.len(), packer.vertex_size());
+
+        let mut cursor = Cursor::new(&buf);
+        let unpacked = packer.unpack_vertex(&mut cursor).unwrap();
+
+        assert_eq!(unpacked.position, original.position);
+        assert_eq!(unpacked.normal, original.normal);
+        assert_eq!(unpacked.texcoords[0], original.texcoords[0]);
+        assert_eq!(unpacked.bone_indices, original.bone_indices);
+        assert_eq!(unpacked.bone_weights, original.bone_weights);
     }
 }
