@@ -1,9 +1,8 @@
 //! XTT writer implementation.
 
 use crate::{
-    Result, XttFile, XttHeader, XttLinker,
-    CHUNK_XTT_HEADER, CHUNK_ATLAS_LINK, CHUNK_ATLAS_ALBEDO, CHUNK_ROAD,
-    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN,
+    Result, XttFile, XttHeader, XttLinker, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
+    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER,
 };
 use byteorder::{BigEndian, WriteBytesExt};
 use ecf::EcfWriter;
@@ -91,4 +90,3 @@ impl XttWriter {
         Ok(buffer)
     }
 }
-

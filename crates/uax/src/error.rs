@@ -44,4 +44,3 @@ pub enum Error {
     #[error("Failed to read null-terminated string at offset 0x{0:X}")]
     StringReadError(u64),
 }
-

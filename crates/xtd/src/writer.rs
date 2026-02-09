@@ -1,9 +1,8 @@
 //! XTD writer implementation.
 
 use crate::{
-    Result, XtdFile, XtdHeader, XtdVisualChunk,
-    CHUNK_XTD_HEADER, CHUNK_TERRAIN, CHUNK_ATLAS, CHUNK_TESS,
-    CHUNK_LIGHTING, CHUNK_AO, CHUNK_ALPHA,
+    Result, XtdFile, XtdHeader, XtdVisualChunk, CHUNK_ALPHA, CHUNK_AO, CHUNK_ATLAS, CHUNK_LIGHTING,
+    CHUNK_TERRAIN, CHUNK_TESS, CHUNK_XTD_HEADER,
 };
 use byteorder::{BigEndian, WriteBytesExt};
 use ecf::EcfWriter;
@@ -87,4 +86,3 @@ impl XtdWriter {
         Ok(buffer)
     }
 }
-

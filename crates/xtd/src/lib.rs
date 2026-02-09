@@ -26,7 +26,7 @@ mod writer;
 pub use writer::XtdWriter;
 
 // ============================================================================
-// XTD Constants  
+// XTD Constants
 // ============================================================================
 
 /// XTD file version.
@@ -103,15 +103,23 @@ mod tests {
         // Print first 64 bytes of both for comparison
         println!("\nOriginal header (first 64 bytes):");
         for i in 0..64 {
-            if i % 16 == 0 { print!("  {:04X}: ", i); }
+            if i % 16 == 0 {
+                print!("  {:04X}: ", i);
+            }
             print!("{:02X} ", original[i]);
-            if i % 16 == 15 { println!(); }
+            if i % 16 == 15 {
+                println!();
+            }
         }
         println!("\nRewritten header (first 64 bytes):");
         for i in 0..64 {
-            if i % 16 == 0 { print!("  {:04X}: ", i); }
+            if i % 16 == 0 {
+                print!("  {:04X}: ", i);
+            }
             print!("{:02X} ", rewritten[i]);
-            if i % 16 == 15 { println!(); }
+            if i % 16 == 15 {
+                println!();
+            }
         }
 
         // Compare byte-for-byte, skipping adler32 (bytes 8-11)
@@ -119,11 +127,15 @@ mod tests {
         let min_len = original.len().min(rewritten.len());
         for i in 0..min_len {
             // Skip adler32 field (offset 8-11)
-            if i >= 8 && i <= 11 { continue; }
+            if i >= 8 && i <= 11 {
+                continue;
+            }
 
             if original[i] != rewritten[i] {
-                println!("Diff at offset 0x{:X}: original=0x{:02X}, rewritten=0x{:02X}",
-                         i, original[i], rewritten[i]);
+                println!(
+                    "Diff at offset 0x{:X}: original=0x{:02X}, rewritten=0x{:02X}",
+                    i, original[i], rewritten[i]
+                );
                 diff_count += 1;
                 if diff_count >= 20 {
                     println!("... (more differences)");
@@ -138,8 +150,10 @@ mod tests {
             if original.len() != rewritten.len() {
                 println!("Size mismatch: {} vs {}", original.len(), rewritten.len());
             }
-            panic!("XTD roundtrip failed: {} non-checksum differences!", diff_count);
+            panic!(
+                "XTD roundtrip failed: {} non-checksum differences!",
+                diff_count
+            );
         }
     }
 }
-

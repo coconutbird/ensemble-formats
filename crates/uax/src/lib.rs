@@ -60,4 +60,3 @@ pub const UAX_CHUNK_ID: u64 = 0x0700;
 
 /// Expected FromFileName value in valid UAX files
 pub const UAX_FROM_FILENAME: &str = "gr2ugx";
-

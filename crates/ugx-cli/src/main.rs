@@ -42,9 +42,9 @@ enum Commands {
         #[arg(long)]
         no_skeleton: bool,
     },
-    /// Convert glTF to UGX format
+    /// Convert glTF/GLB to UGX format
     FromGltf {
-        /// Input glTF file
+        /// Input glTF or GLB file
         #[arg(short, long)]
         input: PathBuf,
         /// Output UGX file
@@ -270,45 +270,127 @@ fn cmd_to_gltf(
     Ok(())
 }
 
+/// Parse a GLB file and return the JSON string and binary buffer.
+fn parse_glb(data: &[u8]) -> Result<(String, Option<Vec<u8>>), Box<dyn std::error::Error>> {
+    // GLB Header: magic (4) + version (4) + length (4) = 12 bytes
+    if data.len() < 12 {
+        return Err("GLB file too small".into());
+    }
+
+    let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    if magic != 0x46546C67 {
+        // "glTF" in little-endian
+        return Err(format!("Invalid GLB magic: 0x{:08X}", magic).into());
+    }
+
+    let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+    if version != 2 {
+        return Err(format!("Unsupported GLB version: {}", version).into());
+    }
+
+    let _total_length = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+
+    // Parse chunks
+    let mut offset = 12usize;
+    let mut json_str = String::new();
+    let mut bin_data: Option<Vec<u8>> = None;
+
+    while offset + 8 <= data.len() {
+        let chunk_length = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        let chunk_type = u32::from_le_bytes([
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+        ]);
+        offset += 8;
+
+        if offset + chunk_length > data.len() {
+            return Err("GLB chunk extends beyond file".into());
+        }
+
+        match chunk_type {
+            0x4E4F534A => {
+                // "JSON" in little-endian
+                json_str = String::from_utf8(data[offset..offset + chunk_length].to_vec())?;
+            }
+            0x004E4942 => {
+                // "BIN\0" in little-endian
+                bin_data = Some(data[offset..offset + chunk_length].to_vec());
+            }
+            _ => {
+                // Unknown chunk type, skip
+            }
+        }
+
+        offset += chunk_length;
+    }
+
+    if json_str.is_empty() {
+        return Err("GLB file missing JSON chunk".into());
+    }
+
+    Ok((json_str, bin_data))
+}
+
 fn cmd_from_gltf(
     input: &PathBuf,
     output: &PathBuf,
     no_skeleton: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Read glTF JSON
-    let json_str = fs::read_to_string(input)?;
+    // Check if input is GLB or glTF based on extension
+    let is_glb = input
+        .extension()
+        .map(|ext| ext.eq_ignore_ascii_case("glb"))
+        .unwrap_or(false);
 
-    // Parse JSON to find the buffer URI
-    let root: serde_json::Value = serde_json::from_str(&json_str)?;
-    let buffer_data = if let Some(buffers) = root.get("buffers").and_then(|b| b.as_array()) {
-        if let Some(first_buffer) = buffers.first() {
-            if let Some(uri) = first_buffer.get("uri").and_then(|u| u.as_str()) {
-                // Check if it's a file path (not base64 embedded)
-                if !uri.starts_with("data:") {
-                    // Resolve relative to the input file's directory
-                    let base_dir = input.parent().unwrap_or(std::path::Path::new("."));
-                    let bin_path = base_dir.join(uri);
-                    if bin_path.exists() {
-                        Some(fs::read(&bin_path)?)
+    let (json_str, buffer_data) = if is_glb {
+        // Parse GLB container
+        let data = fs::read(input)?;
+        parse_glb(&data)?
+    } else {
+        // Read glTF JSON
+        let json_str = fs::read_to_string(input)?;
+
+        // Parse JSON to find the buffer URI
+        let root: serde_json::Value = serde_json::from_str(&json_str)?;
+        let buffer_data = if let Some(buffers) = root.get("buffers").and_then(|b| b.as_array()) {
+            if let Some(first_buffer) = buffers.first() {
+                if let Some(uri) = first_buffer.get("uri").and_then(|u| u.as_str()) {
+                    // Check if it's a file path (not base64 embedded)
+                    if !uri.starts_with("data:") {
+                        // Resolve relative to the input file's directory
+                        let base_dir = input.parent().unwrap_or(std::path::Path::new("."));
+                        let bin_path = base_dir.join(uri);
+                        if bin_path.exists() {
+                            Some(fs::read(&bin_path)?)
+                        } else {
+                            return Err(format!(
+                                "External buffer file not found: {} (expected at {})",
+                                uri,
+                                bin_path.display()
+                            )
+                            .into());
+                        }
                     } else {
-                        return Err(format!(
-                            "External buffer file not found: {} (expected at {})",
-                            uri,
-                            bin_path.display()
-                        )
-                        .into());
+                        None // Base64 embedded, will be handled by import_from_gltf
                     }
                 } else {
-                    None // Base64 embedded, will be handled by import_from_gltf
+                    None
                 }
             } else {
                 None
             }
         } else {
             None
-        }
-    } else {
-        None
+        };
+
+        (json_str, buffer_data)
     };
 
     let options = GltfImportOptions {

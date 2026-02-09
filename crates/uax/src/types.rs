@@ -134,4 +134,3 @@ pub fn rebase_pointer(stored: u64) -> u64 {
 pub fn unrebase_pointer(actual: u64) -> u64 {
     actual + POINTER_REBASE_OFFSET
 }
-

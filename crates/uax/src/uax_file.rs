@@ -227,8 +227,7 @@ fn read_cstring(data: &[u8], offset: u64) -> Result<String> {
         .position(|&b| b == 0)
         .unwrap_or(bytes.len().min(256));
 
-    String::from_utf8(bytes[..end].to_vec())
-        .map_err(|_| Error::StringReadError(offset as u64))
+    String::from_utf8(bytes[..end].to_vec()).map_err(|_| Error::StringReadError(offset as u64))
 }
 
 #[cfg(test)]
@@ -286,7 +285,10 @@ mod tests {
             panic!("Found {} byte differences!", diff_count);
         }
 
-        println!("Round-trip test passed! All {} bytes identical.", original_data.len());
+        println!(
+            "Round-trip test passed! All {} bytes identical.",
+            original_data.len()
+        );
     }
 
     #[test]
@@ -307,12 +309,17 @@ mod tests {
                 let written_data = uax.to_bytes().expect("Failed to write UAX");
 
                 assert_eq!(
-                    original_data, written_data,
+                    original_data,
+                    written_data,
                     "Round-trip failed for {:?}",
                     path.file_name()
                 );
                 tested += 1;
-                println!("✓ {:?} - {} bytes", path.file_name().unwrap(), original_data.len());
+                println!(
+                    "✓ {:?} - {} bytes",
+                    path.file_name().unwrap(),
+                    original_data.len()
+                );
             }
         }
         println!("\nAll {} UAX files round-trip perfectly!", tested);

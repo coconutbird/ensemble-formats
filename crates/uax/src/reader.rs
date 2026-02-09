@@ -46,7 +46,10 @@ impl UaxAnimation {
         // Skip it to get to the actual granny_file_info structure.
         const GRANNY_HEADER_SIZE: usize = 32;
         if chunk_data.len() <= GRANNY_HEADER_SIZE {
-            return Err(Error::ChunkTooSmall(chunk_data.len(), GRANNY_HEADER_SIZE + 1));
+            return Err(Error::ChunkTooSmall(
+                chunk_data.len(),
+                GRANNY_HEADER_SIZE + 1,
+            ));
         }
         let file_info_data = &chunk_data[GRANNY_HEADER_SIZE..];
 
@@ -99,12 +102,11 @@ impl UaxAnimation {
         let track_groups_offset = rebase_pointer(track_groups_stored);
 
         // Get motion extraction flags from first track group if available
-        let motion_extraction_flags =
-            if file_track_group_count > 0 && track_groups_offset != 0 {
-                read_track_group_flags(data, track_groups_offset)?
-            } else {
-                0
-            };
+        let motion_extraction_flags = if file_track_group_count > 0 && track_groups_offset != 0 {
+            read_track_group_flags(data, track_groups_offset)?
+        } else {
+            0
+        };
 
         // Animations is animation* (direct pointer to animation struct array),
         // NOT animation** (pointer to pointer array)
@@ -155,8 +157,7 @@ fn read_cstring(data: &[u8], offset: u64) -> Result<String> {
         .position(|&b| b == 0)
         .unwrap_or(bytes.len().min(256));
 
-    String::from_utf8(bytes[..end].to_vec())
-        .map_err(|_| Error::StringReadError(offset as u64))
+    String::from_utf8(bytes[..end].to_vec()).map_err(|_| Error::StringReadError(offset as u64))
 }
 
 /// Rebase a stored pointer to get actual offset in chunk data.

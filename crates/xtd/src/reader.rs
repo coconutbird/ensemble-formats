@@ -1,9 +1,8 @@
 //! XTD reader implementation.
 
 use crate::{
-    ChunkMeta, Error, Result, XtdFile, XtdHeader, XtdVisualChunk, XTD_VERSION,
-    CHUNK_XTD_HEADER, CHUNK_TERRAIN, CHUNK_ATLAS, CHUNK_TESS,
-    CHUNK_LIGHTING, CHUNK_AO, CHUNK_ALPHA,
+    ChunkMeta, Error, Result, XtdFile, XtdHeader, XtdVisualChunk, CHUNK_ALPHA, CHUNK_AO,
+    CHUNK_ATLAS, CHUNK_LIGHTING, CHUNK_TERRAIN, CHUNK_TESS, CHUNK_XTD_HEADER, XTD_VERSION,
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;
@@ -85,7 +84,7 @@ impl XtdReader {
         }
 
         let mut cursor = Cursor::new(data);
-        
+
         let version = cursor.read_i32::<BigEndian>()?;
         if version != XTD_VERSION {
             return Err(Error::InvalidVersion {
@@ -141,4 +140,3 @@ impl XtdReader {
         })
     }
 }
-

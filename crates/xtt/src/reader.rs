@@ -1,9 +1,8 @@
 //! XTT reader implementation.
 
 use crate::{
-    ChunkMeta, Error, Result, XttFile, XttHeader, XttLinker, XTT_VERSION,
-    CHUNK_XTT_HEADER, CHUNK_ATLAS_LINK, CHUNK_ATLAS_ALBEDO, CHUNK_ROAD,
-    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN,
+    ChunkMeta, Error, Result, XttFile, XttHeader, XttLinker, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
+    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, XTT_VERSION,
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;
@@ -126,7 +125,7 @@ impl XttReader {
 
         // Rest is splat + decal data
         let remaining = data[XttLinker::HEADER_SIZE..].to_vec();
-        
+
         Ok(XttLinker {
             grid_x,
             grid_z,
@@ -137,9 +136,8 @@ impl XttReader {
             is_fully_opaque,
             num_splat_layers,
             num_decal_layers,
-            splat_data: remaining.clone(),  // For now, store all as splat
+            splat_data: remaining.clone(), // For now, store all as splat
             decal_data: Vec::new(),
         })
     }
 }
-
