@@ -278,10 +278,35 @@ fn cmd_from_gltf(
     // Read glTF JSON
     let json_str = fs::read_to_string(input)?;
 
-    // Check for external .bin file
-    let bin_path = input.with_extension("bin");
-    let buffer_data = if bin_path.exists() {
-        Some(fs::read(&bin_path)?)
+    // Parse JSON to find the buffer URI
+    let root: serde_json::Value = serde_json::from_str(&json_str)?;
+    let buffer_data = if let Some(buffers) = root.get("buffers").and_then(|b| b.as_array()) {
+        if let Some(first_buffer) = buffers.first() {
+            if let Some(uri) = first_buffer.get("uri").and_then(|u| u.as_str()) {
+                // Check if it's a file path (not base64 embedded)
+                if !uri.starts_with("data:") {
+                    // Resolve relative to the input file's directory
+                    let base_dir = input.parent().unwrap_or(std::path::Path::new("."));
+                    let bin_path = base_dir.join(uri);
+                    if bin_path.exists() {
+                        Some(fs::read(&bin_path)?)
+                    } else {
+                        return Err(format!(
+                            "External buffer file not found: {} (expected at {})",
+                            uri,
+                            bin_path.display()
+                        )
+                        .into());
+                    }
+                } else {
+                    None // Base64 embedded, will be handled by import_from_gltf
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     } else {
         None
     };
