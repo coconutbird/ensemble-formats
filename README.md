@@ -10,6 +10,7 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 | `era`     | ERA archive format (encrypted ECF)      |
 | `xmb`     | XMB binary XML parser                   |
 | `ugx`     | UGX 3D model geometry parser            |
+| `ddx`     | DDX/DDS texture format reader/writer    |
 | `bdt`     | BDT binary data tree (packed documents) |
 | `era-cli` | CLI tool for ERA archives               |
 | `xmb-cli` | CLI tool for XMB files                  |
@@ -30,7 +31,7 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 | ------- | --------- | ------------ | --------------------------------------------------------------------------------------------------------- | ------------------ |
 | **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                                 | ✅ Implemented     |
 | **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data                                                                                   | ❌ Not implemented |
-| **DDX** | `.ddx`    | `0x13CF5D01` | Ensemble's compressed texture format. Supports DXT1/3/5, DXN, HDR variants, and custom "DXTQ" compression | ❌ Not implemented |
+| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression    | ✅ Implemented     |
 | **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                          | ❌ Not implemented |
 | **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                            | ❌ Not implemented |
 
@@ -97,15 +98,18 @@ ECF-based animation format:
 
 ### DDX (Texture)
 
-Ensemble's texture format supporting multiple compression types:
+DDX files come in two variants:
 
-- Standard DXT1/DXT3/DXT5
-- DXN (normal maps)
-- DXT5Y (luma/chroma)
-- DXT5H (HDR)
-- DXTQ variants (custom quantized compression)
+**Definitive Edition**: Standard DDS files (DirectDraw Surface) with `.ddx` extension. Magic: `0x20534444` ("DDS ").
 
-Header contains dimensions, mip count, format, and platform flags.
+**Xbox 360 (original)**: ECF container with:
+- File ID: `0x13CF5D01`
+- Header chunk: `0x1D8828C6ECAF45F2`
+- Mip0 chunk: `0x3F74B8E87D2B44BF`
+- MipChain chunk: `0x46F1FD3F394348B8`
+- Deflate-compressed mip data
+
+Supported formats: A8R8G8B8, A8B8G8R8, A8, DXT1/3/5, DXN, DXT5N, DXT5Y, DXT5H, A16B16G16R16F, and DXTQ variants.
 
 ### XTD/XTT (Terrain)
 
@@ -132,6 +136,16 @@ for entry in archive.entries() {
 let data = archive.read("data/objects.xml.xmb")?;
 let xmb = Xmb::parse(&data)?;
 let xml = xmb.to_xml()?;
+
+// Parse a DDX texture
+use ddx::DdxTexture;
+let texture_data = archive.read("art/system/default/defaultwhite.ddx")?;
+let texture = DdxTexture::from_bytes(&texture_data)?;
+println!("{}x{} {:?}", texture.info.width, texture.info.height, texture.info.data_format);
+
+// Write texture as standard DDS file
+let dds_bytes = texture.to_dds()?;
+std::fs::write("output.dds", dds_bytes)?;
 ```
 
 ## License

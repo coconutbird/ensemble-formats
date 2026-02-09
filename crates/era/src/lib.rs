@@ -181,7 +181,16 @@ mod tests {
         let archive = EraArchive::open("root.era").expect("Failed to open root.era");
         println!("ERA archive: {} entries", archive.len());
 
-        let search_terms = ["foxcannon", "mesh_turret", "mesh_barrel", "mesh_chassis", ".ugx", ".gr2", "vertex", ".vtx"];
+        let search_terms = [
+            "foxcannon",
+            "mesh_turret",
+            "mesh_barrel",
+            "mesh_chassis",
+            ".ugx",
+            ".gr2",
+            "vertex",
+            ".vtx",
+        ];
 
         for term in &search_terms {
             println!("\n=== Searching for '{}' ===", term);
@@ -190,8 +199,13 @@ mod tests {
             for (i, entry) in archive.iter().enumerate() {
                 if let Some(ref name) = entry.filename {
                     if name.to_lowercase().contains(&term_lower) {
-                        println!("  {}: {} ({} bytes -> {} bytes)",
-                            i, name, entry.compressed_size(), entry.decompressed_size());
+                        println!(
+                            "  {}: {} ({} bytes -> {} bytes)",
+                            i,
+                            name,
+                            entry.compressed_size(),
+                            entry.decompressed_size()
+                        );
                         count += 1;
                         if count > 20 {
                             println!("  ... and more");
