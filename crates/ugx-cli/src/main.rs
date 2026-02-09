@@ -5,7 +5,10 @@ use ecf::EcfReader;
 use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
-use ugx::{export_to_gltf_with_buffer_name, GltfExportOptions, UgxGeom};
+use ugx::{
+    export_to_gltf_with_buffer_name, import_from_gltf, write_ugx, GltfExportOptions,
+    GltfImportOptions, UgxGeom,
+};
 
 #[derive(Parser)]
 #[command(name = "ugx")]
@@ -39,6 +42,18 @@ enum Commands {
         #[arg(long)]
         no_skeleton: bool,
     },
+    /// Convert glTF to UGX format
+    FromGltf {
+        /// Input glTF file
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Output UGX file
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Exclude skeleton/bones from the import
+        #[arg(long)]
+        no_skeleton: bool,
+    },
     /// Dump ECF structure for debugging
     Dump {
         /// Input UGX file
@@ -58,6 +73,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             external_buffer,
             no_skeleton,
         } => cmd_to_gltf(&input, &output, external_buffer, no_skeleton)?,
+        Commands::FromGltf {
+            input,
+            output,
+            no_skeleton,
+        } => cmd_from_gltf(&input, &output, no_skeleton)?,
         Commands::Dump { input } => cmd_dump(&input)?,
     }
 
@@ -237,6 +257,50 @@ fn cmd_to_gltf(
     println!();
     println!(
         "Exported {} sections, {} materials, {} bones",
+        geom.sections.len(),
+        geom.materials.len(),
+        geom.bones.len()
+    );
+    println!(
+        "Total: {} vertices, {} triangles",
+        geom.total_vertices(),
+        geom.total_triangles()
+    );
+
+    Ok(())
+}
+
+fn cmd_from_gltf(
+    input: &PathBuf,
+    output: &PathBuf,
+    no_skeleton: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Read glTF JSON
+    let json_str = fs::read_to_string(input)?;
+
+    // Check for external .bin file
+    let bin_path = input.with_extension("bin");
+    let buffer_data = if bin_path.exists() {
+        Some(fs::read(&bin_path)?)
+    } else {
+        None
+    };
+
+    let options = GltfImportOptions {
+        include_skeleton: !no_skeleton,
+        include_materials: true,
+    };
+
+    let geom = import_from_gltf(&json_str, buffer_data.as_deref(), &options)?;
+
+    // Write UGX
+    let ugx_data = write_ugx(&geom)?;
+    fs::write(output, &ugx_data)?;
+
+    println!("Wrote {}", output.display());
+    println!();
+    println!(
+        "Imported {} sections, {} materials, {} bones",
         geom.sections.len(),
         geom.materials.len(),
         geom.bones.len()

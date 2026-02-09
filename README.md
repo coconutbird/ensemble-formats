@@ -10,6 +10,7 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 | `era`     | ERA archive format (encrypted ECF)      |
 | `xmb`     | XMB binary XML parser                   |
 | `ugx`     | UGX 3D model geometry parser            |
+| `uax`     | UAX animation format parser             |
 | `ddx`     | DDX/DDS texture format reader/writer    |
 | `bdt`     | BDT binary data tree (packed documents) |
 | `era-cli` | CLI tool for ERA archives               |
@@ -30,7 +31,7 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 | Format  | Extension | ECF File ID  | Description                                                                                           | Status             |
 | ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------ |
 | **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented     |
-| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data                                                                               | ❌ Not implemented |
+| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ Implemented     |
 | **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented     |
 | **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ❌ Not implemented |
 | **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ❌ Not implemented |
@@ -92,9 +93,18 @@ ECF-based 3D model format containing:
 
 ### UAX (Animation)
 
-ECF-based animation format:
+ECF-based animation format using RAD Game Tools' Granny SDK internally.
 
-- **Chunk 0x700**: Animation data
+- **Chunk 0x700**: Granny file_info data with animation metadata
+
+The chunk contains a 32-byte header followed by a Granny `file_info` structure. Pointers within the structure are stored with a +0x10 offset that must be subtracted. The format uses 32-bit pointers in the file_info but 64-bit pointers inside animation structs.
+
+Key animation fields:
+- Name (partial path from original .max file)
+- Duration (seconds)
+- TimeStep (keyframe interval)
+- Oversampling
+- TrackGroupCount
 
 ### DDX (Texture)
 
@@ -147,6 +157,12 @@ println!("{}x{} {:?}", texture.info.width, texture.info.height, texture.info.dat
 // Write texture as standard DDS file
 let dds_bytes = texture.to_dds()?;
 std::fs::write("output.dds", dds_bytes)?;
+
+// Parse a UAX animation
+use uax::UaxAnimation;
+let anim_data = archive.read("art/campaign/npc/forge_01/shotgun_attack_01.uax")?;
+let anim = UaxAnimation::from_reader(std::io::Cursor::new(&anim_data))?;
+println!("Animation: {:?}, Duration: {}s", anim.name(), anim.duration());
 ```
 
 ## License

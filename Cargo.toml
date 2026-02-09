@@ -8,6 +8,8 @@ members = [
     "crates/uax",
     "crates/xmb",
     "crates/ugx",
+    "crates/xtd",
+    "crates/xtt",
     "crates/era-cli",
     "crates/xmb-cli",
     "crates/ugx-cli",
@@ -29,6 +31,8 @@ era = { path = "crates/era" }
 uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
 ugx = { path = "crates/ugx" }
+xtd = { path = "crates/xtd" }
+xtt = { path = "crates/xtt" }
 ugx-cli = { path = "crates/ugx-cli" }
 
 # External dependencies

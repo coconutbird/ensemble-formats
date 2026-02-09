@@ -667,6 +667,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtd"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "ecf",
+ "era",
+ "thiserror",
+]
+
+[[package]]
+name = "xtt"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "ecf",
+ "era",
+ "thiserror",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
