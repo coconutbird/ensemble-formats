@@ -205,15 +205,20 @@ impl UgxGeom {
             Vec::new()
         };
 
-        // Accessories array (skip for now - complex format)
+        // TODO: Accessories — the packed array format is known (u32 count, u32 pad,
+        // u64 offset) but the per-accessory struct layout is unknown. Need to examine
+        // binary data from real UGX files that have accessories_count > 0 to
+        // reverse-engineer the struct fields. Once known, add an Accessory struct to
+        // types.rs, parse here, store in UgxGeom, and write back in ugx_writer.rs.
+        // The valid_accessories array likely mirrors the same struct or is a subset.
         let accessories_count = cursor.read_u32::<LittleEndian>()?;
         let _accessories_pad = cursor.read_u32::<LittleEndian>()?;
         let _accessories_offset = cursor.read_u64::<LittleEndian>()?;
         if accessories_count > 0 {
-            // Skip accessories - they have a complex structure
+            // Skip accessories - struct layout unknown
         }
 
-        // Valid accessories array (skip)
+        // Valid accessories array (skip — same unknown struct)
         let _valid_accessories_count = cursor.read_u32::<LittleEndian>()?;
         let _valid_accessories_pad = cursor.read_u32::<LittleEndian>()?;
         let _valid_accessories_offset = cursor.read_u64::<LittleEndian>()?;
@@ -309,9 +314,25 @@ impl UgxGeom {
         let num_verts = cursor.read_i32::<LittleEndian>()?;
 
         // +0x28: LocalToGlobalBoneRemap packed array (16 bytes)
-        let _bone_remap_count = cursor.read_u32::<LittleEndian>()?;
+        let bone_remap_count = cursor.read_u32::<LittleEndian>()? as usize;
         let _bone_remap_pad = cursor.read_u32::<LittleEndian>()?;
-        let _bone_remap_offset = cursor.read_u64::<LittleEndian>()?;
+        let bone_remap_offset = cursor.read_u64::<LittleEndian>()? as usize;
+
+        // TODO: Bone remap entry size is assumed to be 1 byte (u8) because vertex
+        // bone indices are stored as UByte4 (0-255 range). If a UGX file has a
+        // skeleton with >256 bones, the remap entries may be u16 or u32 instead.
+        // Need to verify with a real file that has bone remaps (check if
+        // bone_remap_count * 1 matches the data region size, or compare against
+        // max_bones). Also: the remap is currently stored but NOT applied during
+        // glTF export — see the TODO in gltf_export.rs for JOINTS_0 writing.
+        let bone_remap = if bone_remap_count > 0
+            && bone_remap_offset != 0xFFFFFFFFFFFFFFFF
+            && bone_remap_offset + bone_remap_count <= data.len()
+        {
+            data[bone_remap_offset..bone_remap_offset + bone_remap_count].to_vec()
+        } else {
+            Vec::new()
+        };
 
         // +0x38: UnivertPacker (84 bytes)
         let base_vert_packer = Self::read_packed_univert_packer(data, cursor)?;
@@ -337,6 +358,7 @@ impl UgxGeom {
             vert_size,
             num_verts,
             base_vert_packer,
+            bone_remap,
             rigid_only,
             global_bones,
         })

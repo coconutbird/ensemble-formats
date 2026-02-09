@@ -86,6 +86,12 @@ pub fn import_from_gltf(
                 && vertices
                     .iter()
                     .any(|v| v.bone_weights.iter().sum::<f32>() > 0.0);
+            let has_colors = vertices.iter().any(|v| {
+                v.diffuse[0] != 0.0
+                    || v.diffuse[1] != 0.0
+                    || v.diffuse[2] != 0.0
+                    || v.diffuse[3] != 0.0
+            });
             let max_texcoords = vertices.iter().map(|v| v.num_texcoords).max().unwrap_or(0);
 
             // Build pack order
@@ -96,6 +102,9 @@ pub fn import_from_gltf(
             for i in 0..max_texcoords {
                 pack_order.push('T');
                 pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+            }
+            if has_colors {
+                pack_order.push('D');
             }
             if has_skin {
                 pack_order.push('S');
@@ -129,7 +138,11 @@ pub fn import_from_gltf(
                 } else {
                     VertexElementType::Ignore
                 },
-                diffuse_type: VertexElementType::Ignore,
+                diffuse_type: if has_colors {
+                    VertexElementType::Float4
+                } else {
+                    VertexElementType::Ignore
+                },
                 index_type: VertexElementType::Ignore,
             };
 
@@ -162,6 +175,7 @@ pub fn import_from_gltf(
                 vert_size,
                 num_verts: vertices.len() as i32,
                 base_vert_packer: packer,
+                bone_remap: Vec::new(),
                 rigid_only: !has_skin,
                 global_bones: false,
             });
@@ -378,6 +392,14 @@ fn import_primitive(
         None
     };
 
+    // Read vertex colors (COLOR_0)
+    let colors = if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Colors(0))) {
+        let acc = &root.accessors[acc_idx.value()];
+        Some(read_accessor_f32(acc, root, buffer_bytes)?)
+    } else {
+        None
+    };
+
     // Read indices
     let indices = if let Some(ref idx_accessor) = primitive.indices {
         let acc = &root.accessors[idx_accessor.value()];
@@ -413,7 +435,7 @@ fn import_primitive(
         // UVs
         vertex.num_texcoords = uv_sets.len();
         for (uv_idx, uv_data) in uv_sets.iter().enumerate() {
-            if uv_idx < 4 {
+            if uv_idx < MAX_UV {
                 vertex.texcoords[uv_idx] = [uv_data[i * 2], uv_data[i * 2 + 1]];
             }
         }
@@ -434,6 +456,16 @@ fn import_primitive(
             }
             vertex.bone_indices = bone_indices;
             vertex.bone_weights = bone_weights;
+        }
+
+        // Vertex colors
+        if let Some(ref c) = colors {
+            // COLOR_0 can be Vec3 or Vec4; handle both
+            let stride = if c.len() == vertex_count * 4 { 4 } else { 3 };
+            vertex.diffuse[0] = c[i * stride];
+            vertex.diffuse[1] = c[i * stride + 1];
+            vertex.diffuse[2] = c[i * stride + 2];
+            vertex.diffuse[3] = if stride == 4 { c[i * stride + 3] } else { 1.0 };
         }
 
         vertices.push(vertex);
@@ -618,16 +650,106 @@ fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 0
             };
 
+            // Read UGX extras (flags, uvw_velocity, non-PBR maps)
+            let (flags, uvw_velocity, extra_maps) = read_material_extras(&mat.extras, &maps);
+
+            // Merge extra maps into the maps array
+            let mut final_maps = maps;
+            for (idx, extra) in extra_maps {
+                final_maps[idx] = extra;
+            }
+
             Material {
                 name: mat.name.clone().unwrap_or_default(),
-                maps,
+                maps: final_maps,
                 spec_power: (1.0 - roughness) * 100.0,
                 opacity: base_color[3],
                 blend_type,
-                ..Default::default()
+                flags,
+                uvw_velocity,
             }
         })
         .collect()
+}
+
+/// Read UGX material extras from glTF extras JSON.
+///
+/// Returns (flags, uvw_velocity, extra_maps) where extra_maps is a vec of
+/// (map_type_index, Vec<Map>) for non-PBR map types.
+fn read_material_extras(
+    extras: &gltf_json::Extras,
+    _existing_maps: &[Vec<Map>; MapType::NUM_TYPES],
+) -> (u32, [[f32; 3]; MapType::NUM_TYPES], Vec<(usize, Vec<Map>)>) {
+    let mut flags = 0u32;
+    let mut uvw_velocity = [[0.0f32; 3]; MapType::NUM_TYPES];
+    let mut extra_maps: Vec<(usize, Vec<Map>)> = Vec::new();
+
+    let raw = match extras {
+        Some(raw_value) => raw_value,
+        None => return (flags, uvw_velocity, extra_maps),
+    };
+
+    let parsed: serde_json::Value = match serde_json::from_str(raw.get()) {
+        Ok(v) => v,
+        Err(_) => return (flags, uvw_velocity, extra_maps),
+    };
+
+    let obj = match parsed.as_object() {
+        Some(o) => o,
+        None => return (flags, uvw_velocity, extra_maps),
+    };
+
+    // Read flags
+    if let Some(v) = obj.get("ugx_flags") {
+        flags = v.as_u64().unwrap_or(0) as u32;
+    }
+
+    // Read UVW velocity
+    if let Some(serde_json::Value::Array(arr)) = obj.get("ugx_uvw_velocity") {
+        for (i, val) in arr.iter().enumerate() {
+            if i >= MapType::NUM_TYPES {
+                break;
+            }
+            if let serde_json::Value::Array(v) = val {
+                if v.len() >= 3 {
+                    uvw_velocity[i][0] = v[0].as_f64().unwrap_or(0.0) as f32;
+                    uvw_velocity[i][1] = v[1].as_f64().unwrap_or(0.0) as f32;
+                    uvw_velocity[i][2] = v[2].as_f64().unwrap_or(0.0) as f32;
+                }
+            }
+        }
+    }
+
+    // Read non-PBR maps
+    if let Some(serde_json::Value::Object(maps_obj)) = obj.get("ugx_maps") {
+        for map_type in MapType::ALL {
+            let type_name = map_type.name();
+            if let Some(serde_json::Value::Array(arr)) = maps_obj.get(type_name) {
+                let mut map_vec = Vec::new();
+                for entry in arr {
+                    if let serde_json::Value::Object(m) = entry {
+                        let name = m
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let channel = m.get("channel").and_then(|v| v.as_i64()).unwrap_or(0) as i16;
+                        let map_flags = m.get("flags").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                        map_vec.push(Map {
+                            name,
+                            channel,
+                            flags: map_flags,
+                        });
+                    }
+                }
+                if !map_vec.is_empty() {
+                    extra_maps.push((map_type as usize, map_vec));
+                }
+            }
+        }
+    }
+
+    (flags, uvw_velocity, extra_maps)
 }
 
 /// Compute AABB and bounding sphere from vertices.
@@ -699,7 +821,11 @@ mod tests {
                 position: [0.0, 0.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
                 tangent: [1.0, 0.0, 0.0, 1.0],
-                texcoords: [[0.0, 0.0], [0.0; 2], [0.0; 2], [0.0; 2]],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [0.0, 0.0];
+                    tc
+                },
                 num_texcoords: 1,
                 bone_indices: [1, 0, 0, 0],
                 bone_weights: [1.0, 0.0, 0.0, 0.0],
@@ -709,7 +835,11 @@ mod tests {
                 position: [1.0, 0.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
                 tangent: [1.0, 0.0, 0.0, 1.0],
-                texcoords: [[1.0, 0.0], [0.0; 2], [0.0; 2], [0.0; 2]],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [1.0, 0.0];
+                    tc
+                },
                 num_texcoords: 1,
                 bone_indices: [1, 2, 0, 0],
                 bone_weights: [0.7, 0.3, 0.0, 0.0],
@@ -719,7 +849,11 @@ mod tests {
                 position: [0.0, 1.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
                 tangent: [1.0, 0.0, 0.0, -1.0],
-                texcoords: [[0.0, 1.0], [0.0; 2], [0.0; 2], [0.0; 2]],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [0.0, 1.0];
+                    tc
+                },
                 num_texcoords: 1,
                 bone_indices: [2, 0, 0, 0],
                 bone_weights: [1.0, 0.0, 0.0, 0.0],
@@ -795,6 +929,7 @@ mod tests {
                 vert_size,
                 num_verts: 3,
                 base_vert_packer: packer,
+                bone_remap: Vec::new(),
                 rigid_only: false,
                 global_bones: false,
             }],

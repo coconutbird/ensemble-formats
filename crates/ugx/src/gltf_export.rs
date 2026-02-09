@@ -18,7 +18,7 @@ use gltf_json as json;
 use json::validation::Checked::Valid;
 
 use crate::error::Result;
-use crate::types::{Bone, MapType};
+use crate::types::{Bone, MapType, Material};
 use crate::ugx::{GrannyBone, UgxGeom};
 use crate::univert_packer::UnpackedVertex;
 
@@ -59,6 +59,92 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
     export_to_gltf_with_buffer_name(geom, options, "buffer.bin")
 }
 
+/// Non-PBR map types that need to be stored in extras.
+/// Diffuse, Normal, AO, and Emissive are handled by standard PBR fields.
+const NON_PBR_MAP_TYPES: &[MapType] = &[
+    MapType::Gloss,
+    MapType::Opacity,
+    MapType::XForm,
+    MapType::Env,
+    MapType::EnvMask,
+    MapType::EmXForm,
+    MapType::Distortion,
+    MapType::Highlight,
+    MapType::Modulate,
+];
+
+/// Build glTF material extras JSON for UGX-specific data.
+///
+/// Stores material flags, UVW velocity, and non-PBR texture maps
+/// so they survive a glTF roundtrip.
+fn build_material_extras(mat: &Material) -> json::Extras {
+    let mut extras = serde_json::Map::new();
+
+    // Always store flags (even if 0, for roundtrip fidelity)
+    extras.insert(
+        "ugx_flags".into(),
+        serde_json::Value::Number(mat.flags.into()),
+    );
+
+    // Store UVW velocity arrays that have non-zero values
+    let has_any_uvw = mat
+        .uvw_velocity
+        .iter()
+        .any(|v| v[0] != 0.0 || v[1] != 0.0 || v[2] != 0.0);
+    if has_any_uvw {
+        let uvw_arr: Vec<serde_json::Value> = mat
+            .uvw_velocity
+            .iter()
+            .map(|v| {
+                serde_json::Value::Array(vec![
+                    serde_json::Value::from(v[0]),
+                    serde_json::Value::from(v[1]),
+                    serde_json::Value::from(v[2]),
+                ])
+            })
+            .collect();
+        extras.insert("ugx_uvw_velocity".into(), serde_json::Value::Array(uvw_arr));
+    }
+
+    // Store non-PBR texture maps
+    let mut maps_obj = serde_json::Map::new();
+    for &map_type in NON_PBR_MAP_TYPES {
+        let idx = map_type as usize;
+        if !mat.maps[idx].is_empty() {
+            let maps_arr: Vec<serde_json::Value> = mat.maps[idx]
+                .iter()
+                .map(|m| {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("name".into(), serde_json::Value::String(m.name.clone()));
+                    obj.insert(
+                        "channel".into(),
+                        serde_json::Value::Number((m.channel as i64).into()),
+                    );
+                    obj.insert(
+                        "flags".into(),
+                        serde_json::Value::Number((m.flags as u64).into()),
+                    );
+                    serde_json::Value::Object(obj)
+                })
+                .collect();
+            maps_obj.insert(
+                map_type.name().to_string(),
+                serde_json::Value::Array(maps_arr),
+            );
+        }
+    }
+    if !maps_obj.is_empty() {
+        extras.insert("ugx_maps".into(), serde_json::Value::Object(maps_obj));
+    }
+
+    if extras.is_empty() {
+        None
+    } else {
+        let json_str = serde_json::to_string(&serde_json::Value::Object(extras)).unwrap();
+        Some(serde_json::value::RawValue::from_string(json_str).unwrap())
+    }
+}
+
 /// Export UGX geometry to glTF format with a specific external buffer filename.
 pub fn export_to_gltf_with_buffer_name(
     geom: &UgxGeom,
@@ -89,7 +175,7 @@ pub fn export_to_gltf_with_buffer_name(
                         images_json.push(json::Image {
                             buffer_view: None,
                             mime_type: None,
-                            name: None,
+                            name: Some(map.name.clone()),
                             uri: Some(map.name.clone()),
                             extensions: None,
                             extras: json::Extras::default(),
@@ -182,6 +268,9 @@ pub fn export_to_gltf_with_buffer_name(
                 extras: json::Extras::default(),
             };
 
+            // Build extras JSON for UGX-specific data that doesn't map to PBR
+            let extras = build_material_extras(mat);
+
             materials_json.push(json::Material {
                 alpha_cutoff: None,
                 alpha_mode,
@@ -192,7 +281,7 @@ pub fn export_to_gltf_with_buffer_name(
                 emissive_texture,
                 emissive_factor,
                 extensions: None,
-                extras: json::Extras::default(),
+                extras,
                 name: Some(mat.name.clone()),
             });
         }
@@ -669,6 +758,15 @@ fn create_primitive(
     }
 
     // Write bone indices and weights if we have a skeleton
+    //
+    // TODO: Bone remap — when section.bone_remap is non-empty, vertex bone indices
+    // are section-local and need to be remapped to global skeleton indices using the
+    // remap table before writing to glTF JOINTS_0. Currently we write indices as-is
+    // (converting from 1-based to 0-based), which is correct only when global_bones
+    // is true or bone_remap is empty. To fix: pass bone_remap into create_primitive,
+    // and when non-empty, do `global_idx = bone_remap[local_idx]` before the 1-based
+    // to 0-based conversion. Need a real skinned UGX file with per-section bone
+    // remaps to verify.
     if has_skeleton && bone_count > 0 {
         let max_bone_idx = (bone_count - 1) as u16;
         let use_u16_joints = bone_count > 256;
@@ -811,6 +909,59 @@ fn create_primitive(
         attributes.insert(
             Valid(json::mesh::Semantic::Weights(0)),
             json::Index::new(weights_accessor_idx),
+        );
+    }
+
+    // Write vertex colors (COLOR_0) if any vertex has non-zero diffuse
+    let has_colors = vertices.iter().any(|v| {
+        v.diffuse[0] != 0.0 || v.diffuse[1] != 0.0 || v.diffuse[2] != 0.0 || v.diffuse[3] != 0.0
+    });
+    if has_colors {
+        // Pad to 4-byte boundary for float alignment
+        while buffer_data.len() % 4 != 0 {
+            buffer_data.push(0);
+        }
+        let color_view_idx = buffer_views.len() as u32;
+        let color_offset = buffer_data.len();
+        for v in vertices {
+            buffer_data.extend_from_slice(&v.diffuse[0].to_le_bytes());
+            buffer_data.extend_from_slice(&v.diffuse[1].to_le_bytes());
+            buffer_data.extend_from_slice(&v.diffuse[2].to_le_bytes());
+            buffer_data.extend_from_slice(&v.diffuse[3].to_le_bytes());
+        }
+        let color_byte_length = buffer_data.len() - color_offset;
+
+        buffer_views.push(json::buffer::View {
+            buffer: json::Index::new(0),
+            byte_length: json::validation::USize64(color_byte_length as u64),
+            byte_offset: Some(json::validation::USize64(color_offset as u64)),
+            byte_stride: Some(json::buffer::Stride(16)),
+            extensions: None,
+            extras: json::Extras::default(),
+            name: None,
+            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
+        });
+
+        let color_accessor_idx = accessors.len() as u32;
+        accessors.push(json::Accessor {
+            buffer_view: Some(json::Index::new(color_view_idx)),
+            byte_offset: Some(json::validation::USize64(0)),
+            count: json::validation::USize64(vertices.len() as u64),
+            component_type: Valid(json::accessor::GenericComponentType(
+                json::accessor::ComponentType::F32,
+            )),
+            extensions: None,
+            extras: json::Extras::default(),
+            type_: Valid(json::accessor::Type::Vec4),
+            min: None,
+            max: None,
+            name: None,
+            normalized: false,
+            sparse: None,
+        });
+        attributes.insert(
+            Valid(json::mesh::Semantic::Colors(0)),
+            json::Index::new(color_accessor_idx),
         );
     }
 
@@ -1748,6 +1899,7 @@ mod tests {
                 vert_size: packer.vertex_size() as i32,
                 num_verts: 3,
                 base_vert_packer: packer,
+                bone_remap: Vec::new(),
                 rigid_only: true,
                 global_bones: false,
             }],

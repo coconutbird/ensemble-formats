@@ -462,6 +462,10 @@ pub struct Section {
     pub num_verts: i32,
     /// Base vertex packer.
     pub base_vert_packer: UnivertPacker,
+    /// Local-to-global bone remap table.
+    /// Maps section-local bone indices to global skeleton indices.
+    /// TODO: Entry size assumed u8 — may be u16/u32 for large skeletons. See ugx.rs.
+    pub bone_remap: Vec<u8>,
     /// Is this section rigid (no skinning)?
     pub rigid_only: bool,
     /// Uses global bone indices (DE-specific field).

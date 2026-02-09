@@ -43,8 +43,8 @@ pub struct UnpackedVertex {
     pub tangent: [f32; 4],
     /// Binormal [x, y, z, w].
     pub binormal: [f32; 4],
-    /// Texture coordinates (up to 4 sets).
-    pub texcoords: [[f32; 2]; 4],
+    /// Texture coordinates (up to MAX_UV sets).
+    pub texcoords: [[f32; 2]; MAX_UV],
     /// Number of texcoord sets.
     pub num_texcoords: usize,
     /// Bone indices [0-3].
@@ -228,11 +228,9 @@ impl UnivertPacker {
                     let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
                     if idx < MAX_UV {
                         let v = self.uv_types[idx].unpack(reader)?;
-                        if idx < 4 {
-                            vertex.texcoords[idx] = [v[0], v[1]];
-                            if idx >= vertex.num_texcoords {
-                                vertex.num_texcoords = idx + 1;
-                            }
+                        vertex.texcoords[idx] = [v[0], v[1]];
+                        if idx >= vertex.num_texcoords {
+                            vertex.num_texcoords = idx + 1;
                         }
                     }
                 }
@@ -292,7 +290,7 @@ impl UnivertPacker {
                 }
                 'T' => {
                     let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
-                    if idx < MAX_UV && idx < 4 {
+                    if idx < MAX_UV {
                         let v = [vertex.texcoords[idx][0], vertex.texcoords[idx][1], 0.0, 1.0];
                         self.uv_types[idx].pack(writer, v)?;
                     }
@@ -383,7 +381,11 @@ mod tests {
         let original = UnpackedVertex {
             position: [1.0, 2.0, 3.0],
             normal: [0.0, 1.0, 0.0],
-            texcoords: [[0.5, 0.75], [0.0; 2], [0.0; 2], [0.0; 2]],
+            texcoords: {
+                let mut tc = [[0.0; 2]; MAX_UV];
+                tc[0] = [0.5, 0.75];
+                tc
+            },
             num_texcoords: 1,
             ..Default::default()
         };
@@ -415,7 +417,11 @@ mod tests {
         let original = UnpackedVertex {
             position: [-1.0, 5.0, 0.0],
             normal: [1.0, 0.0, 0.0],
-            texcoords: [[0.25, 0.5], [0.0; 2], [0.0; 2], [0.0; 2]],
+            texcoords: {
+                let mut tc = [[0.0; 2]; MAX_UV];
+                tc[0] = [0.25, 0.5];
+                tc
+            },
             num_texcoords: 1,
             bone_indices: [3, 1, 0, 0],
             bone_weights: [0.7, 0.3, 0.0, 0.0],

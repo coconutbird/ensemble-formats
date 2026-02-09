@@ -50,7 +50,7 @@ pub fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
     Ok(output.into_inner())
 }
 
-/// Build the index buffer chunk (0x701): all u16 indices as little-endian bytes.
+/// Build the index buffer chunk (0x701).
 fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
     let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
     for &idx in &geom.index_buffer {
@@ -440,8 +440,9 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         string: String,
     }
     let mut string_fixups: Vec<StringFixup> = Vec::new();
+    let mut bone_remap_fixups: Vec<(usize, usize)> = Vec::new(); // (header_pos, section_idx)
 
-    for section in &geom.sections {
+    for (section_idx, section) in geom.sections.iter().enumerate() {
         // +0x00: mMaterialIndex
         cursor.write_i32::<LittleEndian>(section.material_index)?;
         // +0x04: mAccessoryIndex
@@ -463,10 +464,14 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         // +0x24: mNumVerts
         cursor.write_i32::<LittleEndian>(section.num_verts)?;
 
-        // +0x28: BoneRemap packed array (16 bytes) — empty
-        cursor.write_u32::<LittleEndian>(0)?; // count
+        // +0x28: BoneRemap packed array (16 bytes)
+        let bone_remap_header_pos = cursor.stream_position()? as usize;
+        cursor.write_u32::<LittleEndian>(section.bone_remap.len() as u32)?; // count
         cursor.write_u32::<LittleEndian>(0)?; // pad
-        cursor.write_u64::<LittleEndian>(0)?; // offset
+        cursor.write_u64::<LittleEndian>(0)?; // offset (placeholder, fixed up later)
+        if !section.bone_remap.is_empty() {
+            bone_remap_fixups.push((bone_remap_header_pos, section_idx));
+        }
 
         // +0x38: UnivertPacker (84 bytes)
         let packer = &section.base_vert_packer;
@@ -507,6 +512,18 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         cursor.write_i32::<LittleEndian>(if section.global_bones { 1 } else { 0 })?;
         // +0x94: mPadding
         cursor.write_i32::<LittleEndian>(0)?;
+    }
+
+    // ---- Bone remap data ----
+    // Write bone remap arrays for sections that have them, and fix up offsets
+    for &(header_pos, section_idx) in &bone_remap_fixups {
+        let remap_offset = cursor.stream_position()? as u64;
+        cursor.write_all(&geom.sections[section_idx].bone_remap)?;
+        // Fix up the offset in the packed array header (at header_pos + 8 for the u64 offset)
+        let saved_pos = cursor.stream_position()?;
+        cursor.seek(std::io::SeekFrom::Start((header_pos + 8) as u64))?;
+        cursor.write_u64::<LittleEndian>(remap_offset)?;
+        cursor.seek(std::io::SeekFrom::Start(saved_pos))?;
     }
 
     // ---- Bone data ----
@@ -753,21 +770,33 @@ mod tests {
             UnpackedVertex {
                 position: [0.0, 0.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
-                texcoords: [[0.0, 0.0], [0.0; 2], [0.0; 2], [0.0; 2]],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [0.0, 0.0];
+                    tc
+                },
                 num_texcoords: 1,
                 ..Default::default()
             },
             UnpackedVertex {
                 position: [1.0, 0.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
-                texcoords: [[1.0, 0.0], [0.0; 2], [0.0; 2], [0.0; 2]],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [1.0, 0.0];
+                    tc
+                },
                 num_texcoords: 1,
                 ..Default::default()
             },
             UnpackedVertex {
                 position: [0.0, 1.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
-                texcoords: [[0.0, 1.0], [0.0; 2], [0.0; 2], [0.0; 2]],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [0.0, 1.0];
+                    tc
+                },
                 num_texcoords: 1,
                 ..Default::default()
             },
@@ -793,6 +822,7 @@ mod tests {
             vert_size,
             num_verts: 3,
             base_vert_packer: packer,
+            bone_remap: Vec::new(),
             rigid_only: true,
             global_bones: false,
         };
