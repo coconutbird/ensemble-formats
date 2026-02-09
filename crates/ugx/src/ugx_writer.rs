@@ -27,7 +27,8 @@ pub fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
     let ib_data = build_index_buffer(geom);
 
     let mut output = Cursor::new(Vec::new());
-    let mut ecf = ecf::EcfWriter::new(&mut output, 0);
+    // ECF file ID 0xAAC93746 is required for UGX files - the game validates this in BGrannyModel::load
+    let mut ecf = ecf::EcfWriter::new(&mut output, 0xAAC93746);
 
     ecf.add_chunk(ECF_CACHED_DATA_CHUNK_ID, cached_data);
     ecf.add_chunk(ECF_IB_CHUNK_ID, ib_data);
