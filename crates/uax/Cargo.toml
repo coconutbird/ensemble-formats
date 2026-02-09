@@ -1,0 +1,17 @@
+[package]
+name = "uax"
+description = "UAX animation format parser for Halo Wars"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ecf = { workspace = true }
+byteorder = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+era = { workspace = true }
+

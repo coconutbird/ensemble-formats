@@ -27,13 +27,13 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 
 ### Binary Data Formats
 
-| Format  | Extension | ECF File ID  | Description                                                                                               | Status             |
-| ------- | --------- | ------------ | --------------------------------------------------------------------------------------------------------- | ------------------ |
-| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                                 | ✅ Implemented     |
-| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data                                                                                   | ❌ Not implemented |
-| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression    | ✅ Implemented     |
-| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                          | ❌ Not implemented |
-| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                            | ❌ Not implemented |
+| Format  | Extension | ECF File ID  | Description                                                                                           | Status             |
+| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------ |
+| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented     |
+| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data                                                                               | ❌ Not implemented |
+| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented     |
+| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ❌ Not implemented |
+| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ❌ Not implemented |
 
 ### XML-Based Formats
 
@@ -103,6 +103,7 @@ DDX files come in two variants:
 **Definitive Edition**: Standard DDS files (DirectDraw Surface) with `.ddx` extension. Magic: `0x20534444` ("DDS ").
 
 **Xbox 360 (original)**: ECF container with:
+
 - File ID: `0x13CF5D01`
 - Header chunk: `0x1D8828C6ECAF45F2`
 - Mip0 chunk: `0x3F74B8E87D2B44BF`

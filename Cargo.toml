@@ -5,6 +5,7 @@ members = [
     "crates/ddx",
     "crates/ecf",
     "crates/era",
+    "crates/uax",
     "crates/xmb",
     "crates/ugx",
     "crates/era-cli",
@@ -25,6 +26,7 @@ bdt = { path = "crates/bdt" }
 ddx = { path = "crates/ddx" }
 ecf = { path = "crates/ecf" }
 era = { path = "crates/era" }
+uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
 ugx = { path = "crates/ugx" }
 ugx-cli = { path = "crates/ugx-cli" }
