@@ -67,8 +67,9 @@ pub fn import_from_gltf(
     let mut all_index_buffer: Vec<u16> = Vec::new();
     let mut sections: Vec<Section> = Vec::new();
 
-    // Track mesh names and their vertex ranges for granny_meshes generation
-    let mut mesh_infos: Vec<(String, usize, usize)> = Vec::new(); // (name, start_vertex, end_vertex)
+    // Track mesh names, vertex ranges, and section ranges for granny_meshes generation
+    // (name, start_vertex, end_vertex, start_section, end_section)
+    let mut mesh_infos: Vec<(String, usize, usize, usize, usize)> = Vec::new();
 
     let has_skeleton = !bones.is_empty();
 
@@ -78,6 +79,7 @@ pub fn import_from_gltf(
             .clone()
             .unwrap_or_else(|| format!("mesh_{}", mesh_idx));
         let mesh_start_vertex = all_vertices.len();
+        let mesh_start_section = sections.len();
 
         for primitive in &mesh.primitives {
             let (vertices, indices, material_index) =
@@ -162,77 +164,78 @@ pub fn import_from_gltf(
             };
 
             // Analyze bone usage for this section
-            let (actual_max_bones, is_rigid_section, rigid_bone_idx) = if has_skin {
-                // Count unique bones actually used and check if all verts use same bone
+            // Detect global_bones sections:
+            // If ALL vertices have weight[0]=1.0 and weights[1..3]=0.0 on the SAME bone,
+            // this was originally a global_bones=true section with zero weights.
+            // glTF export transforms zero-weight vertices to weight=1.0 on rigid bone.
+            //
+            // We detect this pattern and restore the original behavior:
+            // - global_bones=true
+            // - Zero weights on all vertices
+            // - Pack order without skin data (PNT0 instead of PNST0)
+            let (is_global_bones, global_bone_idx, actual_max_bones) = if has_skin {
                 let mut unique_bones = std::collections::HashSet::new();
-                let mut first_bone: Option<u16> = None;
-                let mut all_same_bone = true;
+                let mut all_single_bone = true;
+                let mut common_bone: Option<u16> = None;
 
                 for v in &vertices {
-                    // Find the primary bone (first with non-zero weight)
-                    let mut primary_bone: Option<u16> = None;
+                    // Check if this vertex has exactly weight[0]=1.0 and rest=0.0
+                    let is_single_bone_vertex = v.bone_weights[0] > 0.99
+                        && v.bone_weights[1] < 0.01
+                        && v.bone_weights[2] < 0.01
+                        && v.bone_weights[3] < 0.01;
+
+                    if is_single_bone_vertex {
+                        let bone = v.bone_indices[0];
+                        match common_bone {
+                            None => common_bone = Some(bone),
+                            Some(cb) if cb != bone => all_single_bone = false,
+                            _ => {}
+                        }
+                    } else {
+                        all_single_bone = false;
+                    }
+
+                    // Count unique bones for max_bones calculation
                     for k in 0..4 {
                         if v.bone_weights[k] > 0.0 {
                             unique_bones.insert(v.bone_indices[k]);
-                            if primary_bone.is_none() {
-                                primary_bone = Some(v.bone_indices[k]);
-                            }
-                        }
-                    }
-
-                    // Check if all vertices use the same single bone
-                    if let Some(pb) = primary_bone {
-                        // Check if this vertex only uses one bone (weight sum ~= first weight)
-                        let is_single_bone = v.bone_weights[0] > 0.99;
-                        if is_single_bone {
-                            match first_bone {
-                                None => first_bone = Some(pb),
-                                Some(fb) if fb != pb => all_same_bone = false,
-                                _ => {}
-                            }
-                        } else {
-                            all_same_bone = false;
                         }
                     }
                 }
 
                 let max_bones = unique_bones.len().max(1) as i32;
 
-                // If all vertices use the same single bone, this is a rigid section
-                if all_same_bone && first_bone.is_some() {
+                // If all vertices use the same single bone, this is a global_bones section
+                if all_single_bone && common_bone.is_some() {
                     // Convert 1-based bone index to 0-based for rigid_bone_index
-                    let rigid_idx = (first_bone.unwrap() as i32) - 1;
-                    (1, true, rigid_idx)
+                    let bone_idx = (common_bone.unwrap() as i32) - 1;
+                    (true, bone_idx, 1)
                 } else {
-                    // Skinned section: use INT_MAX (0x7FFFFFFF) as sentinel value
-                    // This matches the original game format
-                    (max_bones, false, i32::MAX)
+                    (false, i32::MAX, max_bones)
                 }
             } else {
-                // No skin data: use INT_MAX sentinel
-                (0, true, i32::MAX)
+                (false, i32::MAX, 1)
             };
 
-            // For rigid sections, use a simpler pack order without skin data
-            // A section is actually rigid if is_rigid_section=true AND it has a valid bone index (not INT_MAX)
-            let is_actually_rigid = is_rigid_section && rigid_bone_idx != i32::MAX;
-            let (final_packer, _final_has_skin) = if is_actually_rigid {
-                // Rebuild packer without skin data for rigid sections
-                let mut rigid_pack_order = String::from("PN");
+            // For global_bones sections, restore zero weights and use simpler pack order
+            let (final_packer, final_vertices) = if is_global_bones {
+                // Rebuild packer without skin data for global_bones sections
+                let mut global_pack_order = String::from("PN");
                 if has_tangents {
-                    rigid_pack_order.push_str("A0");
+                    global_pack_order.push_str("A0");
                 }
                 for i in 0..max_texcoords {
-                    rigid_pack_order.push('T');
-                    rigid_pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+                    global_pack_order.push('T');
+                    global_pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
                 }
                 if has_colors {
-                    rigid_pack_order.push('D');
+                    global_pack_order.push('D');
                 }
 
-                let rigid_packer = UnivertPacker {
-                    pack_order: rigid_pack_order.clone(),
-                    decl_order: rigid_pack_order,
+                let global_packer = UnivertPacker {
+                    pack_order: global_pack_order.clone(),
+                    decl_order: global_pack_order,
                     pos_type: VertexElementType::HalfFloat4,
                     basis_type: VertexElementType::Float4,
                     basis_scale_type: VertexElementType::Float2,
@@ -242,7 +245,7 @@ pub fn import_from_gltf(
                         VertexElementType::Ignore
                     },
                     normal_type: VertexElementType::Float3,
-                    uv_types,
+                    uv_types: uv_types.clone(),
                     indices_type: VertexElementType::Ignore,
                     weights_type: VertexElementType::Ignore,
                     diffuse_type: if has_colors {
@@ -252,14 +255,26 @@ pub fn import_from_gltf(
                     },
                     index_type: VertexElementType::Ignore,
                 };
-                (rigid_packer, false)
+
+                // Restore zero weights for global_bones vertices
+                let restored_vertices: Vec<UnpackedVertex> = vertices
+                    .iter()
+                    .map(|v| {
+                        let mut rv = v.clone();
+                        rv.bone_weights = [0.0, 0.0, 0.0, 0.0];
+                        rv.bone_indices = [0, 0, 0, 0];
+                        rv
+                    })
+                    .collect();
+
+                (global_packer, restored_vertices)
             } else {
-                (packer, has_skin)
+                (packer, vertices)
             };
 
             // Pack vertices into binary buffer
             let vb_offset = all_vertex_buffer.len() as i32;
-            for v in &vertices {
+            for v in &final_vertices {
                 final_packer.pack_vertex(&mut all_vertex_buffer, v)?;
             }
             let vb_bytes = (all_vertex_buffer.len() as i32) - vb_offset;
@@ -274,26 +289,36 @@ pub fn import_from_gltf(
                 material_index,
                 accessory_index: 0, // Default accessory index (0 = none)
                 max_bones: actual_max_bones,
-                rigid_bone_index: rigid_bone_idx,
+                rigid_bone_index: global_bone_idx,
                 ib_offset,
                 num_tris,
                 vb_offset,
                 vb_bytes,
                 vert_size,
-                num_verts: vertices.len() as i32,
+                num_verts: final_vertices.len() as i32,
                 base_vert_packer: final_packer,
                 bone_remap: Vec::new(),
-                rigid_only: is_actually_rigid,
-                global_bones: is_actually_rigid,
+                // rigid_only is always false from glTF import
+                // global_bones is true for sections where all vertices use same bone
+                rigid_only: false,
+                global_bones: is_global_bones,
             });
 
-            all_vertices.extend(vertices);
+            all_vertices.extend(final_vertices);
         }
 
         // Record mesh info for granny_meshes generation
+        // Include section indices to handle global_bones sections
+        let mesh_end_section = sections.len();
         let mesh_end_vertex = all_vertices.len();
         if mesh_end_vertex > mesh_start_vertex {
-            mesh_infos.push((mesh_name, mesh_start_vertex, mesh_end_vertex));
+            mesh_infos.push((
+                mesh_name,
+                mesh_start_vertex,
+                mesh_end_vertex,
+                mesh_start_section,
+                mesh_end_section,
+            ));
         }
     }
 
@@ -319,9 +344,13 @@ pub fn import_from_gltf(
     // - ALL sections are skinned (none are rigidOnly)
     let all_sections_skinned = any_global_bones && !all_rigid && all_skinned;
 
-    // Generate granny_meshes from vertex skin data, preserving mesh names from glTF
-    let granny_meshes =
-        generate_granny_meshes_from_vertices(&all_vertices, &granny_bones, &mesh_infos);
+    // Generate granny_meshes from vertex skin data and section info, preserving mesh names from glTF
+    let granny_meshes = generate_granny_meshes_from_vertices(
+        &all_vertices,
+        &granny_bones,
+        &mesh_infos,
+        &sections,
+    );
 
     Ok(UgxGeom {
         bounding_sphere,
@@ -342,19 +371,21 @@ pub fn import_from_gltf(
     })
 }
 
-/// Generate `GrannyMesh` entries from vertex skin data.
+/// Generate `GrannyMesh` entries from vertex skin data and section info.
 ///
 /// For glTF imports, we analyze which bones each vertex uses (via bone_weights > 0)
 /// and create one mesh per glTF mesh, preserving the original mesh names.
+/// For global_bones sections (zero weights), we use the rigid_bone_index instead.
 /// This allows the game to properly skin the vertices.
 fn generate_granny_meshes_from_vertices(
     vertices: &[UnpackedVertex],
     granny_bones: &[GrannyBone],
-    mesh_infos: &[(String, usize, usize)], // (name, start_vertex, end_vertex)
+    mesh_infos: &[(String, usize, usize, usize, usize)], // (name, start_vertex, end_vertex, start_section, end_section)
+    sections: &[Section],
 ) -> Vec<GrannyMesh> {
     let mut granny_meshes = Vec::new();
 
-    for (mesh_name, start_vertex, end_vertex) in mesh_infos {
+    for (mesh_name, start_vertex, end_vertex, start_section, end_section) in mesh_infos {
         // Collect all unique bone indices used by this mesh's vertices
         let mut used_bones: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
 
@@ -367,8 +398,18 @@ fn generate_granny_meshes_from_vertices(
             }
         }
 
+        // For global_bones sections, vertices have zero weights but use rigid_bone_index
+        // We need to include that bone in the mesh bindings
+        for section in &sections[*start_section..*end_section] {
+            if section.global_bones && section.rigid_bone_index >= 0 {
+                // rigid_bone_index is 0-based, convert to 1-based for the set
+                let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
+                used_bones.insert(bone_idx_1based);
+            }
+        }
+
         if used_bones.is_empty() {
-            // No skinned vertices in this mesh - skip it (rigid mesh)
+            // No bones used in this mesh - skip it (fully rigid mesh with no bone reference)
             continue;
         }
 
