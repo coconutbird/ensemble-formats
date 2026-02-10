@@ -11,7 +11,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 
 use crate::error::{Error, Result};
 use crate::types::*;
-use crate::ugx::{GrannyBone, UgxGeom};
+use crate::ugx::{GrannyBone, GrannyMesh, UgxGeom};
 use crate::univert_packer::{UnivertPacker, UnpackedVertex, MAX_UV};
 use crate::vertex_element::VertexElementType;
 
@@ -304,13 +304,17 @@ pub fn import_from_gltf(
     // - ALL sections are skinned (none are rigidOnly)
     let all_sections_skinned = any_global_bones && !all_rigid && all_skinned;
 
+    // Generate granny_meshes from vertex skin data
+    // For glTF imports, we create one mesh that includes all bones used by any section
+    let granny_meshes = generate_granny_meshes_from_vertices(&all_vertices, &granny_bones);
+
     Ok(UgxGeom {
         bounding_sphere,
         bounds,
         materials,
         bones,
         granny_bones,
-        granny_meshes: Vec::new(), // Will be generated from section data on write
+        granny_meshes,
         bone_bounds,
         sections,
         vertex_buffer: all_vertex_buffer,
@@ -321,6 +325,53 @@ pub fn import_from_gltf(
         all_sections_skinned,
         global_bones: any_global_bones,
     })
+}
+
+/// Generate `GrannyMesh` entries from vertex skin data.
+///
+/// For glTF imports, we analyze which bones each vertex uses (via bone_weights > 0)
+/// and create a single mesh containing all used bones as bone bindings.
+/// This allows the game to properly skin the vertices.
+fn generate_granny_meshes_from_vertices(
+    vertices: &[UnpackedVertex],
+    granny_bones: &[GrannyBone],
+) -> Vec<GrannyMesh> {
+    // Collect all unique bone indices that have non-zero weights
+    let mut used_bones: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
+
+    for v in vertices {
+        for k in 0..4 {
+            // bone_indices are 1-based, bone_weights[k] > 0 means the bone is used
+            if v.bone_weights[k] > 0.0 && v.bone_indices[k] > 0 {
+                used_bones.insert(v.bone_indices[k]);
+            }
+        }
+    }
+
+    if used_bones.is_empty() {
+        // No skinned vertices - return empty (rigid mesh)
+        return Vec::new();
+    }
+
+    // Convert bone indices to bone names
+    // bone_indices are 1-based, so subtract 1 to get the granny_bones index
+    let bone_bindings: Vec<String> = used_bones
+        .iter()
+        .filter_map(|&idx| {
+            let idx_0based = (idx as usize).saturating_sub(1);
+            granny_bones.get(idx_0based).map(|b| b.name.clone())
+        })
+        .collect();
+
+    if bone_bindings.is_empty() {
+        return Vec::new();
+    }
+
+    // Create a single mesh with all used bones
+    vec![GrannyMesh {
+        name: "imported_mesh".to_string(),
+        bone_bindings,
+    }]
 }
 
 /// Resolve the binary buffer data from either the provided bytes or embedded base64.
@@ -1460,6 +1511,79 @@ mod tests {
                 i
             );
         }
+    }
+
+    /// Test that glTF import generates granny_meshes from vertex skin data.
+    /// This is critical for the game to properly skin the model.
+    #[test]
+    fn test_gltf_import_generates_granny_meshes() {
+        let original = make_test_geom();
+
+        // Export to glTF with skeleton
+        let export_opts = GltfExportOptions {
+            embed_buffers: false,
+            include_materials: false,
+            include_skeleton: true,
+        };
+        let export = export_to_gltf(&original, &export_opts).unwrap();
+
+        // Import from glTF
+        let import_opts = GltfImportOptions {
+            include_skeleton: true,
+            include_materials: false,
+        };
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+        // Verify granny_meshes was generated
+        assert!(
+            !imported.granny_meshes.is_empty(),
+            "granny_meshes should be generated from vertex skin data"
+        );
+
+        // Should have exactly one mesh for glTF imports
+        assert_eq!(
+            imported.granny_meshes.len(),
+            1,
+            "glTF import should create one mesh with all used bones"
+        );
+
+        let mesh = &imported.granny_meshes[0];
+        assert_eq!(mesh.name, "imported_mesh");
+
+        // The test geom uses bones 1 and 2 (1-based), which are "root" and "child"
+        // Verify bone bindings contain the bones actually used by vertices
+        assert!(
+            !mesh.bone_bindings.is_empty(),
+            "mesh should have bone bindings"
+        );
+
+        // Check that the bone names are from our test skeleton ("root" and "child")
+        let valid_bones = ["root", "child"];
+        for bone_name in &mesh.bone_bindings {
+            assert!(
+                valid_bones.contains(&bone_name.as_str()),
+                "bone binding '{}' should be from test skeleton (root or child)",
+                bone_name
+            );
+        }
+
+        // Write to UGX and read back to verify it survives serialization
+        let ugx_bytes = crate::write_ugx(&imported).unwrap();
+        let re_read = UgxGeom::read(&ugx_bytes).unwrap();
+
+        // Verify granny_meshes survived the round trip
+        assert_eq!(
+            re_read.granny_meshes.len(),
+            1,
+            "granny_meshes should survive UGX round trip"
+        );
+        assert_eq!(re_read.granny_meshes[0].name, "imported_mesh");
+        assert_eq!(
+            re_read.granny_meshes[0].bone_bindings.len(),
+            mesh.bone_bindings.len(),
+            "bone binding count should survive UGX round trip"
+        );
     }
 
     /// Round-trip a real Halo Wars UGX file: read → export to glTF → import → write UGX → read back.
