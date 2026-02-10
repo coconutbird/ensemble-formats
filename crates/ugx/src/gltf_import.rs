@@ -129,37 +129,25 @@ pub fn import_from_gltf(
                 uv_types[i] = VertexElementType::HalfFloat2; // Game uses HalfFloat2 for UVs
             }
 
+            // UnivertPacker with game-standard defaults for ALL fields.
+            // The game sets these defaults regardless of whether they're used in pack_order:
+            //   setPos(eHALFFLOAT4), setNorm(eDEC3N), setBasis(eDEC3N), setBasisScales(eHALFFLOAT2)
+            //   setTangent(eDEC3N), setIndices(eUBYTE4), setWeights(eUBYTE4N), setDiffuse(eD3DCOLOR)
+            //   setUV(eHALFFLOAT2)
+            // The actual marine_01.ugx uses Float3 for tangent/basis/normal instead of DEC3N.
+            // We match the original file values exactly.
             let packer = UnivertPacker {
                 pack_order: pack_order.clone(),
-                decl_order: pack_order,
-                // Game uses HalfFloat4 for position (8 bytes vs 12 for Float3)
+                decl_order: String::new(), // Original has empty decl_order
                 pos_type: VertexElementType::HalfFloat4,
-                basis_type: VertexElementType::Float4,
+                basis_type: VertexElementType::Float3, // Game default, even if unused
                 basis_scale_type: VertexElementType::Float2,
-                // Game uses Float3 for tangent (12 bytes)
-                tangent_type: if has_tangents {
-                    VertexElementType::Float3
-                } else {
-                    VertexElementType::Ignore
-                },
+                tangent_type: VertexElementType::Float3, // Game default, even if unused
                 normal_type: VertexElementType::Float3,
                 uv_types,
-                indices_type: if has_skin {
-                    VertexElementType::UByte4
-                } else {
-                    VertexElementType::Ignore
-                },
-                // Game uses UByte4N for weights (4 bytes vs 16 for Float4)
-                weights_type: if has_skin {
-                    VertexElementType::UByte4N
-                } else {
-                    VertexElementType::Ignore
-                },
-                diffuse_type: if has_colors {
-                    VertexElementType::Float4
-                } else {
-                    VertexElementType::Ignore
-                },
+                indices_type: VertexElementType::UByte4, // Game default, even if unused
+                weights_type: VertexElementType::UByte4N, // Game default, even if unused
+                diffuse_type: VertexElementType::D3DColor, // Game default, even if unused
                 index_type: VertexElementType::Ignore,
             };
 
@@ -173,12 +161,27 @@ pub fn import_from_gltf(
             // - global_bones=true
             // - Zero weights on all vertices
             // - Pack order without skin data (PNT0 instead of PNST0)
+            //
+            // NOTE: max_bones is the maximum number of bone influences on ANY SINGLE VERTEX,
+            // NOT the total unique bones in the section. This controls shader selection:
+            // - max_bones=1 → ONE_BONE_REG=true (single bone optimization)
+            // - max_bones=2 → neither flag set (2 bones)
+            // - max_bones>2 → FOUR_BONES_REG=true (4 bones)
             let (is_global_bones, global_bone_idx, actual_max_bones) = if has_skin {
-                let mut unique_bones = std::collections::HashSet::new();
                 let mut all_single_bone = true;
                 let mut common_bone: Option<u16> = None;
+                let mut max_influences_per_vertex = 0i32;
 
                 for v in &vertices {
+                    // Count how many non-zero weights this vertex has
+                    let mut num_influences = 0;
+                    for k in 0..4 {
+                        if v.bone_weights[k] > 0.0 {
+                            num_influences += 1;
+                        }
+                    }
+                    max_influences_per_vertex = max_influences_per_vertex.max(num_influences);
+
                     // Check if this vertex has exactly weight[0]=1.0 and rest=0.0
                     let is_single_bone_vertex = v.bone_weights[0] > 0.99
                         && v.bone_weights[1] < 0.01
@@ -195,16 +198,9 @@ pub fn import_from_gltf(
                     } else {
                         all_single_bone = false;
                     }
-
-                    // Count unique bones for max_bones calculation
-                    for k in 0..4 {
-                        if v.bone_weights[k] > 0.0 {
-                            unique_bones.insert(v.bone_indices[k]);
-                        }
-                    }
                 }
 
-                let max_bones = unique_bones.len().max(1) as i32;
+                let max_bones = max_influences_per_vertex.max(1);
 
                 // If all vertices use the same single bone, this is a global_bones section
                 if all_single_bone && common_bone.is_some() {
@@ -233,26 +229,20 @@ pub fn import_from_gltf(
                     global_pack_order.push('D');
                 }
 
+                // Global bones packer - pack_order is PNT0 (no skin data), but we still
+                // set game-standard defaults for ALL fields to match original file
                 let global_packer = UnivertPacker {
-                    pack_order: global_pack_order.clone(),
-                    decl_order: global_pack_order,
+                    pack_order: global_pack_order,
+                    decl_order: String::new(), // Original has empty decl_order
                     pos_type: VertexElementType::HalfFloat4,
-                    basis_type: VertexElementType::Float4,
+                    basis_type: VertexElementType::Float3, // Game default
                     basis_scale_type: VertexElementType::Float2,
-                    tangent_type: if has_tangents {
-                        VertexElementType::Float3
-                    } else {
-                        VertexElementType::Ignore
-                    },
+                    tangent_type: VertexElementType::Float3, // Game default
                     normal_type: VertexElementType::Float3,
                     uv_types: uv_types.clone(),
-                    indices_type: VertexElementType::Ignore,
-                    weights_type: VertexElementType::Ignore,
-                    diffuse_type: if has_colors {
-                        VertexElementType::Float4
-                    } else {
-                        VertexElementType::Ignore
-                    },
+                    indices_type: VertexElementType::UByte4, // Game default, even for PNT0
+                    weights_type: VertexElementType::UByte4N, // Game default, even for PNT0
+                    diffuse_type: VertexElementType::D3DColor, // Game default
                     index_type: VertexElementType::Ignore,
                 };
 
@@ -342,7 +332,16 @@ pub fn import_from_gltf(
     // - Not all sections are rigid
     // - The model is not rigidOnly
     // - ALL sections are skinned (none are rigidOnly)
-    let all_sections_skinned = any_global_bones && !all_rigid && all_skinned;
+    // - No sections use global_bones (section-level flag)
+    //
+    // Note: The original game code sets this flag, but the original marine_01.ugx
+    // has it as false even though it meets the criteria. This suggests either:
+    // 1. The original file was generated before this flag was implemented
+    // 2. Or sections with global_bones=true don't count as "skinned"
+    //
+    // We match the original behavior: if any section has global_bones=true,
+    // don't set all_sections_skinned=true (these sections are transformed differently)
+    let all_sections_skinned = !any_global_bones && !all_rigid && all_skinned;
 
     // Generate granny_meshes from vertex skin data and section info, preserving mesh names from glTF
     let granny_meshes = generate_granny_meshes_from_vertices(
