@@ -292,10 +292,17 @@ pub fn import_from_gltf(
         Vec::new()
     };
 
-    let has_any_skin = sections.iter().any(|s| !s.rigid_only);
     let all_rigid = sections.iter().all(|s| s.rigid_only);
+    let all_skinned = sections.iter().all(|s| !s.rigid_only);
     // Header globalBones should be true if any section uses global bones
     let any_global_bones = sections.iter().any(|s| s.global_bones);
+
+    // allSectionsSkinned is true only if:
+    // - globalBones is true
+    // - Not all sections are rigid
+    // - The model is not rigidOnly
+    // - ALL sections are skinned (none are rigidOnly)
+    let all_sections_skinned = any_global_bones && !all_rigid && all_skinned;
 
     Ok(UgxGeom {
         bounding_sphere,
@@ -307,10 +314,10 @@ pub fn import_from_gltf(
         sections,
         vertex_buffer: all_vertex_buffer,
         index_buffer: all_index_buffer,
-        rigid_only: all_rigid && !has_any_skin,
+        rigid_only: all_rigid,
         rigid_bone_index: 0,
         all_sections_rigid: all_rigid,
-        all_sections_skinned: has_any_skin && !all_rigid,
+        all_sections_skinned,
         global_bones: any_global_bones,
     })
 }
