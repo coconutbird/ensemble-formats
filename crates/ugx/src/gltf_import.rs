@@ -195,14 +195,19 @@ pub fn import_from_gltf(
                     let rigid_idx = (first_bone.unwrap() as i32) - 1;
                     (1, true, rigid_idx)
                 } else {
-                    (max_bones, false, -1)
+                    // Skinned section: use INT_MAX (0x7FFFFFFF) as sentinel value
+                    // This matches the original game format
+                    (max_bones, false, i32::MAX)
                 }
             } else {
-                (0, true, -1)
+                // No skin data: use INT_MAX sentinel
+                (0, true, i32::MAX)
             };
 
             // For rigid sections, use a simpler pack order without skin data
-            let (final_packer, _final_has_skin) = if is_rigid_section && rigid_bone_idx >= 0 {
+            // A section is actually rigid if is_rigid_section=true AND it has a valid bone index (not INT_MAX)
+            let is_actually_rigid = is_rigid_section && rigid_bone_idx != i32::MAX;
+            let (final_packer, _final_has_skin) = if is_actually_rigid {
                 // Rebuild packer without skin data for rigid sections
                 let mut rigid_pack_order = String::from("PN");
                 if has_tangents {
@@ -258,7 +263,7 @@ pub fn import_from_gltf(
 
             sections.push(Section {
                 material_index,
-                accessory_index: -1,
+                accessory_index: 0, // Default accessory index (0 = none)
                 max_bones: actual_max_bones,
                 rigid_bone_index: rigid_bone_idx,
                 ib_offset,
@@ -269,8 +274,8 @@ pub fn import_from_gltf(
                 num_verts: vertices.len() as i32,
                 base_vert_packer: final_packer,
                 bone_remap: Vec::new(),
-                rigid_only: is_rigid_section,
-                global_bones: is_rigid_section && rigid_bone_idx >= 0,
+                rigid_only: is_actually_rigid,
+                global_bones: is_actually_rigid,
             });
 
             all_vertices.extend(vertices);
@@ -289,6 +294,8 @@ pub fn import_from_gltf(
 
     let has_any_skin = sections.iter().any(|s| !s.rigid_only);
     let all_rigid = sections.iter().all(|s| s.rigid_only);
+    // Header globalBones should be true if any section uses global bones
+    let any_global_bones = sections.iter().any(|s| s.global_bones);
 
     Ok(UgxGeom {
         bounding_sphere,
@@ -304,7 +311,7 @@ pub fn import_from_gltf(
         rigid_bone_index: 0,
         all_sections_rigid: all_rigid,
         all_sections_skinned: has_any_skin && !all_rigid,
-        global_bones: false,
+        global_bones: any_global_bones,
     })
 }
 

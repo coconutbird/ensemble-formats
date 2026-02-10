@@ -516,12 +516,18 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     for &v in &geom.bounds.max {
         cursor.write_f32::<LittleEndian>(v)?;
     }
-    // +0x34: max_instances
-    cursor.write_i16::<LittleEndian>(0)?;
+    // +0x34: max_instances (1 = no instancing, game default)
+    cursor.write_i16::<LittleEndian>(1)?;
     // +0x36: instance_index_multiplier
-    cursor.write_i16::<LittleEndian>(0)?;
-    // +0x38: large_geom_bone_index
-    cursor.write_i16::<LittleEndian>(-1)?;
+    // This MUST be a valid power of 2 >= (maxVertexIndex + 1)
+    // The shader computes: meshIndex = Index * (1/instanceIndexMultiplier)
+    // If this is 0, division by zero occurs in the game's ugxGeomData.cpp:
+    //   mInstanceIndexMultiplier = 1.0f / header.getInstanceIndexMultiplier();
+    let max_vertex_index = geom.sections.iter().map(|s| s.num_verts as u32).max().unwrap_or(1);
+    let instance_index_multiplier = (max_vertex_index).next_power_of_two() as i16;
+    cursor.write_i16::<LittleEndian>(instance_index_multiplier)?;
+    // +0x38: large_geom_bone_index (INT16_MAX = no large geom bone)
+    cursor.write_i16::<LittleEndian>(i16::MAX)?;
     // +0x3A: flags
     cursor.write_u8(if geom.all_sections_rigid { 1 } else { 0 })?;
     cursor.write_u8(if geom.global_bones { 1 } else { 0 })?;
