@@ -152,13 +152,104 @@ pub fn import_from_gltf(
                 index_type: VertexElementType::Ignore,
             };
 
+            // Analyze bone usage for this section
+            let (actual_max_bones, is_rigid_section, rigid_bone_idx) = if has_skin {
+                // Count unique bones actually used and check if all verts use same bone
+                let mut unique_bones = std::collections::HashSet::new();
+                let mut first_bone: Option<u16> = None;
+                let mut all_same_bone = true;
+
+                for v in &vertices {
+                    // Find the primary bone (first with non-zero weight)
+                    let mut primary_bone: Option<u16> = None;
+                    for k in 0..4 {
+                        if v.bone_weights[k] > 0.0 {
+                            unique_bones.insert(v.bone_indices[k]);
+                            if primary_bone.is_none() {
+                                primary_bone = Some(v.bone_indices[k]);
+                            }
+                        }
+                    }
+
+                    // Check if all vertices use the same single bone
+                    if let Some(pb) = primary_bone {
+                        // Check if this vertex only uses one bone (weight sum ~= first weight)
+                        let is_single_bone = v.bone_weights[0] > 0.99;
+                        if is_single_bone {
+                            match first_bone {
+                                None => first_bone = Some(pb),
+                                Some(fb) if fb != pb => all_same_bone = false,
+                                _ => {}
+                            }
+                        } else {
+                            all_same_bone = false;
+                        }
+                    }
+                }
+
+                let max_bones = unique_bones.len().max(1) as i32;
+
+                // If all vertices use the same single bone, this is a rigid section
+                if all_same_bone && first_bone.is_some() {
+                    // Convert 1-based bone index to 0-based for rigid_bone_index
+                    let rigid_idx = (first_bone.unwrap() as i32) - 1;
+                    (1, true, rigid_idx)
+                } else {
+                    (max_bones, false, -1)
+                }
+            } else {
+                (0, true, -1)
+            };
+
+            // For rigid sections, use a simpler pack order without skin data
+            let (final_packer, _final_has_skin) = if is_rigid_section && rigid_bone_idx >= 0 {
+                // Rebuild packer without skin data for rigid sections
+                let mut rigid_pack_order = String::from("PN");
+                if has_tangents {
+                    rigid_pack_order.push_str("A0");
+                }
+                for i in 0..max_texcoords {
+                    rigid_pack_order.push('T');
+                    rigid_pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+                }
+                if has_colors {
+                    rigid_pack_order.push('D');
+                }
+
+                let rigid_packer = UnivertPacker {
+                    pack_order: rigid_pack_order.clone(),
+                    decl_order: rigid_pack_order,
+                    pos_type: VertexElementType::HalfFloat4,
+                    basis_type: VertexElementType::Float4,
+                    basis_scale_type: VertexElementType::Float2,
+                    tangent_type: if has_tangents {
+                        VertexElementType::Float3
+                    } else {
+                        VertexElementType::Ignore
+                    },
+                    normal_type: VertexElementType::Float3,
+                    uv_types,
+                    indices_type: VertexElementType::Ignore,
+                    weights_type: VertexElementType::Ignore,
+                    diffuse_type: if has_colors {
+                        VertexElementType::Float4
+                    } else {
+                        VertexElementType::Ignore
+                    },
+                    index_type: VertexElementType::Ignore,
+                };
+                (rigid_packer, false)
+            } else {
+                (packer, has_skin)
+            };
+
             // Pack vertices into binary buffer
             let vb_offset = all_vertex_buffer.len() as i32;
             for v in &vertices {
-                packer.pack_vertex(&mut all_vertex_buffer, v)?;
+                final_packer.pack_vertex(&mut all_vertex_buffer, v)?;
             }
             let vb_bytes = (all_vertex_buffer.len() as i32) - vb_offset;
-            let vert_size = packer.vertex_size() as i32;
+            let vert_size = final_packer.vertex_size() as i32;
 
             // Add indices
             let ib_offset = all_index_buffer.len() as i32;
@@ -168,22 +259,18 @@ pub fn import_from_gltf(
             sections.push(Section {
                 material_index,
                 accessory_index: -1,
-                max_bones: if has_skin { bones.len() as i32 } else { 0 },
-                rigid_bone_index: if !has_skin && !bones.is_empty() {
-                    0
-                } else {
-                    -1
-                },
+                max_bones: actual_max_bones,
+                rigid_bone_index: rigid_bone_idx,
                 ib_offset,
                 num_tris,
                 vb_offset,
                 vb_bytes,
                 vert_size,
                 num_verts: vertices.len() as i32,
-                base_vert_packer: packer,
+                base_vert_packer: final_packer,
                 bone_remap: Vec::new(),
-                rigid_only: !has_skin,
-                global_bones: false,
+                rigid_only: is_rigid_section,
+                global_bones: is_rigid_section && rigid_bone_idx >= 0,
             });
 
             all_vertices.extend(vertices);
@@ -450,15 +537,31 @@ fn import_primitive(
         if let (Some(ref j), Some(ref w)) = (&joints, &weights) {
             let mut bone_indices = [0u16; 4];
             let mut bone_weights = [0.0f32; 4];
+
+            // First pass: find the first valid bone index for padding
+            let mut first_valid_bone: u16 = 1; // Default to bone 1 if no valid bones
+            for k in 0..4 {
+                if w[i * 4 + k] > 0.0 {
+                    let joint_0based = j[i * 4 + k] as u16;
+                    // Clamp to valid range and convert to 1-based
+                    first_valid_bone = (joint_0based.min(max_bone_idx) + 1).max(1);
+                    break;
+                }
+            }
+
+            // Second pass: set bone indices and weights
             for k in 0..4 {
                 let joint_0based = j[i * 4 + k] as u16;
-                // Convert 0-based glTF joint to 1-based UGX bone index
-                bone_indices[k] = if w[i * 4 + k] > 0.0 {
-                    (joint_0based + 1).min(max_bone_idx + 1)
-                } else {
-                    0
-                };
                 bone_weights[k] = w[i * 4 + k];
+
+                if bone_weights[k] > 0.0 {
+                    // Convert 0-based glTF joint to 1-based UGX bone index
+                    // Clamp to valid range to prevent out-of-bounds
+                    bone_indices[k] = (joint_0based.min(max_bone_idx) + 1).max(1);
+                } else {
+                    // Use first valid bone for padding (game expects valid indices)
+                    bone_indices[k] = first_valid_bone;
+                }
             }
             vertex.bone_indices = bone_indices;
             vertex.bone_weights = bone_weights;
@@ -1081,17 +1184,30 @@ mod tests {
         let imported_verts = imported.unpack_section_vertices(0).unwrap();
 
         for (orig, imp) in orig_verts.iter().zip(imported_verts.iter()) {
-            // Bone indices should match
-            assert_eq!(
-                imp.bone_indices, orig.bone_indices,
-                "bone_indices mismatch: {:?} vs {:?}",
-                imp.bone_indices, orig.bone_indices
-            );
+            // Bone indices with non-zero weights should match
+            // Indices with zero weights may be padded with valid bone indices (game requirement)
+            for k in 0..4 {
+                if orig.bone_weights[k] > 0.0 {
+                    assert_eq!(
+                        imp.bone_indices[k], orig.bone_indices[k],
+                        "bone_indices[{}] mismatch for weighted bone: {:?} vs {:?}",
+                        k, imp.bone_indices, orig.bone_indices
+                    );
+                } else {
+                    // For zero-weight slots, just verify the index is valid (non-zero for 1-based)
+                    // Game expects valid bone indices even for unused slots
+                    assert!(
+                        imp.bone_indices[k] > 0,
+                        "bone_indices[{}] should be valid (>0) for game compatibility, got {}",
+                        k, imp.bone_indices[k]
+                    );
+                }
+            }
 
-            // Bone weights should be close
+            // Bone weights should be close (UByte4N has ~1/255 precision)
             for k in 0..4 {
                 assert!(
-                    (orig.bone_weights[k] - imp.bone_weights[k]).abs() < 1e-4,
+                    (orig.bone_weights[k] - imp.bone_weights[k]).abs() < 0.01,
                     "bone_weight[{}] mismatch: {} vs {}",
                     k,
                     orig.bone_weights[k],
@@ -1191,8 +1307,8 @@ mod tests {
                 );
             }
 
-            // Tangents
-            for i in 0..4 {
+            // Tangents (only check xyz - game uses Float3 which doesn't store w/handedness)
+            for i in 0..3 {
                 assert!(
                     (orig.tangent[i] - fin.tangent[i]).abs() < 1e-4,
                     "vertex {} tangent[{}] mismatch: {} vs {}",
@@ -1218,17 +1334,29 @@ mod tests {
                 }
             }
 
-            // Bone indices
-            assert_eq!(
-                orig.bone_indices, fin.bone_indices,
-                "vertex {} bone_indices mismatch: {:?} vs {:?}",
-                vi, orig.bone_indices, fin.bone_indices
-            );
+            // Bone indices - only check indices with non-zero weights
+            // Indices with zero weights may be padded with valid bone indices (game requirement)
+            for i in 0..4 {
+                if orig.bone_weights[i] > 0.0 {
+                    assert_eq!(
+                        orig.bone_indices[i], fin.bone_indices[i],
+                        "vertex {} bone_indices[{}] mismatch for weighted bone: {:?} vs {:?}",
+                        vi, i, orig.bone_indices, fin.bone_indices
+                    );
+                } else {
+                    // For zero-weight slots, just verify the index is valid (non-zero for 1-based)
+                    assert!(
+                        fin.bone_indices[i] > 0,
+                        "vertex {} bone_indices[{}] should be valid (>0) for game compatibility, got {}",
+                        vi, i, fin.bone_indices[i]
+                    );
+                }
+            }
 
-            // Bone weights
+            // Bone weights (UByte4N has ~1/255 precision)
             for i in 0..4 {
                 assert!(
-                    (orig.bone_weights[i] - fin.bone_weights[i]).abs() < 1e-4,
+                    (orig.bone_weights[i] - fin.bone_weights[i]).abs() < 0.01,
                     "vertex {} bone_weights[{}] mismatch: {} vs {}",
                     vi,
                     i,
