@@ -673,28 +673,52 @@ impl UgxGeom {
 
     /// Parse granny bones from granny chunk (0x703).
     ///
-    /// Granny skeleton format (from Python reference):
-    /// - Skeleton offset at granny[52:60] (uint64)
-    /// - At skelOffs + 24: bonesLen (uint32), then at skelOffs + 28: bonesOffs (uint64)
-    /// - Each bone is 164 bytes:
-    ///   - +0x00: nameOffs (uint64)
-    ///   - +0x08: parent (int32)
-    ///   - +0x50 (80): InverseWorld4x4 matrix (16 floats = 64 bytes)
+    /// Granny file_info layout (verified from IDA and real file dump):
+    ///   +0x30: u32 SkeletonCount
+    ///   +0x34: u64 Skeletons -> skeleton pointer array
+    ///
+    /// Skeleton struct layout:
+    ///   +0x00: u64 Name
+    ///   +0x08: u32 BoneCount
+    ///   +0x0C: u64 Bones -> bone array
+    ///
+    /// Bone struct (164 bytes each):
+    ///   +0x00: u64 nameOffs
+    ///   +0x08: i32 parent
+    ///   +0x0C: transform LocalTransform (68 bytes)
+    ///   +0x50: matrix_4x4 InverseWorld4x4 (64 bytes)
+    ///   +0x90: f32 LODError
+    ///   +0x94: variant ExtendedData (16 bytes)
     fn parse_granny_bones(granny: &[u8]) -> Result<Vec<GrannyBone>> {
-        if granny.len() < 60 {
+        if granny.len() < 0x40 {
             return Ok(Vec::new());
         }
 
-        // Read skeleton offset from granny[52:60]
-        let mut cursor = Cursor::new(&granny[52..60]);
-        let skel_offs = cursor.read_u64::<LittleEndian>()? as usize;
-
-        if skel_offs + 36 > granny.len() {
+        // Read SkeletonCount from file_info+0x30
+        let mut cursor = Cursor::new(&granny[0x30..0x34]);
+        let skeleton_count = cursor.read_u32::<LittleEndian>()? as usize;
+        if skeleton_count == 0 {
             return Ok(Vec::new());
         }
 
-        // Read bonesLen and bonesOffs from skelOffs + 24
-        let mut cursor = Cursor::new(&granny[skel_offs + 24..skel_offs + 36]);
+        // Read Skeletons pointer (to skeleton pointer array) from file_info+0x34
+        let mut cursor = Cursor::new(&granny[0x34..0x3C]);
+        let skeleton_ptr_array_offs = cursor.read_u64::<LittleEndian>()? as usize;
+
+        if skeleton_ptr_array_offs + 8 > granny.len() {
+            return Ok(Vec::new());
+        }
+
+        // Read first skeleton pointer from the array
+        let mut cursor = Cursor::new(&granny[skeleton_ptr_array_offs..skeleton_ptr_array_offs + 8]);
+        let skeleton_offs = cursor.read_u64::<LittleEndian>()? as usize;
+
+        if skeleton_offs + 0x14 > granny.len() {
+            return Ok(Vec::new());
+        }
+
+        // Read BoneCount from skeleton+0x08 and Bones from skeleton+0x0C
+        let mut cursor = Cursor::new(&granny[skeleton_offs + 0x08..skeleton_offs + 0x14]);
         let bones_len = cursor.read_u32::<LittleEndian>()? as usize;
         let bones_offs = cursor.read_u64::<LittleEndian>()? as usize;
 

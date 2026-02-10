@@ -210,58 +210,157 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         })
         .collect();
 
-    // ---- Layout ----
-    // [0x00..0x60]: File info header (96 bytes)
-    //   [0x10..0x18]: u64 filename string offset
-    //   [0x30..0x34]: u32 skeleton count (1)
-    //   [0x34..0x3C]: u64 skeleton offset
-    //   [0x54..0x58]: i32 mesh count
-    //   [0x58..0x60]: u64 mesh array ptr
-    // [0x60..0x80]: Skeleton struct (32 bytes)
-    //   [+0x00..+0x08]: u64 name string offset
-    //   [+0x08..+0x10]: padding
-    //   [+0x10..+0x18]: u64 bone name (reuse first bone name)
-    //   [+0x18..+0x1C]: u32 bone count
-    //   [+0x1C..+0x24]: u64 bones array offset
-    // [0x84..0x88]: padding to align bones to 8 bytes
-    // [0x88..]: Bone array (bone_count × 164 bytes)
-    // After bones: Mesh pointer array (section_count × 8 bytes)
-    // After mesh ptrs: Mesh structs (section_count × 8 bytes)
-    // String table
+    // ---- Layout (matching game's BGrannyModel::load expectations) ----
+    // Verified from IDA disassembly at 0x14073d2f0 and real UGX file dump:
+    //
+    // file_info (at 0x00):
+    //   +0x10: u64 FromFileName → "gr2ugx"
+    //   +0x30: u32 SkeletonCount = 1
+    //   +0x34: u64 Skeletons → skeleton pointer array
+    //   +0x54: u32 MeshCount (optional)
+    //   +0x58: u64 Meshes (optional)
+    //   +0x60: u32 ModelCount = 1
+    //   +0x64: u64 Models → model pointer array
+    //
+    // Model struct (68+16 = ~0x60 bytes):
+    //   +0x00: u64 Name
+    //   +0x08: u64 Skeleton → skeleton struct
+    //   +0x10: transform InitialPlacement (68 bytes: u32 Flags + 3f Position + 4f Orientation + 9f ScaleShear)
+    //   +0x54: u32 MeshBindingCount
+    //   +0x58: u64 MeshBindings
+    //
+    // Skeleton struct (0x18 bytes):
+    //   +0x00: u64 Name
+    //   +0x08: u32 BoneCount
+    //   +0x0C: u64 Bones → bone array
+    //   +0x14: u32 LODType (optional, usually 0)
+    //
+    // Bone struct (164 bytes = 0xA4):
+    //   +0x00: u64 Name
+    //   +0x08: i32 ParentIndex
+    //   +0x0C: transform LocalTransform (68 bytes)
+    //   +0x50: matrix_4x4 InverseWorld4x4 (64 bytes)
+    //   +0x90: f32 LODError
+    //   +0x94: variant ExtendedData (16 bytes)
 
-    let header_size: usize = 96; // 0x60
-    let skeleton_offset: u64 = header_size as u64;
-    let skeleton_size: usize = 36;
-    // Align bones start to 8 bytes
-    let bones_start_unaligned = header_size + skeleton_size;
-    let bones_start = (bones_start_unaligned + 7) & !7; // 136 = 0x88
+    // Calculate offsets for all structures
+    let header_size: usize = 0x70; // file_info header
+
+    // Skeleton pointer array (1 entry)
+    let skeleton_ptr_array_offset = header_size; // 0x70
+    let skeleton_ptr_array_size = 8;
+
+    // Skeleton struct
+    let skeleton_struct_offset = skeleton_ptr_array_offset + skeleton_ptr_array_size; // 0x78
+    let skeleton_struct_size = 0x18; // Name(8) + BoneCount(4) + Bones(8) + LODType(4) = 24
+
+    // Model pointer array (1 entry)
+    let model_ptr_array_offset = skeleton_struct_offset + skeleton_struct_size; // 0x90
+    let model_ptr_array_size = 8;
+
+    // Model struct
+    let model_struct_offset = model_ptr_array_offset + model_ptr_array_size; // 0x98
+    let model_struct_size = 0x60; // Name(8) + Skeleton(8) + Transform(68) + MeshBindingCount(4) + MeshBindings(8)
+
+    // Bone array
+    let bones_start = model_struct_offset + model_struct_size; // after model
+    let bones_start = (bones_start + 7) & !7; // align to 8 bytes
     let bones_end = bones_start + bone_count * GRANNY_BONE_SIZE;
 
-    let mesh_ptrs_start = bones_end;
+    // Mesh binding array (for model)
+    let mesh_bindings_start = bones_end;
+    let mesh_bindings_size = section_count * 8; // each binding is one pointer
+
+    // Mesh pointer array + mesh structs (for file_info meshes, optional)
+    let mesh_ptrs_start = mesh_bindings_start + mesh_bindings_size;
     let mesh_structs_start = mesh_ptrs_start + section_count * 8;
     let strings_start = mesh_structs_start + section_count * 8;
 
     let mut buf = vec![0u8; strings_start];
     let mut cursor = Cursor::new(&mut buf);
 
-    // ---- File info header [0x00..0x60] ----
-    // [0x30]: u32 skeleton_count = 1
+    // ---- File info header [0x00..0x70] ----
+    // [0x10]: u64 "gr2ugx" string offset (will be fixed up later via string_fixups)
+
+    // [0x30]: u32 SkeletonCount = 1
     cursor.seek(std::io::SeekFrom::Start(0x30))?;
     cursor.write_u32::<LittleEndian>(1)?;
-    // [0x34]: u64 skeleton_offset
-    cursor.write_u64::<LittleEndian>(skeleton_offset)?;
-    // [0x54]: i32 mesh_count
+    // [0x34]: u64 Skeletons → skeleton pointer array
+    cursor.write_u64::<LittleEndian>(skeleton_ptr_array_offset as u64)?;
+
+    // [0x54]: u32 MeshCount
     cursor.seek(std::io::SeekFrom::Start(0x54))?;
-    cursor.write_i32::<LittleEndian>(section_count as i32)?;
-    // [0x58]: u64 mesh_pointer_array_offset
+    cursor.write_u32::<LittleEndian>(section_count as u32)?;
+    // [0x58]: u64 Meshes → mesh pointer array
     cursor.write_u64::<LittleEndian>(mesh_ptrs_start as u64)?;
 
-    // ---- Skeleton struct [0x60..] ----
-    // +0x18: u32 bone_count
-    cursor.seek(std::io::SeekFrom::Start(skeleton_offset + 0x18))?;
+    // [0x60]: u32 ModelCount = 1
+    cursor.seek(std::io::SeekFrom::Start(0x60))?;
+    cursor.write_u32::<LittleEndian>(1)?;
+    // [0x64]: u64 Models → model pointer array
+    cursor.write_u64::<LittleEndian>(model_ptr_array_offset as u64)?;
+
+    // ---- Skeleton pointer array ----
+    cursor.seek(std::io::SeekFrom::Start(skeleton_ptr_array_offset as u64))?;
+    cursor.write_u64::<LittleEndian>(skeleton_struct_offset as u64)?;
+
+    // ---- Skeleton struct ----
+    // +0x00: u64 Name (will be fixed up via string_fixups)
+    // +0x08: u32 BoneCount
+    cursor.seek(std::io::SeekFrom::Start(
+        (skeleton_struct_offset + 0x08) as u64,
+    ))?;
     cursor.write_u32::<LittleEndian>(bone_count as u32)?;
-    // +0x1C: u64 bones_array_offset
+    // +0x0C: u64 Bones → bone array
     cursor.write_u64::<LittleEndian>(bones_start as u64)?;
+    // +0x14: u32 LODType = 0
+    cursor.write_u32::<LittleEndian>(0)?;
+
+    // ---- Model pointer array ----
+    cursor.seek(std::io::SeekFrom::Start(model_ptr_array_offset as u64))?;
+    cursor.write_u64::<LittleEndian>(model_struct_offset as u64)?;
+
+    // ---- Model struct ----
+    // +0x00: u64 Name (will be fixed up via string_fixups)
+    // +0x08: u64 Skeleton → skeleton struct
+    cursor.seek(std::io::SeekFrom::Start(
+        (model_struct_offset + 0x08) as u64,
+    ))?;
+    cursor.write_u64::<LittleEndian>(skeleton_struct_offset as u64)?;
+
+    // +0x10: transform InitialPlacement (identity transform, 68 bytes)
+    cursor.seek(std::io::SeekFrom::Start(
+        (model_struct_offset + 0x10) as u64,
+    ))?;
+    // Flags = 0 (no position/orientation/scale, meaning identity)
+    cursor.write_u32::<LittleEndian>(0)?;
+    // Position (3 floats) = [0, 0, 0]
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    // Orientation (4 floats) = [0, 0, 0, 1] (identity quaternion)
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(1.0)?;
+    // ScaleShear (3x3 = 9 floats) = identity matrix
+    cursor.write_f32::<LittleEndian>(1.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(1.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(0.0)?;
+    cursor.write_f32::<LittleEndian>(1.0)?;
+
+    // +0x54: u32 MeshBindingCount
+    cursor.seek(std::io::SeekFrom::Start(
+        (model_struct_offset + 0x54) as u64,
+    ))?;
+    cursor.write_u32::<LittleEndian>(section_count as u32)?;
+    // +0x58: u64 MeshBindings
+    cursor.write_u64::<LittleEndian>(mesh_bindings_start as u64)?;
 
     // ---- Bone array ----
     struct StringFixup {
@@ -318,7 +417,16 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         // +0x94: 16 bytes extended data (already zeros from initialization)
     }
 
-    // ---- Mesh pointer array + mesh structs ----
+    // ---- Mesh bindings (for Model) ----
+    // Each mesh binding points to a mesh struct
+    for i in 0..section_count {
+        let binding_pos = mesh_bindings_start + i * 8;
+        let mesh_struct_pos = mesh_structs_start + i * 8;
+        cursor.seek(std::io::SeekFrom::Start(binding_pos as u64))?;
+        cursor.write_u64::<LittleEndian>(mesh_struct_pos as u64)?;
+    }
+
+    // ---- Mesh pointer array + mesh structs (for file_info Meshes) ----
     for i in 0..section_count {
         let ptr_pos = mesh_ptrs_start + i * 8;
         let struct_pos = mesh_structs_start + i * 8;
@@ -332,12 +440,23 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         });
     }
 
-    // ---- String table ----
-    // Also add skeleton name and filename to fixups
-    let skeleton_name = "Skeleton".to_string();
+    // ---- String table fixups ----
+    // Add "gr2ugx" file type string at offset 0x10 (required by game)
     string_fixups.push(StringFixup {
-        position: skeleton_offset as usize, // skeleton +0x00: name offset
-        string: skeleton_name,
+        position: 0x10,
+        string: "gr2ugx".to_string(),
+    });
+
+    // Add skeleton name at skeleton_struct +0x00
+    string_fixups.push(StringFixup {
+        position: skeleton_struct_offset,
+        string: "GrannyRootBone".to_string(), // Use same name as real files
+    });
+
+    // Add model name at model_struct +0x00
+    string_fixups.push(StringFixup {
+        position: model_struct_offset,
+        string: "GrannyRootBone".to_string(), // Model name (same as skeleton in real files)
     });
 
     drop(cursor);
