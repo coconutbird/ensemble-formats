@@ -1,6 +1,30 @@
 //! Vertex element types and unpacking.
 //!
 //! This module handles the various packed vertex formats used in UGX files.
+//!
+//! # C++ Equivalent
+//!
+//! This corresponds to `VertexElement::EType` enum from the original source.
+//! The enum values 0-19 match exactly with the original Xbox 360 source.
+//!
+//! # Common Vertex Formats
+//!
+//! | Attribute    | Typical Type | Size | Notes                           |
+//! |--------------|--------------|------|---------------------------------|
+//! | Position     | Float4       | 16   | XYZ + W (W usually 1.0)         |
+//! | Normal       | Dec3N        | 4    | 10-bit normalized XYZ           |
+//! | Tangent      | Dec3N        | 4    | 10-bit normalized XYZ           |
+//! | Binormal     | Dec3N        | 4    | 10-bit normalized XYZ           |
+//! | TexCoord     | HalfFloat2   | 4    | UV as half-floats               |
+//! | BoneIndices  | UByte4       | 4    | 4 bone indices (0-255)          |
+//! | BoneWeights  | UByte4N      | 4    | 4 weights normalized to 0-1     |
+//! | VertexColor  | D3DColor     | 4    | ARGB packed as BGRA bytes       |
+//!
+//! # Normalization
+//!
+//! - `*N` types (e.g., `UByte4N`, `Short2N`) are normalized to floating point
+//! - Unsigned normalized: `value / max_value` (e.g., 255 → 1.0)
+//! - Signed normalized: `value / max_value` (e.g., 32767 → 1.0, -32768 → -1.0)
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use half::f16;
@@ -8,7 +32,7 @@ use std::io::{Read, Write};
 
 use crate::error::{Error, Result};
 
-/// Vertex element data types.
+/// Vertex element data types (matches C++ `VertexElement::EType` enum).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum VertexElementType {

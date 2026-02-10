@@ -498,27 +498,29 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut cursor = Cursor::new(&mut buf);
 
-    // ---- Geometry header ----
-    // +0x00: signature
+    // ---- Geometry header (BUGXGeomHeader, 60 bytes) ----
+    // Offsets verified from IDA struct BUGXGeomHeader
+    // +0x00: mSignature (4 bytes)
     cursor.write_u32::<LittleEndian>(GEOM_HEADER_SIGNATURE)?;
-    // +0x04: rigid_bone_index
+    // +0x04: mRigidBoneIndex (4 bytes)
     cursor.write_i32::<LittleEndian>(geom.rigid_bone_index)?;
-    // +0x08: bounding sphere center + radius
+    // +0x08: mBoundingSphereCenter (12 bytes)
     for &v in &geom.bounding_sphere.center {
         cursor.write_f32::<LittleEndian>(v)?;
     }
+    // +0x14: mBoundingSphereRadius (4 bytes)
     cursor.write_f32::<LittleEndian>(geom.bounding_sphere.radius)?;
-    // +0x1C: AABB min
+    // +0x18: mBoundsLow (12 bytes)
     for &v in &geom.bounds.min {
         cursor.write_f32::<LittleEndian>(v)?;
     }
-    // +0x28: AABB max
+    // +0x24: mBoundsHigh (12 bytes)
     for &v in &geom.bounds.max {
         cursor.write_f32::<LittleEndian>(v)?;
     }
-    // +0x34: max_instances (1 = no instancing, game default)
+    // +0x30: mMaxInstances (2 bytes) - 1 = no instancing
     cursor.write_i16::<LittleEndian>(1)?;
-    // +0x36: instance_index_multiplier
+    // +0x32: mInstanceIndexMultiplier (2 bytes)
     // This MUST be a valid power of 2 >= (maxVertexIndex + 1)
     // The shader computes: meshIndex = Index * (1/instanceIndexMultiplier)
     // If this is 0, division by zero occurs in the game's ugxGeomData.cpp:
@@ -526,15 +528,19 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let max_vertex_index = geom.sections.iter().map(|s| s.num_verts as u32).max().unwrap_or(1);
     let instance_index_multiplier = (max_vertex_index).next_power_of_two() as i16;
     cursor.write_i16::<LittleEndian>(instance_index_multiplier)?;
-    // +0x38: large_geom_bone_index (INT16_MAX = no large geom bone)
+    // +0x34: mLargeGeomBoneIndex (2 bytes) - INT16_MAX = no large geom bone
     cursor.write_i16::<LittleEndian>(i16::MAX)?;
-    // +0x3A: flags
+    // +0x36: mAllSectionsRigid (1 byte)
     cursor.write_u8(if geom.all_sections_rigid { 1 } else { 0 })?;
+    // +0x37: mGlobalBones (1 byte)
     cursor.write_u8(if geom.global_bones { 1 } else { 0 })?;
+    // +0x38: mAllSectionsSkinned (1 byte)
     cursor.write_u8(if geom.all_sections_skinned { 1 } else { 0 })?;
+    // +0x39: mRigidOnly (1 byte)
     cursor.write_u8(if geom.rigid_only { 1 } else { 0 })?;
-    // +0x3E: padding to 0x40
+    // +0x3A: padding (2 bytes) - part of BUGXGeomHeader
     cursor.write_u16::<LittleEndian>(0)?;
+    // +0x3C: padding (4 bytes) - BCachedData padding between header and packed arrays
     cursor.write_u32::<LittleEndian>(0)?;
 
     // Current position: 0x40 (64 bytes)
@@ -591,11 +597,14 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         cursor.write_i32::<LittleEndian>(section.num_verts)?;
 
         // +0x28: BoneRemap packed array (16 bytes)
+        // IDA shows 0xFFFFFFFF is the NULL marker for empty packed arrays
         let bone_remap_header_pos = cursor.stream_position()? as usize;
         cursor.write_u32::<LittleEndian>(section.bone_remap.len() as u32)?; // count
         cursor.write_u32::<LittleEndian>(0)?; // pad
-        cursor.write_u64::<LittleEndian>(0)?; // offset (placeholder, fixed up later)
-        if !section.bone_remap.is_empty() {
+        if section.bone_remap.is_empty() {
+            cursor.write_u64::<LittleEndian>(0xFFFFFFFF)?; // NULL marker
+        } else {
+            cursor.write_u64::<LittleEndian>(0)?; // placeholder, fixed up later
             bone_remap_fixups.push((bone_remap_header_pos, section_idx));
         }
 
@@ -750,6 +759,7 @@ fn write_packed_array_header_placeholder<W: Write>(writer: &mut W) -> Result<()>
 }
 
 /// Fix up a packed array header at the given position.
+/// IDA shows 0xFFFFFFFF is the NULL marker for empty packed arrays.
 fn fixup_packed_array_header(
     cursor: &mut Cursor<&mut Vec<u8>>,
     header_pos: usize,
@@ -759,7 +769,9 @@ fn fixup_packed_array_header(
     cursor.seek(std::io::SeekFrom::Start(header_pos as u64))?;
     cursor.write_u32::<LittleEndian>(count)?;
     cursor.write_u32::<LittleEndian>(0)?; // pad
-    cursor.write_u64::<LittleEndian>(offset)?;
+    // Use 0xFFFFFFFF as NULL marker for empty arrays (verified from IDA)
+    let final_offset = if count == 0 { 0xFFFFFFFF } else { offset };
+    cursor.write_u64::<LittleEndian>(final_offset)?;
     Ok(())
 }
 

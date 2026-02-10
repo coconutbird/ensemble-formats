@@ -3,6 +3,40 @@
 //! The UnivertPacker describes how vertex attributes are packed in the vertex buffer.
 //! It uses a string-based "pack order" to specify which attributes are present and
 //! in what order, along with type specifiers for each attribute.
+//!
+//! # C++ Equivalent
+//!
+//! This corresponds to `Unigeom::BUnpacker` from the original source.
+//!
+//! # Pack Order String Format
+//!
+//! The `pack_order` string defines the sequence of vertex attributes in the packed
+//! vertex data. Each character (or character+digit) represents an attribute:
+//!
+//! | Character | Meaning            | Example                      |
+//! |-----------|--------------------|-----------------------------|
+//! | `P`       | Position           | Float4 (16 bytes)           |
+//! | `B#`      | Basis (T/B/N)      | 3x Dec3N (12 bytes)         |
+//! | `N`       | Normal only        | Dec3N (4 bytes)             |
+//! | `T#`      | TexCoord set #     | HalfFloat2 (4 bytes)        |
+//! | `S`       | Skin (idx+weights) | UByte4 + UByte4N (8 bytes)  |
+//! | `D`       | Diffuse color      | D3DColor (4 bytes)          |
+//! | `I`       | Vertex index       | Short2 (4 bytes)            |
+//! | `X#`      | Basis scale        | HalfFloat2 (4 bytes)        |
+//!
+//! ## Common Pack Order Examples
+//!
+//! - `"PBNT0S"` - Position, Basis, Normal, TexCoord0, Skin (skinned mesh)
+//! - `"PNT0"` - Position, Normal, TexCoord0 (static mesh)
+//! - `"PB0NT0T1S"` - Multiple texcoords (e.g., diffuse + lightmap)
+//!
+//! # On-Disk Layout (84 bytes)
+//!
+//! The packed format in BCachedData chunk differs from in-memory (104 bytes on x64):
+//! - Strings are stored as offsets (8 bytes each)
+//! - Element types are stored as u32 enums
+//!
+//! See `ugx.rs` for the detailed byte layout.
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{Read, Write};

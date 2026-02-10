@@ -1,15 +1,102 @@
 //! UGX file reader.
 //!
-//! UGX files are stored inside ECF (Ensemble Common Format) containers.
-//! The geometry data is split across multiple ECF chunks:
-//! - Cached data chunk (0x700): Header, sections, bones, accessories
-//! - Index buffer chunk (0x701): Triangle indices
-//! - Vertex buffer chunk (0x702): Vertex data
-//! - Material chunk (0x704): Material definitions
+//! # File Format Overview
 //!
-//! The packed format uses 64-bit offsets (Definitive Edition is x64).
-//! Packed arrays have: uint32 size, uint32 padding, uint64 offset.
-//! Packed strings have: uint64 offset to null-terminated string.
+//! UGX (Unit Graphics) files contain 3D model data for Halo Wars. They are stored
+//! inside ECF (Ensemble Common Format) containers with multiple chunks.
+//!
+//! ## ECF Container Structure
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────┐
+//! │ ECF Header (32 bytes, big-endian)                                   │
+//! │   Magic: 0xDABA7737                                                 │
+//! ├─────────────────────────────────────────────────────────────────────┤
+//! │ Chunk Headers (24 bytes each, big-endian)                           │
+//! ├─────────────────────────────────────────────────────────────────────┤
+//! │ Chunk 0x700: BCachedData - Header, sections, bones, accessories     │
+//! │ Chunk 0x701: Index Buffer - Triangle indices (u16 array)            │
+//! │ Chunk 0x702: Vertex Buffer - Packed vertex data                     │
+//! │ Chunk 0x703: Granny Data - Bone inverse world matrices (optional)   │
+//! │ Chunk 0x704: Materials - BBinaryDataTree document (optional)        │
+//! │ Chunk 0x705: AABB Tree - Spatial acceleration structure (optional)  │
+//! └─────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Packed Data Format (Definitive Edition x64)
+//!
+//! The BCachedData chunk uses a "packed" format where pointers are stored as
+//! offsets relative to the chunk start. This makes the data position-independent.
+//!
+//! ### Packed Array Layout (16 bytes)
+//!
+//! Corresponds to C++ `BPackedArray<T>`:
+//! ```text
+//! +0x00: uint32 size      - Number of elements
+//! +0x04: uint32 padding   - Alignment padding (always 0)
+//! +0x08: uint64 offset    - Offset from chunk start (0xFFFFFFFFFFFFFFFF = NULL)
+//! ```
+//!
+//! ### Packed String Layout (8 bytes)
+//!
+//! Corresponds to C++ `BPackedString`:
+//! ```text
+//! +0x00: uint64 offset    - Offset to null-terminated string (0xFFFFFFFFFFFFFFFF = NULL)
+//! ```
+//!
+//! ## BCachedData Layout (Chunk 0x700)
+//!
+//! Corresponds to C++ `BUGXGeom::BCachedData`:
+//! ```text
+//! +0x00: BHeader (60 bytes)
+//!        +0x00: uint32 signature (0xC2340004)
+//!        +0x04: int32 rigidBoneIndex
+//!        +0x08: Sphere boundingSphere (16 bytes)
+//!        +0x18: AABB bounds (24 bytes)
+//!        +0x30: int16 maxInstances
+//!        +0x32: int16 instanceIndexMultiplier
+//!        +0x34: int16 largeGeomBoneIndex
+//!        +0x36: bool allSectionsRigid, globalBones, allSectionsSkinned, rigidOnly
+//!        +0x3A: padding to 0x40
+//! +0x40: BPackedArray<BSection> sections (16 bytes)
+//! +0x50: BPackedArray<BBone> bones (16 bytes)
+//! +0x60: BPackedArray<BAccessory> accessories (16 bytes)
+//! +0x70: BPackedArray<BAccessory> validAccessories (16 bytes)
+//! +0x80: BPackedArray<BVector3> boneBoundsLow (16 bytes)
+//! +0x90: BPackedArray<BVector3> boneBoundsHigh (16 bytes)
+//! ```
+//!
+//! ## BSection Layout (152 bytes on-disk)
+//!
+//! Corresponds to C++ `BUGXGeom::BSection`:
+//! ```text
+//! +0x00: int32 materialIndex
+//! +0x04: int32 accessoryIndex
+//! +0x08: int32 maxBones
+//! +0x0C: int32 rigidBoneIndex
+//! +0x10: int32 ibOffset (in indices, NOT bytes!)
+//! +0x14: int32 numTris
+//! +0x18: int32 vbOffset
+//! +0x1C: int32 vbBytes
+//! +0x20: int32 vertSize
+//! +0x24: int32 numVerts
+//! +0x28: BPackedArray<uint8> localToGlobalBoneRemap (16 bytes)
+//! +0x38: UnivertPacker baseVertPacker (84 bytes)
+//! +0x8C: int32 rigidOnly (bool as int)
+//! +0x90: int32 globalBones (DE-specific, not in 2008 source!)
+//! +0x94: int32 padding
+//! ```
+//!
+//! ## UnivertPacker Layout (84 bytes on-disk)
+//!
+//! Corresponds to C++ `Unigeom::BUnpacker`:
+//! ```text
+//! +0x00: BPackedString packOrder (8 bytes)
+//! +0x08: BPackedString declOrder (8 bytes)
+//! +0x10: VertexElementType[14] types (56 bytes) - pos, basis, basisScale, tangent,
+//!        normal, uv[8], indices, weights, diffuse, index
+//! +0x48: end (total 84 bytes, differs from x64 in-memory which is 104 bytes)
+//! ```
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{Cursor, Read, Seek};
@@ -19,16 +106,39 @@ use crate::types::*;
 use crate::univert_packer::{UnivertPacker, UnpackedVertex};
 use crate::vertex_element::VertexElementType;
 
-/// ECF chunk IDs for UGX.
+// ============================================================================
+// ECF Chunk IDs for UGX Files
+// ============================================================================
+//
+// These chunk IDs are defined in the original source at xgeom/ugxGeom.h.
+// The ECF container holds multiple chunks, each identified by a 64-bit ID.
+
+/// BCachedData chunk - Contains header, sections, bones, accessories.
+/// All pointers in this chunk are stored as offsets for position independence.
 const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
+
+/// Index Buffer chunk - Raw array of u16 triangle indices.
 const ECF_IB_CHUNK_ID: u64 = 0x00000701;
+
+/// Vertex Buffer chunk - Packed vertex data (format defined by UnivertPacker).
 const ECF_VB_CHUNK_ID: u64 = 0x00000702;
+
+/// Granny chunk - Contains skeleton with inverse world matrices for skinning.
+/// This is the authoritative source for bone transforms in skinned meshes.
 const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
+
+/// Material chunk - BBinaryDataTree document with material definitions.
+/// Contains texture paths, blend modes, specular settings, etc.
 const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 
-/// Geometry header signatures (version 4 = original, version 6 = Definitive Edition).
-const GEOM_HEADER_SIGNATURE_V4: u32 = 0xC2340004;
-const GEOM_HEADER_SIGNATURE_V6: u32 = 0xC2340006;
+// Note: Chunk 0x705 (AABB Tree) exists but is not currently parsed.
+
+// ============================================================================
+// BCachedData Signature
+// ============================================================================
+
+/// BCachedData header signature (verified from IDA: only 0xC2340004 is used).
+const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
 
 /// Parsed UGX geometry data.
 #[derive(Debug, Clone)]
@@ -127,7 +237,25 @@ impl UgxGeom {
         )
     }
 
-    /// Parse the cached data chunk containing header, sections, bones, etc.
+    /// Parse the cached data chunk (0x700) containing header, sections, bones, etc.
+    ///
+    /// # Offset Resolution
+    ///
+    /// The `data` slice is passed to all sub-parsing functions because packed arrays
+    /// store offsets relative to the chunk start. To convert an offset to data:
+    ///
+    /// ```text
+    /// let element_data = &data[offset..offset + element_size];
+    /// ```
+    ///
+    /// The special value `0xFFFFFFFFFFFFFFFF` represents NULL (no data).
+    ///
+    /// # C++ Equivalent
+    ///
+    /// This corresponds to `BUGXGeomData::readCachedData()` which:
+    /// 1. Reads the BCachedData header
+    /// 2. Calls `BCachedData::unpack()` to convert offsets to pointers
+    /// 3. Iterates through sections/bones to unpack nested data
     fn parse_cached_data(
         data: &[u8],
         granny_data: Option<Vec<u8>>,
@@ -137,11 +265,15 @@ impl UgxGeom {
     ) -> Result<Self> {
         let mut cursor = Cursor::new(data);
 
-        // Read and verify header signature (accept both v4 and v6)
+        // ====================================================================
+        // BHeader (60 bytes) - corresponds to BUGXGeom::BHeader
+        // ====================================================================
+        //
+        // Read and verify header signature
         let signature = cursor.read_u32::<LittleEndian>()?;
-        if signature != GEOM_HEADER_SIGNATURE_V4 && signature != GEOM_HEADER_SIGNATURE_V6 {
+        if signature != GEOM_HEADER_SIGNATURE {
             return Err(Error::InvalidSignature {
-                expected: GEOM_HEADER_SIGNATURE_V4,
+                expected: GEOM_HEADER_SIGNATURE,
                 actual: signature,
             });
         }
@@ -253,7 +385,24 @@ impl UgxGeom {
     }
 
     /// Read packed sections array from cached data.
+    ///
+    /// # C++ Equivalent
+    ///
+    /// This corresponds to `BPackedArray<BSection>::unpack()` followed by
+    /// iterating through sections calling `BSection::unpack()` on each.
+    ///
+    /// # Memory Layout
+    ///
+    /// The packed array at the cursor position is 16 bytes:
+    /// ```text
+    /// +0x00: uint32 count   - Number of sections
+    /// +0x04: uint32 padding - Always 0
+    /// +0x08: uint64 offset  - Offset from chunk start to first section
+    /// ```
+    ///
+    /// Each section is 152 bytes (stride), located contiguously at `offset`.
     fn read_packed_sections(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Vec<Section>> {
+        // Read BPackedArray header (16 bytes)
         let count = cursor.read_u32::<LittleEndian>()? as usize;
         let _padding = cursor.read_u32::<LittleEndian>()?;
         let offset = cursor.read_u64::<LittleEndian>()? as usize;
@@ -262,11 +411,13 @@ impl UgxGeom {
             return Ok(Vec::new());
         }
 
-        // Seek to section data
+        // Create a new cursor starting at the section data offset.
+        // This offset is relative to the BCachedData chunk start.
         let mut section_cursor = Cursor::new(&data[offset..]);
         let mut sections = Vec::with_capacity(count);
 
         for _ in 0..count {
+            // Each section is 152 bytes (0x98), read sequentially
             sections.push(Self::read_packed_section(data, &mut section_cursor)?);
         }
 
@@ -364,12 +515,43 @@ impl UgxGeom {
         })
     }
 
-    /// Read packed UnivertPacker.
+    /// Read packed UnivertPacker (84 bytes on-disk).
+    ///
+    /// # C++ Equivalent
+    ///
+    /// This corresponds to `Unigeom::BUnpacker` which describes the vertex format.
+    ///
+    /// # Pack Order String
+    ///
+    /// The `pack_order` string defines the order of vertex attributes in the packed
+    /// vertex data. Each character represents an attribute:
+    ///
+    /// - `P` = Position (always Float4 in DE)
+    /// - `B` = Basis vectors (tangent + binormal + normal, typically Dec3N)
+    /// - `N` = Normal only (without basis, typically Dec3N)
+    /// - `T` = Texture coordinate (0-7), e.g., `T0`, `T1`
+    /// - `S` = Skin data (bone indices + weights, typically UByte4 + UByte4N)
+    /// - `D` = Diffuse color (vertex color, typically D3DColor)
+    /// - `I` = Index (single int, rarely used)
+    ///
+    /// Example: `"PB0NT0S"` = Position, Basis, Normal, TexCoord0, Skin
+    ///
+    /// # Memory Layout (84 bytes)
+    ///
+    /// ```text
+    /// +0x00: uint64 pack_order_offset   - Offset to pack order string
+    /// +0x08: uint64 decl_order_offset   - Offset to decl order string
+    /// +0x10: uint32[14] element_types   - VertexElementType for each attribute
+    ///        [0]=pos, [1]=basis, [2]=basisScale, [3]=tangent, [4]=normal,
+    ///        [5-12]=uv[0-7], [13]=indices, [14]=weights (wait that's 15!)
+    ///        Actually: [5]=indices, [6]=weights, [7]=diffuse, [8]=index? TBD
+    /// ```
     fn read_packed_univert_packer(
         data: &[u8],
         cursor: &mut Cursor<&[u8]>,
     ) -> Result<UnivertPacker> {
-        // Packed strings (uint64 offset each)
+        // +0x00: Packed string offset for pack_order
+        // +0x08: Packed string offset for decl_order
         let pack_order_offset = cursor.read_u64::<LittleEndian>()? as usize;
         let decl_order_offset = cursor.read_u64::<LittleEndian>()? as usize;
 
@@ -429,7 +611,19 @@ impl UgxGeom {
     }
 
     /// Read packed bones array from cached data.
+    ///
+    /// # Note on Bone Transforms
+    ///
+    /// The bones in BCachedData contain `mModelToBone` matrices, but these are
+    /// NOT the authoritative bind pose. For skinned meshes, use the Granny chunk
+    /// (0x703) which contains `mInverseWorldMatrix` - the true inverse bind matrices.
+    ///
+    /// The BCachedData bones are primarily used for:
+    /// - Bone names (the Granny chunk doesn't store names)
+    /// - Parent indices (hierarchy)
+    /// - Non-skinned/rigid meshes
     fn read_packed_bones(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Vec<Bone>> {
+        // Read BPackedArray header (16 bytes)
         let count = cursor.read_u32::<LittleEndian>()? as usize;
         let _padding = cursor.read_u32::<LittleEndian>()?;
         let offset = cursor.read_u64::<LittleEndian>()? as usize;
@@ -438,7 +632,7 @@ impl UgxGeom {
             return Ok(Vec::new());
         }
 
-        // Seek to bone data
+        // Each bone is 80 bytes (0x50), read sequentially from offset
         let mut bone_cursor = Cursor::new(&data[offset..]);
         let mut bones = Vec::with_capacity(count);
 

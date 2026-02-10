@@ -1,4 +1,23 @@
 //! UGX data types - materials, bones, sections, etc.
+//!
+//! # C++ Equivalents
+//!
+//! These Rust types correspond to the following C++ types from the original source:
+//!
+//! | Rust Type       | C++ Type (xgeom/ugxGeom.h)       |
+//! |-----------------|----------------------------------|
+//! | `Section`       | `BUGXGeom::BSection`             |
+//! | `Bone`          | `BUGXGeom::BBone`                |
+//! | `Material`      | `Unigeom::BMaterial`             |
+//! | `Map`           | `Unigeom::BMap`                  |
+//! | `MapType`       | `Unigeom::eMapType`              |
+//! | `UnivertPacker` | `Unigeom::BUnpacker`             |
+//! | `Matrix4x4`     | `BMatrix` (row-major 4x4)        |
+//! | `AABB`          | `AABB` (xcore/math/vectorTypes.h)|
+//! | `Sphere`        | `BSphere`                        |
+//!
+//! Note: The DE (Definitive Edition) format differs from the original Xbox 360
+//! source due to x64 pointer sizes and some additional fields.
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::Read;
