@@ -94,10 +94,15 @@ pub fn import_from_gltf(
             });
             let max_texcoords = vertices.iter().map(|v| v.num_texcoords).max().unwrap_or(0);
 
-            // Build pack order
+            // Build pack order - game format: PNA0ST0 (skin before texcoords for skinned meshes)
+            // For rigid meshes: PNA0T0 (no skin data)
             let mut pack_order = String::from("PN");
             if has_tangents {
                 pack_order.push_str("A0");
+            }
+            // Skin data comes before texcoords in game format
+            if has_skin {
+                pack_order.push('S');
             }
             for i in 0..max_texcoords {
                 pack_order.push('T');
@@ -106,23 +111,23 @@ pub fn import_from_gltf(
             if has_colors {
                 pack_order.push('D');
             }
-            if has_skin {
-                pack_order.push('S');
-            }
 
+            // Use compact vertex types matching game format
             let mut uv_types = [VertexElementType::Ignore; MAX_UV];
             for i in 0..max_texcoords.min(MAX_UV) {
-                uv_types[i] = VertexElementType::Float2;
+                uv_types[i] = VertexElementType::HalfFloat2; // Game uses HalfFloat2 for UVs
             }
 
             let packer = UnivertPacker {
                 pack_order: pack_order.clone(),
                 decl_order: pack_order,
-                pos_type: VertexElementType::Float3,
+                // Game uses HalfFloat4 for position (8 bytes vs 12 for Float3)
+                pos_type: VertexElementType::HalfFloat4,
                 basis_type: VertexElementType::Float4,
                 basis_scale_type: VertexElementType::Float2,
+                // Game uses Float3 for tangent (12 bytes)
                 tangent_type: if has_tangents {
-                    VertexElementType::Float4
+                    VertexElementType::Float3
                 } else {
                     VertexElementType::Ignore
                 },
@@ -133,8 +138,9 @@ pub fn import_from_gltf(
                 } else {
                     VertexElementType::Ignore
                 },
+                // Game uses UByte4N for weights (4 bytes vs 16 for Float4)
                 weights_type: if has_skin {
-                    VertexElementType::Float4
+                    VertexElementType::UByte4N
                 } else {
                     VertexElementType::Ignore
                 },
@@ -1892,5 +1898,239 @@ mod tests {
         assert_eq!(m1.maps[MapType::AO as usize][0].name, r"\textures\ao_01");
         assert_eq!(m1.blend_type, 1);
         assert!((m1.opacity - 0.8).abs() < 0.01);
+    }
+
+    /// Test that round-tripped vertex formats match game expectations.
+    /// The game expects compact vertex types: HalfFloat4 for position, UByte4N for weights,
+    /// HalfFloat2 for UVs, and pack_order with skin before texcoords (PNA0ST0).
+    #[test]
+    fn test_gltf_import_uses_game_vertex_formats() {
+        let original = make_test_geom();
+
+        // Export to glTF with skeleton (to test skinned mesh format)
+        let opts = GltfExportOptions {
+            embed_buffers: false,
+            include_materials: false,
+            include_skeleton: true,
+        };
+        let export = export_to_gltf(&original, &opts).unwrap();
+
+        // Import back
+        let import_opts = GltfImportOptions {
+            include_skeleton: true,
+            include_materials: false,
+        };
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+        assert_eq!(imported.sections.len(), 1);
+        let section = &imported.sections[0];
+        let packer = &section.base_vert_packer;
+
+        // Verify game-compatible vertex element types
+        assert_eq!(
+            packer.pos_type,
+            VertexElementType::HalfFloat4,
+            "Position should use HalfFloat4 (8 bytes) for game compatibility"
+        );
+        assert_eq!(
+            packer.weights_type,
+            VertexElementType::UByte4N,
+            "Weights should use UByte4N (4 bytes) for game compatibility"
+        );
+        assert_eq!(
+            packer.uv_types[0],
+            VertexElementType::HalfFloat2,
+            "UVs should use HalfFloat2 (4 bytes) for game compatibility"
+        );
+        assert_eq!(
+            packer.tangent_type,
+            VertexElementType::Float3,
+            "Tangent should use Float3 (12 bytes) for game compatibility"
+        );
+
+        // Verify pack_order has skin before texcoords (game format: PNA0ST0)
+        let pack_order = &packer.pack_order;
+        let s_pos = pack_order.find('S');
+        let t_pos = pack_order.find('T');
+        assert!(
+            s_pos.is_some() && t_pos.is_some(),
+            "Pack order should contain both S and T: {}",
+            pack_order
+        );
+        assert!(
+            s_pos.unwrap() < t_pos.unwrap(),
+            "Skin (S) should come before texcoords (T) in pack_order: {}",
+            pack_order
+        );
+
+        // Verify vertex size is compact (should be ~44 bytes for skinned mesh with tangent)
+        // HalfFloat4(8) + Float3(12) + Float3(12) + UByte4(4) + UByte4N(4) + HalfFloat2(4) = 44
+        let expected_size = 8 + 12 + 12 + 4 + 4 + 4; // 44 bytes
+        assert_eq!(
+            packer.vertex_size(),
+            expected_size,
+            "Vertex size should be {} bytes for game-compatible format, got {}",
+            expected_size,
+            packer.vertex_size()
+        );
+    }
+
+    /// Test that rigid (non-skinned) meshes also use game-compatible formats.
+    #[test]
+    fn test_gltf_import_rigid_mesh_uses_game_formats() {
+        // Create a rigid mesh (no skeleton)
+        let mut uv_types = [VertexElementType::Ignore; MAX_UV];
+        uv_types[0] = VertexElementType::Float2;
+
+        let packer = UnivertPacker {
+            pack_order: "PNA0T0".to_string(),
+            decl_order: "PNA0T0".to_string(),
+            pos_type: VertexElementType::Float3,
+            basis_type: VertexElementType::Float4,
+            basis_scale_type: VertexElementType::Float2,
+            tangent_type: VertexElementType::Float4,
+            normal_type: VertexElementType::Float3,
+            uv_types,
+            indices_type: VertexElementType::Ignore,
+            weights_type: VertexElementType::Ignore,
+            diffuse_type: VertexElementType::Ignore,
+            index_type: VertexElementType::Ignore,
+        };
+
+        let vertices = vec![
+            UnpackedVertex {
+                position: [0.0, 0.0, 0.0],
+                normal: [0.0, 1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [0.0, 0.0];
+                    tc
+                },
+                num_texcoords: 1,
+                ..Default::default()
+            },
+            UnpackedVertex {
+                position: [1.0, 0.0, 0.0],
+                normal: [0.0, 1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [1.0, 0.0];
+                    tc
+                },
+                num_texcoords: 1,
+                ..Default::default()
+            },
+            UnpackedVertex {
+                position: [0.0, 1.0, 0.0],
+                normal: [0.0, 1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, -1.0],
+                texcoords: {
+                    let mut tc = [[0.0; 2]; MAX_UV];
+                    tc[0] = [0.0, 1.0];
+                    tc
+                },
+                num_texcoords: 1,
+                ..Default::default()
+            },
+        ];
+
+        let mut vertex_buffer = Vec::new();
+        for v in &vertices {
+            packer.pack_vertex(&mut vertex_buffer, v).unwrap();
+        }
+
+        let vert_size = packer.vertex_size() as i32;
+        let vb_bytes = vertex_buffer.len() as i32;
+
+        let geom = UgxGeom {
+            bounding_sphere: Sphere {
+                center: [0.5, 0.5, 0.0],
+                radius: 1.0,
+            },
+            bounds: AABB {
+                min: [0.0, 0.0, 0.0],
+                max: [1.0, 1.0, 0.0],
+            },
+            materials: Vec::new(),
+            bones: Vec::new(),
+            granny_bones: Vec::new(),
+            bone_bounds: Vec::new(),
+            sections: vec![Section {
+                material_index: -1,
+                accessory_index: -1,
+                max_bones: 0,
+                rigid_bone_index: -1,
+                ib_offset: 0,
+                num_tris: 1,
+                vb_offset: 0,
+                vb_bytes,
+                vert_size,
+                num_verts: 3,
+                base_vert_packer: packer,
+                bone_remap: Vec::new(),
+                rigid_only: true,
+                global_bones: false,
+            }],
+            vertex_buffer,
+            index_buffer: vec![0, 1, 2],
+            rigid_only: true,
+            rigid_bone_index: -1,
+            all_sections_rigid: true,
+            all_sections_skinned: false,
+            global_bones: false,
+        };
+
+        // Export to glTF
+        let opts = GltfExportOptions {
+            embed_buffers: false,
+            include_materials: false,
+            include_skeleton: false,
+        };
+        let export = export_to_gltf(&geom, &opts).unwrap();
+
+        // Import back
+        let import_opts = GltfImportOptions {
+            include_skeleton: false,
+            include_materials: false,
+        };
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+        assert_eq!(imported.sections.len(), 1);
+        let section = &imported.sections[0];
+        let imported_packer = &section.base_vert_packer;
+
+        // Verify game-compatible vertex element types for rigid mesh
+        assert_eq!(
+            imported_packer.pos_type,
+            VertexElementType::HalfFloat4,
+            "Position should use HalfFloat4 for game compatibility"
+        );
+        assert_eq!(
+            imported_packer.uv_types[0],
+            VertexElementType::HalfFloat2,
+            "UVs should use HalfFloat2 for game compatibility"
+        );
+
+        // Rigid mesh should not have skin data
+        assert!(
+            !imported_packer.pack_order.contains('S'),
+            "Rigid mesh pack_order should not contain S: {}",
+            imported_packer.pack_order
+        );
+
+        // Verify vertex size is compact for rigid mesh
+        // HalfFloat4(8) + Float3(12) + Float3(12) + HalfFloat2(4) = 36 bytes
+        let expected_size = 8 + 12 + 12 + 4; // 36 bytes
+        assert_eq!(
+            imported_packer.vertex_size(),
+            expected_size,
+            "Rigid vertex size should be {} bytes, got {}",
+            expected_size,
+            imported_packer.vertex_size()
+        );
     }
 }
