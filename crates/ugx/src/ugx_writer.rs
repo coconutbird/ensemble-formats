@@ -62,7 +62,7 @@ fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
 
 /// Granny bone size in bytes.
 ///
-/// Per-bone layout (164 bytes):
+/// Per-bone layout (164 bytes = 0xA4):
 /// - `+0x00` (8 bytes): u64 name string offset
 /// - `+0x08` (4 bytes): i32 parent index
 /// - `+0x0C` (4 bytes): u32 local transform flags (bit 0=position, 1=orientation, 2=scale_shear)
@@ -73,6 +73,34 @@ fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
 /// - `+0x90` (4 bytes): f32 LOD error
 /// - `+0x94` (16 bytes): extended data (zeros)
 const GRANNY_BONE_SIZE: usize = 164;
+
+/// Granny mesh struct size in bytes (76 bytes = 0x4C).
+/// Verified from IDA: BoneBindingCount at +0x30, BoneBindings at +0x34.
+/// Granny uses packed structures without x64 natural alignment.
+///
+/// Layout:
+/// - `+0x00` (8 bytes): Name pointer
+/// - `+0x08` (8 bytes): PrimaryVertexData pointer (NULL)
+/// - `+0x10` (4 bytes): MorphTargetCount (0)
+/// - `+0x14` (8 bytes): MorphTargets pointer (NULL)
+/// - `+0x1C` (8 bytes): PrimaryTopology pointer (NULL)
+/// - `+0x24` (4 bytes): MaterialBindingCount (0)
+/// - `+0x28` (8 bytes): MaterialBindings pointer (NULL)
+/// - `+0x30` (4 bytes): BoneBindingCount
+/// - `+0x34` (8 bytes): BoneBindings pointer
+/// - `+0x3C` (16 bytes): ExtendedData variant (NULL, NULL)
+const GRANNY_MESH_SIZE: usize = 0x4C; // 76 bytes
+
+/// Granny bone_binding struct size in bytes (44 bytes = 0x2C).
+/// Verified from IDA: loop stride is 44 bytes in NewMeshBinding.
+///
+/// Layout:
+/// - `+0x00` (8 bytes): BoneName pointer
+/// - `+0x08` (12 bytes): OBBMin triple (3x f32)
+/// - `+0x14` (12 bytes): OBBMax triple (3x f32)
+/// - `+0x20` (4 bytes): TriangleCount (0)
+/// - `+0x24` (8 bytes): TriangleIndices pointer (NULL)
+const GRANNY_BONE_BINDING_SIZE: usize = 0x2C; // 44 bytes
 
 /// Granny local transform flags.
 const GRANNY_HAS_POSITION: u32 = 0x1;
@@ -267,14 +295,42 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let bones_start = (bones_start + 7) & !7; // align to 8 bytes
     let bones_end = bones_start + bone_count * GRANNY_BONE_SIZE;
 
-    // Mesh binding array (for model)
+    // Model mesh binding array (for model->MeshBindings) - pointers to mesh structs
     let mesh_bindings_start = bones_end;
-    let mesh_bindings_size = section_count * 8; // each binding is one pointer
+    let mesh_bindings_size = section_count * 8; // each binding is one pointer to a mesh
 
-    // Mesh pointer array + mesh structs (for file_info meshes, optional)
+    // Mesh pointer array (for file_info->Meshes)
     let mesh_ptrs_start = mesh_bindings_start + mesh_bindings_size;
-    let mesh_structs_start = mesh_ptrs_start + section_count * 8;
-    let strings_start = mesh_structs_start + section_count * 8;
+    let mesh_ptrs_size = section_count * 8;
+
+    // Full mesh structs (0x4C bytes each, with BoneBindingCount and BoneBindings pointer)
+    let mesh_structs_start = mesh_ptrs_start + mesh_ptrs_size;
+    let mesh_structs_size = section_count * GRANNY_MESH_SIZE;
+
+    // bone_binding arrays for each mesh - one array per section
+    // Each array has bone_remap.len() entries (or 1 if empty for rigid meshes)
+    let bone_bindings_start = mesh_structs_start + mesh_structs_size;
+    let mut total_bone_bindings = 0usize;
+    let mut section_bone_binding_counts: Vec<usize> = Vec::with_capacity(section_count);
+    for section in &geom.sections {
+        // Each section's bone_remap maps local bone indices to global skeleton indices
+        // If bone_remap is empty, we still need at least one binding for rigid meshes
+        let count = if section.bone_remap.is_empty() {
+            if section.rigid_bone_index >= 0 && (section.rigid_bone_index as usize) < bone_count {
+                1 // Use rigid_bone_index
+            } else {
+                0 // No bones at all (should not happen in practice)
+            }
+        } else {
+            section.bone_remap.len()
+        };
+        section_bone_binding_counts.push(count);
+        total_bone_bindings += count;
+    }
+    let bone_bindings_size = total_bone_bindings * GRANNY_BONE_BINDING_SIZE;
+
+    // String table starts after all bone_binding arrays
+    let strings_start = bone_bindings_start + bone_bindings_size;
 
     let mut buf = vec![0u8; strings_start];
     let mut cursor = Cursor::new(&mut buf);
@@ -417,27 +473,106 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         // +0x94: 16 bytes extended data (already zeros from initialization)
     }
 
-    // ---- Mesh bindings (for Model) ----
+    // ---- Model mesh bindings (for Model->MeshBindings) ----
     // Each mesh binding points to a mesh struct
     for i in 0..section_count {
         let binding_pos = mesh_bindings_start + i * 8;
-        let mesh_struct_pos = mesh_structs_start + i * 8;
+        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
         cursor.seek(std::io::SeekFrom::Start(binding_pos as u64))?;
         cursor.write_u64::<LittleEndian>(mesh_struct_pos as u64)?;
     }
 
-    // ---- Mesh pointer array + mesh structs (for file_info Meshes) ----
+    // ---- Mesh pointer array (for file_info->Meshes) ----
     for i in 0..section_count {
         let ptr_pos = mesh_ptrs_start + i * 8;
-        let struct_pos = mesh_structs_start + i * 8;
-
+        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
         cursor.seek(std::io::SeekFrom::Start(ptr_pos as u64))?;
-        cursor.write_u64::<LittleEndian>(struct_pos as u64)?;
+        cursor.write_u64::<LittleEndian>(mesh_struct_pos as u64)?;
+    }
 
+    // ---- Full mesh structs (0x4C bytes each) ----
+    // Calculate bone_binding array offset for each mesh
+    let mut current_bone_binding_offset = bone_bindings_start;
+    for (i, _section) in geom.sections.iter().enumerate() {
+        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
+        let bone_binding_count = section_bone_binding_counts[i];
+
+        // +0x00: Name (will be fixed up via string_fixups)
         string_fixups.push(StringFixup {
-            position: struct_pos,
+            position: mesh_struct_pos,
             string: format!("mesh_{}", i),
         });
+
+        // +0x08: PrimaryVertexData = NULL (already zeros)
+        // +0x10: MorphTargetCount = 0 (already zeros)
+        // +0x14: MorphTargets = NULL (already zeros)
+        // +0x1C: PrimaryTopology = NULL (already zeros)
+        // +0x24: MaterialBindingCount = 0 (already zeros)
+        // +0x28: MaterialBindings = NULL (already zeros)
+
+        // +0x30: BoneBindingCount
+        cursor.seek(std::io::SeekFrom::Start((mesh_struct_pos + 0x30) as u64))?;
+        cursor.write_u32::<LittleEndian>(bone_binding_count as u32)?;
+
+        // +0x34: BoneBindings pointer
+        if bone_binding_count > 0 {
+            cursor.write_u64::<LittleEndian>(current_bone_binding_offset as u64)?;
+        }
+        // else: pointer remains NULL (zeros)
+
+        // +0x3C: ExtendedData variant (NULL, NULL) - already zeros
+
+        current_bone_binding_offset += bone_binding_count * GRANNY_BONE_BINDING_SIZE;
+    }
+
+    // ---- bone_binding arrays for each mesh ----
+    // Each bone_binding references a bone name from the global skeleton
+    current_bone_binding_offset = bone_bindings_start;
+    for (i, section) in geom.sections.iter().enumerate() {
+        let bone_binding_count = section_bone_binding_counts[i];
+
+        if bone_binding_count == 0 {
+            continue;
+        }
+
+        // Get the global bone indices for this section
+        let global_bone_indices: Vec<usize> = if section.bone_remap.is_empty() {
+            // Rigid mesh - use rigid_bone_index
+            if section.rigid_bone_index >= 0 {
+                vec![section.rigid_bone_index as usize]
+            } else {
+                vec![]
+            }
+        } else {
+            // Skinned mesh - use bone_remap
+            section.bone_remap.iter().map(|&b| b as usize).collect()
+        };
+
+        for (j, &global_bone_idx) in global_bone_indices.iter().enumerate() {
+            let binding_pos = current_bone_binding_offset + j * GRANNY_BONE_BINDING_SIZE;
+
+            // +0x00: BoneName pointer - references the bone name string
+            // We add a string fixup pointing to the same string as the skeleton bone
+            if global_bone_idx < geom.granny_bones.len() {
+                string_fixups.push(StringFixup {
+                    position: binding_pos,
+                    string: geom.granny_bones[global_bone_idx].name.clone(),
+                });
+            } else {
+                // Fallback for invalid bone index
+                string_fixups.push(StringFixup {
+                    position: binding_pos,
+                    string: format!("bone_{}", global_bone_idx),
+                });
+            }
+
+            // +0x08: OBBMin (3x f32) = [0, 0, 0] - already zeros
+            // +0x14: OBBMax (3x f32) = [0, 0, 0] - already zeros
+            // +0x20: TriangleCount = 0 - already zeros
+            // +0x24: TriangleIndices = NULL - already zeros
+        }
+
+        current_bone_binding_offset += bone_binding_count * GRANNY_BONE_BINDING_SIZE;
     }
 
     // ---- String table fixups ----
