@@ -32,7 +32,7 @@ mod types;
 pub use types::*;
 
 mod ugx;
-pub use ugx::UgxGeom;
+pub use ugx::{GrannyBone, GrannyMesh, UgxGeom};
 
 mod gltf_export;
 pub use gltf_export::{

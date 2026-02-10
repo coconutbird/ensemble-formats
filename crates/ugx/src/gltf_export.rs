@@ -1886,6 +1886,7 @@ mod tests {
             ],
             bones: Vec::new(),
             granny_bones: Vec::new(),
+            granny_meshes: Vec::new(),
             bone_bounds: Vec::new(),
             sections: vec![Section {
                 material_index: 0,

@@ -310,6 +310,7 @@ pub fn import_from_gltf(
         materials,
         bones,
         granny_bones,
+        granny_meshes: Vec::new(), // Will be generated from section data on write
         bone_bounds,
         sections,
         vertex_buffer: all_vertex_buffer,
@@ -1030,6 +1031,7 @@ mod tests {
             materials: Vec::new(),
             bones,
             granny_bones,
+            granny_meshes: Vec::new(),
             bone_bounds: vec![
                 AABB {
                     min: [0.0, 0.0, 0.0],
@@ -2199,6 +2201,7 @@ mod tests {
             materials: Vec::new(),
             bones: Vec::new(),
             granny_bones: Vec::new(),
+            granny_meshes: Vec::new(),
             bone_bounds: Vec::new(),
             sections: vec![Section {
                 material_index: -1,

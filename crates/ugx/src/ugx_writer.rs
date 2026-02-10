@@ -271,6 +271,62 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     //   +0x90: f32 LODError
     //   +0x94: variant ExtendedData (16 bytes)
 
+    // Determine mesh data source: use stored granny_meshes if available, otherwise generate from sections
+    let use_stored_meshes = !geom.granny_meshes.is_empty();
+    let mesh_count = if use_stored_meshes {
+        geom.granny_meshes.len()
+    } else {
+        section_count
+    };
+
+    // Calculate bone binding counts and bone names for each mesh
+    let mesh_bone_bindings: Vec<Vec<String>> = if use_stored_meshes {
+        // Use stored mesh bone bindings
+        geom.granny_meshes
+            .iter()
+            .map(|m| m.bone_bindings.clone())
+            .collect()
+    } else {
+        // Generate from section data (fallback for new files)
+        geom.sections
+            .iter()
+            .map(|section| {
+                if section.bone_remap.is_empty() {
+                    if section.rigid_bone_index >= 0
+                        && (section.rigid_bone_index as usize) < bone_count
+                    {
+                        vec![geom.granny_bones[section.rigid_bone_index as usize]
+                            .name
+                            .clone()]
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    section
+                        .bone_remap
+                        .iter()
+                        .filter_map(|&idx| {
+                            let idx = idx as usize;
+                            if idx < geom.granny_bones.len() {
+                                Some(geom.granny_bones[idx].name.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                }
+            })
+            .collect()
+    };
+
+    let mesh_names: Vec<String> = if use_stored_meshes {
+        geom.granny_meshes.iter().map(|m| m.name.clone()).collect()
+    } else {
+        (0..section_count).map(|i| format!("mesh_{}", i)).collect()
+    };
+
+    let total_bone_bindings: usize = mesh_bone_bindings.iter().map(|v| v.len()).sum();
+
     // Calculate offsets for all structures
     let header_size: usize = 0x70; // file_info header
 
@@ -297,36 +353,18 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // Model mesh binding array (for model->MeshBindings) - pointers to mesh structs
     let mesh_bindings_start = bones_end;
-    let mesh_bindings_size = section_count * 8; // each binding is one pointer to a mesh
+    let mesh_bindings_size = mesh_count * 8; // each binding is one pointer to a mesh
 
     // Mesh pointer array (for file_info->Meshes)
     let mesh_ptrs_start = mesh_bindings_start + mesh_bindings_size;
-    let mesh_ptrs_size = section_count * 8;
+    let mesh_ptrs_size = mesh_count * 8;
 
     // Full mesh structs (0x4C bytes each, with BoneBindingCount and BoneBindings pointer)
     let mesh_structs_start = mesh_ptrs_start + mesh_ptrs_size;
-    let mesh_structs_size = section_count * GRANNY_MESH_SIZE;
+    let mesh_structs_size = mesh_count * GRANNY_MESH_SIZE;
 
-    // bone_binding arrays for each mesh - one array per section
-    // Each array has bone_remap.len() entries (or 1 if empty for rigid meshes)
+    // bone_binding arrays for each mesh
     let bone_bindings_start = mesh_structs_start + mesh_structs_size;
-    let mut total_bone_bindings = 0usize;
-    let mut section_bone_binding_counts: Vec<usize> = Vec::with_capacity(section_count);
-    for section in &geom.sections {
-        // Each section's bone_remap maps local bone indices to global skeleton indices
-        // If bone_remap is empty, we still need at least one binding for rigid meshes
-        let count = if section.bone_remap.is_empty() {
-            if section.rigid_bone_index >= 0 && (section.rigid_bone_index as usize) < bone_count {
-                1 // Use rigid_bone_index
-            } else {
-                0 // No bones at all (should not happen in practice)
-            }
-        } else {
-            section.bone_remap.len()
-        };
-        section_bone_binding_counts.push(count);
-        total_bone_bindings += count;
-    }
     let bone_bindings_size = total_bone_bindings * GRANNY_BONE_BINDING_SIZE;
 
     // String table starts after all bone_binding arrays
@@ -346,7 +384,7 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // [0x54]: u32 MeshCount
     cursor.seek(std::io::SeekFrom::Start(0x54))?;
-    cursor.write_u32::<LittleEndian>(section_count as u32)?;
+    cursor.write_u32::<LittleEndian>(mesh_count as u32)?;
     // [0x58]: u64 Meshes → mesh pointer array
     cursor.write_u64::<LittleEndian>(mesh_ptrs_start as u64)?;
 
@@ -414,7 +452,7 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     cursor.seek(std::io::SeekFrom::Start(
         (model_struct_offset + 0x54) as u64,
     ))?;
-    cursor.write_u32::<LittleEndian>(section_count as u32)?;
+    cursor.write_u32::<LittleEndian>(mesh_count as u32)?;
     // +0x58: u64 MeshBindings
     cursor.write_u64::<LittleEndian>(mesh_bindings_start as u64)?;
 
@@ -475,7 +513,7 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // ---- Model mesh bindings (for Model->MeshBindings) ----
     // Each mesh binding points to a mesh struct
-    for i in 0..section_count {
+    for i in 0..mesh_count {
         let binding_pos = mesh_bindings_start + i * 8;
         let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
         cursor.seek(std::io::SeekFrom::Start(binding_pos as u64))?;
@@ -483,7 +521,7 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- Mesh pointer array (for file_info->Meshes) ----
-    for i in 0..section_count {
+    for i in 0..mesh_count {
         let ptr_pos = mesh_ptrs_start + i * 8;
         let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
         cursor.seek(std::io::SeekFrom::Start(ptr_pos as u64))?;
@@ -493,14 +531,14 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // ---- Full mesh structs (0x4C bytes each) ----
     // Calculate bone_binding array offset for each mesh
     let mut current_bone_binding_offset = bone_bindings_start;
-    for (i, _section) in geom.sections.iter().enumerate() {
+    for i in 0..mesh_count {
         let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
-        let bone_binding_count = section_bone_binding_counts[i];
+        let bone_binding_count = mesh_bone_bindings[i].len();
 
         // +0x00: Name (will be fixed up via string_fixups)
         string_fixups.push(StringFixup {
             position: mesh_struct_pos,
-            string: format!("mesh_{}", i),
+            string: mesh_names[i].clone(),
         });
 
         // +0x08: PrimaryVertexData = NULL (already zeros)
@@ -528,43 +566,21 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // ---- bone_binding arrays for each mesh ----
     // Each bone_binding references a bone name from the global skeleton
     current_bone_binding_offset = bone_bindings_start;
-    for (i, section) in geom.sections.iter().enumerate() {
-        let bone_binding_count = section_bone_binding_counts[i];
+    for i in 0..mesh_count {
+        let bone_names = &mesh_bone_bindings[i];
 
-        if bone_binding_count == 0 {
+        if bone_names.is_empty() {
             continue;
         }
 
-        // Get the global bone indices for this section
-        let global_bone_indices: Vec<usize> = if section.bone_remap.is_empty() {
-            // Rigid mesh - use rigid_bone_index
-            if section.rigid_bone_index >= 0 {
-                vec![section.rigid_bone_index as usize]
-            } else {
-                vec![]
-            }
-        } else {
-            // Skinned mesh - use bone_remap
-            section.bone_remap.iter().map(|&b| b as usize).collect()
-        };
-
-        for (j, &global_bone_idx) in global_bone_indices.iter().enumerate() {
+        for (j, bone_name) in bone_names.iter().enumerate() {
             let binding_pos = current_bone_binding_offset + j * GRANNY_BONE_BINDING_SIZE;
 
             // +0x00: BoneName pointer - references the bone name string
-            // We add a string fixup pointing to the same string as the skeleton bone
-            if global_bone_idx < geom.granny_bones.len() {
-                string_fixups.push(StringFixup {
-                    position: binding_pos,
-                    string: geom.granny_bones[global_bone_idx].name.clone(),
-                });
-            } else {
-                // Fallback for invalid bone index
-                string_fixups.push(StringFixup {
-                    position: binding_pos,
-                    string: format!("bone_{}", global_bone_idx),
-                });
-            }
+            string_fixups.push(StringFixup {
+                position: binding_pos,
+                string: bone_name.clone(),
+            });
 
             // +0x08: OBBMin (3x f32) = [0, 0, 0] - already zeros
             // +0x14: OBBMax (3x f32) = [0, 0, 0] - already zeros
@@ -572,7 +588,7 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
             // +0x24: TriangleIndices = NULL - already zeros
         }
 
-        current_bone_binding_offset += bone_binding_count * GRANNY_BONE_BINDING_SIZE;
+        current_bone_binding_offset += bone_names.len() * GRANNY_BONE_BINDING_SIZE;
     }
 
     // ---- String table fixups ----
@@ -1125,6 +1141,7 @@ mod tests {
             materials: Vec::new(),
             bones,
             granny_bones: Vec::new(),
+            granny_meshes: Vec::new(),
             bone_bounds: vec![
                 AABB {
                     min: [0.0, 0.0, 0.0],

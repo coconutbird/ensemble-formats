@@ -153,6 +153,8 @@ pub struct UgxGeom {
     pub bones: Vec<Bone>,
     /// Granny bone data (from granny chunk 0x703) - contains inverse world matrices.
     pub granny_bones: Vec<GrannyBone>,
+    /// Granny mesh data (from granny chunk 0x703) - contains mesh names and bone bindings.
+    pub granny_meshes: Vec<GrannyMesh>,
     /// Per-bone bounding boxes.
     pub bone_bounds: Vec<AABB>,
     /// Mesh sections.
@@ -184,6 +186,17 @@ pub struct GrannyBone {
     /// Inverse world matrix (4x4) - read from offset 80 in granny bone struct.
     /// To get world matrix: invert then transpose this matrix.
     pub inverse_world_matrix: Matrix4x4,
+}
+
+/// Mesh data from granny chunk (0x703).
+/// Each mesh has a name and a list of bone bindings for skinning.
+#[derive(Debug, Clone, Default)]
+pub struct GrannyMesh {
+    /// Mesh name (e.g., "marine_01", "optionalAssaultRifle").
+    pub name: String,
+    /// Bone names that this mesh is bound to (for skinning).
+    /// Each entry is the name of a bone in the skeleton.
+    pub bone_bindings: Vec<String>,
 }
 
 impl UgxGeom {
@@ -337,6 +350,13 @@ impl UgxGeom {
             Vec::new()
         };
 
+        // Parse granny meshes if available (mesh names and bone bindings for skinning)
+        let granny_meshes = if let Some(ref granny) = granny_data {
+            Self::parse_granny_meshes(granny)?
+        } else {
+            Vec::new()
+        };
+
         // TODO: Accessories — the packed array format is known (u32 count, u32 pad,
         // u64 offset) but the per-accessory struct layout is unknown. Need to examine
         // binary data from real UGX files that have accessories_count > 0 to
@@ -372,6 +392,7 @@ impl UgxGeom {
             materials,
             bones,
             granny_bones,
+            granny_meshes,
             bone_bounds,
             sections,
             vertex_buffer,
@@ -966,6 +987,122 @@ impl UgxGeom {
         }
 
         Ok(bones)
+    }
+
+    /// Parse Granny mesh data from the Granny chunk (0x703).
+    ///
+    /// # Granny Structure (x64, packed)
+    ///
+    /// file_info (at 0x00):
+    ///   +0x60: i32 ModelCount (must be 1)
+    ///   +0x64: u64 Models ptr (to array of model pointers)
+    ///
+    /// Model:
+    ///   +0x54: i32 MeshBindingCount
+    ///   +0x58: u64 MeshBindings ptr (to array of mesh pointers)
+    ///
+    /// Mesh (76 bytes = 0x4C):
+    ///   +0x00: u64 Name ptr
+    ///   +0x30: i32 BoneBindingCount
+    ///   +0x34: u64 BoneBindings ptr
+    ///
+    /// bone_binding (44 bytes = 0x2C):
+    ///   +0x00: u64 BoneName ptr
+    fn parse_granny_meshes(granny: &[u8]) -> Result<Vec<GrannyMesh>> {
+        if granny.len() < 0x70 {
+            return Ok(Vec::new());
+        }
+
+        // Read ModelCount from file_info+0x60
+        let mut cursor = Cursor::new(&granny[0x60..0x64]);
+        let model_count = cursor.read_u32::<LittleEndian>()? as usize;
+        if model_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Read Models pointer from file_info+0x64
+        let mut cursor = Cursor::new(&granny[0x64..0x6C]);
+        let models_ptr_offs = cursor.read_u64::<LittleEndian>()? as usize;
+        if models_ptr_offs + 8 > granny.len() {
+            return Ok(Vec::new());
+        }
+
+        // Read first model pointer
+        let mut cursor = Cursor::new(&granny[models_ptr_offs..models_ptr_offs + 8]);
+        let model_offs = cursor.read_u64::<LittleEndian>()? as usize;
+        if model_offs + 0x60 > granny.len() {
+            return Ok(Vec::new());
+        }
+
+        // Read MeshBindingCount from Model+0x54 and MeshBindings from Model+0x58
+        let mut cursor = Cursor::new(&granny[model_offs + 0x54..model_offs + 0x60]);
+        let mesh_binding_count = cursor.read_u32::<LittleEndian>()? as usize;
+        let mesh_bindings_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+
+        if mesh_binding_count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut meshes = Vec::with_capacity(mesh_binding_count);
+
+        for i in 0..mesh_binding_count {
+            // Each mesh binding is a pointer to a mesh struct (8 bytes each)
+            let binding_ptr_pos = mesh_bindings_ptr + i * 8;
+            if binding_ptr_pos + 8 > granny.len() {
+                break;
+            }
+
+            let mut cursor = Cursor::new(&granny[binding_ptr_pos..binding_ptr_pos + 8]);
+            let mesh_offs = cursor.read_u64::<LittleEndian>()? as usize;
+
+            if mesh_offs + 0x3C > granny.len() {
+                continue;
+            }
+
+            // Read mesh name from Mesh+0x00
+            let mut cursor = Cursor::new(&granny[mesh_offs..mesh_offs + 8]);
+            let name_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+            let name = if name_ptr < granny.len() {
+                Self::read_null_terminated_string(&granny[name_ptr..])?
+            } else {
+                format!("mesh_{}", i)
+            };
+
+            // Read BoneBindingCount from Mesh+0x30 and BoneBindings from Mesh+0x34
+            let mut cursor = Cursor::new(&granny[mesh_offs + 0x30..mesh_offs + 0x3C]);
+            let bone_binding_count = cursor.read_u32::<LittleEndian>()? as usize;
+            let bone_bindings_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+
+            let mut bone_bindings = Vec::with_capacity(bone_binding_count);
+
+            // Each bone_binding is 44 bytes (0x2C), with BoneName ptr at +0x00
+            const BONE_BINDING_SIZE: usize = 0x2C;
+            for j in 0..bone_binding_count {
+                let bb_offs = bone_bindings_ptr + j * BONE_BINDING_SIZE;
+                if bb_offs + 8 > granny.len() {
+                    break;
+                }
+
+                let mut cursor = Cursor::new(&granny[bb_offs..bb_offs + 8]);
+                let bone_name_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+                let bone_name = if bone_name_ptr < granny.len() {
+                    Self::read_null_terminated_string(&granny[bone_name_ptr..])?
+                } else {
+                    String::new()
+                };
+
+                if !bone_name.is_empty() {
+                    bone_bindings.push(bone_name);
+                }
+            }
+
+            meshes.push(GrannyMesh {
+                name,
+                bone_bindings,
+            });
+        }
+
+        Ok(meshes)
     }
 }
 
