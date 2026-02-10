@@ -319,10 +319,17 @@ pub fn export_to_gltf_with_buffer_name(
             section.rigid_bone_index,
         );
 
+        // Use granny_mesh name if available, otherwise generate from section index
+        let mesh_name = if section_idx < geom.granny_meshes.len() {
+            Some(geom.granny_meshes[section_idx].name.clone())
+        } else {
+            Some(format!("section_{}", section_idx))
+        };
+
         meshes.push(json::Mesh {
             extensions: None,
             extras: json::Extras::default(),
-            name: None,
+            name: mesh_name,
             primitives: vec![primitive],
             weights: None,
         });
