@@ -1608,8 +1608,8 @@ mod tests {
         );
 
         let mesh = &imported.granny_meshes[0];
-        // Mesh name is preserved from glTF export (section_0 since test geom has no granny_meshes)
-        assert_eq!(mesh.name, "section_0");
+        // Mesh name is preserved from glTF export (mesh_0 since test geom has no granny_meshes)
+        assert_eq!(mesh.name, "mesh_0");
 
         // The test geom uses bones 1 and 2 (1-based), which are "root" and "child"
         // Verify bone bindings contain the bones actually used by vertices
@@ -1638,7 +1638,7 @@ mod tests {
             1,
             "granny_meshes should survive UGX round trip"
         );
-        assert_eq!(re_read.granny_meshes[0].name, "section_0");
+        assert_eq!(re_read.granny_meshes[0].name, "mesh_0");
         assert_eq!(
             re_read.granny_meshes[0].bone_bindings.len(),
             mesh.bone_bindings.len(),
