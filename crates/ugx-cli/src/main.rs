@@ -271,6 +271,7 @@ fn cmd_to_gltf(
 }
 
 /// Parse a GLB file and return the JSON string and binary buffer.
+#[allow(clippy::type_complexity)]
 fn parse_glb(data: &[u8]) -> Result<(String, Option<Vec<u8>>), Box<dyn std::error::Error>> {
     // GLB Header: magic (4) + version (4) + length (4) = 12 bytes
     if data.len() < 12 {

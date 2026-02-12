@@ -13,4 +13,5 @@ byteorder.workspace = true
 flate2.workspace = true
 thiserror.workspace = true
 sha1.workspace = true
+tiger.workspace = true
 

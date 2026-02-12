@@ -27,17 +27,17 @@ impl TeaKeys {
     pub fn from_password(password: &str) -> Self {
         // First SHA-1 hash
         let mut hasher = Sha1::new();
-        hasher.update(&0xa4800c14_u32.to_be_bytes());
+        hasher.update(0xa4800c14_u32.to_be_bytes());
         hasher.update(password.as_bytes());
-        hasher.update(&0x5AF4A9F1_u32.to_be_bytes());
-        hasher.update(&0xCA6884EC_u32.to_be_bytes());
+        hasher.update(0x5AF4A9F1_u32.to_be_bytes());
+        hasher.update(0xCA6884EC_u32.to_be_bytes());
         let hash1 = hasher.finalize();
 
         // Second SHA-1 hash
         let mut hasher = Sha1::new();
-        hasher.update(&0xcb92eaeb_u32.to_be_bytes());
-        hasher.update(&hash1);
-        hasher.update(&0x1d919bf8_u32.to_be_bytes());
+        hasher.update(0xcb92eaeb_u32.to_be_bytes());
+        hasher.update(hash1);
+        hasher.update(0x1d919bf8_u32.to_be_bytes());
         let hash2 = hasher.finalize();
 
         // Extract keys from hashes (big-endian DWORDs)
@@ -275,8 +275,8 @@ pub fn tea_decrypt_block64(keys: &TeaKeys, src: &[u8; 64], dst: &mut [u8; 64], c
 
 /// Decrypt data in-place (must be multiple of 64 bytes)
 pub fn tea_decrypt_data(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
-    assert!(data.len() % TEA_BLOCK_SIZE == 0);
-    assert!(start_offset % TEA_BLOCK_SIZE as u64 == 0);
+    assert!(data.len().is_multiple_of(TEA_BLOCK_SIZE));
+    assert!(start_offset.is_multiple_of(TEA_BLOCK_SIZE as u64));
 
     let num_blocks = data.len() / TEA_BLOCK_SIZE;
     let start_counter = (start_offset / TEA_BLOCK_SIZE as u64) as u32;
@@ -498,8 +498,8 @@ pub fn tea_encrypt_block64(keys: &TeaKeys, src: &[u8; 64], dst: &mut [u8; 64], c
 
 /// Encrypt data in-place (must be multiple of 64 bytes)
 pub fn tea_encrypt_data(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
-    assert!(data.len() % TEA_BLOCK_SIZE == 0);
-    assert!(start_offset % TEA_BLOCK_SIZE as u64 == 0);
+    assert!(data.len().is_multiple_of(TEA_BLOCK_SIZE));
+    assert!(start_offset.is_multiple_of(TEA_BLOCK_SIZE as u64));
 
     let num_blocks = data.len() / TEA_BLOCK_SIZE;
     let start_counter = (start_offset / TEA_BLOCK_SIZE as u64) as u32;

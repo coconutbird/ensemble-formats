@@ -432,7 +432,7 @@ fn decode_variant_to_variant(
                 Ok(Variant::Int(0))
             }
         }
-        5 => Ok(Variant::Float(unpack_fract24(data_bits) as f32)),
+        5 => Ok(Variant::Float(unpack_fract24(data_bits))),
         6 => {
             if is_offset && data_bits as usize + 8 <= variant_data.len() {
                 let bytes = &variant_data[data_bits as usize..data_bits as usize + 8];

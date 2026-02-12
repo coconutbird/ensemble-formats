@@ -162,7 +162,7 @@ impl<W: Write + Seek> EcfWriter<W> {
             if padding > 0 {
                 self.writer.write_all(&vec![0u8; padding])?;
             }
-            self.writer.write_all(&data)?;
+            self.writer.write_all(data)?;
         }
 
         Ok(())

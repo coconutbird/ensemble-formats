@@ -22,11 +22,11 @@ impl XtdReader {
     pub fn read_from<R: Read + Seek>(reader: &mut R) -> Result<XtdFile> {
         let mut ecf = EcfReader::new(reader)?;
 
-        let mut file = XtdFile::default();
-
-        // Store ECF metadata for round-trip fidelity
-        file.ecf_file_id = ecf.header().id;
-        file.ecf_flags = ecf.header().flags;
+        let mut file = XtdFile {
+            ecf_file_id: ecf.header().id,
+            ecf_flags: ecf.header().flags,
+            ..Default::default()
+        };
 
         // Read all chunks
         for i in 0..ecf.chunks().len() {

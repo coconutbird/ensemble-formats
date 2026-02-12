@@ -99,11 +99,11 @@ impl EraChunkExtra {
     pub const SIZE: usize = 32;
 
     /// Create a new chunk extra with given values
-    pub fn new(decomp_size: u32, name_offset: u32) -> Self {
+    pub fn new(decomp_size: u32, name_offset: u32, comp_tiger128: [u8; 16]) -> Self {
         Self {
             date: 0,
             decomp_size,
-            comp_tiger128: [0; 16],
+            comp_tiger128,
             name_offset,
         }
     }

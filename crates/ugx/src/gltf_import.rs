@@ -125,8 +125,8 @@ pub fn import_from_gltf(
 
             // Use compact vertex types matching game format
             let mut uv_types = [VertexElementType::Ignore; MAX_UV];
-            for i in 0..max_texcoords.min(MAX_UV) {
-                uv_types[i] = VertexElementType::HalfFloat2; // Game uses HalfFloat2 for UVs
+            for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
+                *uv_type = VertexElementType::HalfFloat2; // Game uses HalfFloat2 for UVs
             }
 
             // UnivertPacker with game-standard defaults for ALL fields.
@@ -203,9 +203,9 @@ pub fn import_from_gltf(
                 let max_bones = max_influences_per_vertex.max(1);
 
                 // If all vertices use the same single bone, this is a global_bones section
-                if all_single_bone && common_bone.is_some() {
+                if let Some(bone) = common_bone.filter(|_| all_single_bone) {
                     // Convert 1-based bone index to 0-based for rigid_bone_index
-                    let bone_idx = (common_bone.unwrap() as i32) - 1;
+                    let bone_idx = (bone as i32) - 1;
                     (true, bone_idx, 1)
                 } else {
                     (false, i32::MAX, max_bones)
@@ -239,7 +239,7 @@ pub fn import_from_gltf(
                     basis_scale_type: VertexElementType::Float2,
                     tangent_type: VertexElementType::Float3, // Game default
                     normal_type: VertexElementType::Float3,
-                    uv_types: uv_types.clone(),
+                    uv_types,
                     indices_type: VertexElementType::UByte4, // Game default, even for PNT0
                     weights_type: VertexElementType::UByte4N, // Game default, even for PNT0
                     diffuse_type: VertexElementType::D3DColor, // Game default
@@ -344,12 +344,8 @@ pub fn import_from_gltf(
     let all_sections_skinned = !any_global_bones && !all_rigid && all_skinned;
 
     // Generate granny_meshes from vertex skin data and section info, preserving mesh names from glTF
-    let granny_meshes = generate_granny_meshes_from_vertices(
-        &all_vertices,
-        &granny_bones,
-        &mesh_infos,
-        &sections,
-    );
+    let granny_meshes =
+        generate_granny_meshes_from_vertices(&all_vertices, &granny_bones, &mesh_infos, &sections);
 
     Ok(UgxGeom {
         bounding_sphere,
@@ -468,7 +464,7 @@ fn read_accessor_f32(
 
     let byte_offset = accessor.byte_offset.map(|o| o.0 as usize).unwrap_or(0)
         + view.byte_offset.map(|o| o.0 as usize).unwrap_or(0);
-    let stride = view.byte_stride.map(|s| s.0 as usize);
+    let stride = view.byte_stride.map(|s| s.0);
     let count = accessor.count.0 as usize;
 
     let components = match accessor.type_ {
@@ -561,7 +557,7 @@ fn import_primitive(
         let acc = &root.accessors[acc_idx.value()];
         read_accessor_f32(acc, root, buffer_bytes)?
     } else {
-        vec![0.0, 1.0, 0.0].repeat(vertex_count)
+        [0.0, 1.0, 0.0].repeat(vertex_count)
     };
 
     // Read tangents
@@ -636,6 +632,7 @@ fn import_primitive(
         0
     };
 
+    #[allow(clippy::field_reassign_with_default)]
     for i in 0..vertex_count {
         let mut vertex = UnpackedVertex::default();
 
@@ -910,6 +907,7 @@ fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
 ///
 /// Returns (flags, uvw_velocity, extra_maps) where extra_maps is a vec of
 /// (map_type_index, Vec<Map>) for non-PBR map types.
+#[allow(clippy::type_complexity)]
 fn read_material_extras(
     extras: &gltf_json::Extras,
     _existing_maps: &[Vec<Map>; MapType::NUM_TYPES],
@@ -1325,7 +1323,8 @@ mod tests {
                     assert!(
                         imp.bone_indices[k] > 0,
                         "bone_indices[{}] should be valid (>0) for game compatibility, got {}",
-                        k, imp.bone_indices[k]
+                        k,
+                        imp.bone_indices[k]
                     );
                 }
             }

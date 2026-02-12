@@ -566,9 +566,7 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // ---- bone_binding arrays for each mesh ----
     // Each bone_binding references a bone name from the global skeleton
     current_bone_binding_offset = bone_bindings_start;
-    for i in 0..mesh_count {
-        let bone_names = &mesh_bone_bindings[i];
-
+    for bone_names in mesh_bone_bindings.iter().take(mesh_count) {
         if bone_names.is_empty() {
             continue;
         }
@@ -609,8 +607,6 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         position: model_struct_offset,
         string: "GrannyRootBone".to_string(), // Model name (same as skeleton in real files)
     });
-
-    drop(cursor);
 
     let mut string_offsets: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
@@ -676,7 +672,12 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // The shader computes: meshIndex = Index * (1/instanceIndexMultiplier)
     // If this is 0, division by zero occurs in the game's ugxGeomData.cpp:
     //   mInstanceIndexMultiplier = 1.0f / header.getInstanceIndexMultiplier();
-    let max_vertex_index = geom.sections.iter().map(|s| s.num_verts as u32).max().unwrap_or(1);
+    let max_vertex_index = geom
+        .sections
+        .iter()
+        .map(|s| s.num_verts as u32)
+        .max()
+        .unwrap_or(1);
     let instance_index_multiplier = (max_vertex_index).next_power_of_two() as i16;
     cursor.write_i16::<LittleEndian>(instance_index_multiplier)?;
     // +0x34: mLargeGeomBoneIndex (2 bytes) - INT16_MAX = no large geom bone
@@ -714,7 +715,7 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // ---- Section data ----
     // Each section is 152 bytes. UnivertPacker strings need fixup.
-    let sections_offset = cursor.stream_position()? as u64;
+    let sections_offset = cursor.stream_position()?;
     let num_sections = geom.sections.len() as u32;
 
     // Track positions that need string offset fixup
@@ -803,7 +804,7 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // ---- Bone remap data ----
     // Write bone remap arrays for sections that have them, and fix up offsets
     for &(header_pos, section_idx) in &bone_remap_fixups {
-        let remap_offset = cursor.stream_position()? as u64;
+        let remap_offset = cursor.stream_position()?;
         cursor.write_all(&geom.sections[section_idx].bone_remap)?;
         // Fix up the offset in the packed array header (at header_pos + 8 for the u64 offset)
         let saved_pos = cursor.stream_position()?;
@@ -813,7 +814,7 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- Bone data ----
-    let bones_offset = cursor.stream_position()? as u64;
+    let bones_offset = cursor.stream_position()?;
     let num_bones = geom.bones.len() as u32;
 
     for bone in &geom.bones {
@@ -839,7 +840,7 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- Bone bounds data ----
-    let bounds_low_offset = cursor.stream_position()? as u64;
+    let bounds_low_offset = cursor.stream_position()?;
     let num_bone_bounds = geom.bone_bounds.len() as u32;
     for bb in &geom.bone_bounds {
         for &v in &bb.min {
@@ -847,7 +848,7 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         }
     }
 
-    let bounds_high_offset = cursor.stream_position()? as u64;
+    let bounds_high_offset = cursor.stream_position()?;
     for bb in &geom.bone_bounds {
         for &v in &bb.max {
             cursor.write_f32::<LittleEndian>(v)?;
@@ -897,7 +898,6 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         bounds_high_offset,
     )?;
 
-    drop(cursor);
     Ok(buf)
 }
 
@@ -920,7 +920,7 @@ fn fixup_packed_array_header(
     cursor.seek(std::io::SeekFrom::Start(header_pos as u64))?;
     cursor.write_u32::<LittleEndian>(count)?;
     cursor.write_u32::<LittleEndian>(0)?; // pad
-    // Use 0xFFFFFFFF as NULL marker for empty arrays (verified from IDA)
+                                          // Use 0xFFFFFFFF as NULL marker for empty arrays (verified from IDA)
     let final_offset = if count == 0 { 0xFFFFFFFF } else { offset };
     cursor.write_u64::<LittleEndian>(final_offset)?;
     Ok(())

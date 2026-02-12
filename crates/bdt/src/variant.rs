@@ -106,8 +106,9 @@ impl VariantType {
 // ============================================================================
 
 /// A variant value in the BBinaryDataTree format.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Variant {
+    #[default]
     Null,
     Float(f32),
     Double(f64),
@@ -117,12 +118,6 @@ pub enum Variant {
     String(String),
     UString(String),
     FloatVec(Vec<f32>),
-}
-
-impl Default for Variant {
-    fn default() -> Self {
-        Variant::Null
-    }
 }
 
 impl Variant {

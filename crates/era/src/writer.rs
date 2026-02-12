@@ -7,6 +7,7 @@ use std::path::Path;
 use byteorder::{BigEndian, WriteBytesExt};
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
+use tiger::{Digest, Tiger};
 
 use crate::crypto::TeaKeys;
 use crate::encrypt_writer::EncryptWriter;
@@ -16,11 +17,8 @@ use crate::error::Result;
 /// ERA file ID constant
 const ERA_FILE_ID: u32 = 0x0076C900;
 
-/// ERA filename chunk ID (chunk 0)
-const ERA_FILENAME_CHUNK_ID: u64 = 0x8DAFB100;
-
-/// Default chunk ID for file entries
-const ERA_FILE_CHUNK_ID: u64 = 0x8DAFB100;
+/// ERA chunk ID (used for both filename table and file entries)
+const ERA_CHUNK_ID: u64 = 0x8DAFB100;
 
 /// A file to be added to an ERA archive
 struct PendingFile {
@@ -28,6 +26,14 @@ struct PendingFile {
     filename: String,
     /// Uncompressed file data
     data: Vec<u8>,
+}
+
+/// Compressed data with its Tiger128 hash
+struct CompressedData {
+    /// Compressed bytes
+    data: Vec<u8>,
+    /// Tiger128 hash of compressed data
+    tiger128: [u8; 16],
 }
 
 /// ERA archive writer
@@ -73,79 +79,56 @@ impl EraWriter {
         }
 
         // Compress filename table
-        let compressed_names = compress_deflate(&filename_table)?;
+        let compressed_names = compress_data(&filename_table)?;
 
         // Compress all file data
-        let mut compressed_files = Vec::new();
-        for file in &self.files {
-            let compressed = compress_deflate(&file.data)?;
-            compressed_files.push(compressed);
-        }
+        let compressed_files: Vec<_> = self
+            .files
+            .iter()
+            .map(|f| compress_data(&f.data))
+            .collect::<Result<_>>()?;
 
         // Calculate layout
         let num_chunks = 1 + self.files.len(); // filename table + files
-        let ecf_header_size = 32; // EcfHeader::SIZE
-        let era_header_size = 16; // EraArchiveHeader::SIZE
-        let chunk_header_size = 24; // EcfChunkHeader::SIZE
-        let chunk_extra_size = 32; // EraChunkExtra::SIZE
-        let total_header_size = ecf_header_size + era_header_size;
-        let headers_size = total_header_size + (chunk_header_size + chunk_extra_size) * num_chunks;
+        let total_header_size = 32 + 16; // EcfHeader + EraArchiveHeader
+        let chunk_header_size = 24 + 32; // EcfChunkHeader + EraChunkExtra
+        let headers_size = total_header_size + chunk_header_size * num_chunks;
 
-        // 16-byte alignment
-        let alignment = 16usize;
-        let align_up = |n: usize| (n + alignment - 1) & !(alignment - 1);
-
-        let mut data_offset = align_up(headers_size);
-
-        // Build chunk info
-        let mut chunk_offsets = Vec::new();
-        let mut chunk_sizes = Vec::new();
-
-        // Filename table chunk
-        chunk_offsets.push(data_offset);
-        chunk_sizes.push(compressed_names.len());
-        data_offset = align_up(data_offset + compressed_names.len());
-
-        // File chunks
-        for compressed in &compressed_files {
-            chunk_offsets.push(data_offset);
-            chunk_sizes.push(compressed.len());
-            data_offset = align_up(data_offset + compressed.len());
-        }
-
-        let file_size = data_offset;
-
-        // Build ECF header data
-        let ecf_header = EcfHeaderData {
-            header_size: total_header_size as u32,
-            file_size: file_size as u32,
-            num_chunks: num_chunks as u16,
-            id: ERA_FILE_ID,
-            chunk_extra_data_size: chunk_extra_size as u16,
-        };
-
-        // Build chunk headers and extras
-        let mut chunks = Vec::new();
+        let mut data_offset = align16(headers_size);
+        let mut chunks = Vec::with_capacity(num_chunks);
 
         // Filename table chunk (index 0)
         chunks.push(ChunkData {
-            id: ERA_FILENAME_CHUNK_ID,
-            offset: chunk_offsets[0] as u32,
-            size: chunk_sizes[0] as u32,
+            id: ERA_CHUNK_ID,
+            offset: data_offset as u32,
+            size: compressed_names.data.len() as u32,
             decomp_size: filename_table.len() as u32,
-            name_offset: 0, // filename table has no name
+            name_offset: 0,
+            comp_tiger128: compressed_names.tiger128,
         });
+        data_offset = align16(data_offset + compressed_names.data.len());
 
         // File chunks
-        for (i, file) in self.files.iter().enumerate() {
+        for (i, (file, compressed)) in self.files.iter().zip(&compressed_files).enumerate() {
             chunks.push(ChunkData {
-                id: ERA_FILE_CHUNK_ID,
-                offset: chunk_offsets[i + 1] as u32,
-                size: chunk_sizes[i + 1] as u32,
+                id: ERA_CHUNK_ID,
+                offset: data_offset as u32,
+                size: compressed.data.len() as u32,
                 decomp_size: file.data.len() as u32,
                 name_offset: name_offsets[i],
+                comp_tiger128: compressed.tiger128,
             });
+            data_offset = align16(data_offset + compressed.data.len());
         }
+
+        // Build ECF header
+        let ecf_header = EcfHeaderData {
+            header_size: total_header_size as u32,
+            file_size: data_offset as u32,
+            num_chunks: num_chunks as u16,
+            id: ERA_FILE_ID,
+            chunk_extra_data_size: 32,
+        };
 
         // Compute adler32 over header fields and chunk headers
         let adler32 = compute_header_adler32(&ecf_header, &chunks);
@@ -154,25 +137,17 @@ impl EraWriter {
         write_ecf_header(&mut writer, &ecf_header, adler32)?;
 
         // Write ERA archive header
-        let archive_header = EraArchiveHeader::new();
-        archive_header.write(&mut writer)?;
+        EraArchiveHeader::new().write(&mut writer)?;
 
-        // Write chunk headers with extra data
+        // Write chunk headers
         for chunk in &chunks {
             write_chunk_header(&mut writer, chunk)?;
         }
 
         // Write chunk data with padding
-        write_chunk_data(
-            &mut writer,
-            &chunk_offsets,
-            &compressed_names,
-            &compressed_files,
-        )?;
+        write_chunk_data(&mut writer, &chunks, &compressed_names, &compressed_files)?;
 
-        // Flush to ensure all data is written (important for EncryptWriter)
         writer.flush()?;
-
         Ok(())
     }
 }
@@ -199,13 +174,29 @@ struct ChunkData {
     size: u32,
     decomp_size: u32,
     name_offset: u32,
+    comp_tiger128: [u8; 16],
 }
 
-/// Compress data using raw deflate
-fn compress_deflate(data: &[u8]) -> Result<Vec<u8>> {
+/// Align to 16-byte boundary
+fn align16(n: usize) -> usize {
+    (n + 15) & !15
+}
+
+/// Compress data and compute its Tiger128 hash
+fn compress_data(data: &[u8]) -> Result<CompressedData> {
     let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(data)?;
-    Ok(encoder.finish()?)
+    let compressed = encoder.finish()?;
+
+    // Tiger128 = first 16 bytes of Tiger-192
+    let hash = Tiger::digest(&compressed);
+    let mut tiger128 = [0u8; 16];
+    tiger128.copy_from_slice(&hash[..16]);
+
+    Ok(CompressedData {
+        data: compressed,
+        tiger128,
+    })
 }
 
 /// Compute adler32 over header fields and chunk headers
@@ -262,7 +253,7 @@ fn write_chunk_header<W: Write>(writer: &mut W, chunk: &ChunkData) -> Result<()>
     writer.write_u16::<BigEndian>(0x0000)?; // resource_flags
 
     // EraChunkExtra (32 bytes)
-    let extra = EraChunkExtra::new(chunk.decomp_size, chunk.name_offset);
+    let extra = EraChunkExtra::new(chunk.decomp_size, chunk.name_offset, chunk.comp_tiger128);
     extra.write(writer)?;
 
     Ok(())
@@ -271,25 +262,27 @@ fn write_chunk_header<W: Write>(writer: &mut W, chunk: &ChunkData) -> Result<()>
 /// Write chunk data with padding
 fn write_chunk_data<W: Write + Seek>(
     writer: &mut W,
-    offsets: &[usize],
-    filename_table: &[u8],
-    files: &[Vec<u8>],
+    chunks: &[ChunkData],
+    filename_table: &CompressedData,
+    files: &[CompressedData],
 ) -> Result<()> {
-    // Write filename table
-    let current_pos = writer.stream_position()? as usize;
-    if offsets[0] > current_pos {
-        writer.write_all(&vec![0u8; offsets[0] - current_pos])?;
-    }
-    writer.write_all(filename_table)?;
+    // Write filename table (first chunk)
+    write_padded(writer, chunks[0].offset as usize, &filename_table.data)?;
 
     // Write file data
-    for (i, data) in files.iter().enumerate() {
-        let current_pos = writer.stream_position()? as usize;
-        if offsets[i + 1] > current_pos {
-            writer.write_all(&vec![0u8; offsets[i + 1] - current_pos])?;
-        }
-        writer.write_all(data)?;
+    for (chunk, file) in chunks[1..].iter().zip(files) {
+        write_padded(writer, chunk.offset as usize, &file.data)?;
     }
 
+    Ok(())
+}
+
+/// Write data at offset, padding with zeros if needed
+fn write_padded<W: Write + Seek>(writer: &mut W, offset: usize, data: &[u8]) -> Result<()> {
+    let current = writer.stream_position()? as usize;
+    if offset > current {
+        writer.write_all(&vec![0u8; offset - current])?;
+    }
+    writer.write_all(data)?;
     Ok(())
 }

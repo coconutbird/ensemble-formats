@@ -419,7 +419,7 @@ pub fn export_to_gltf_with_buffer_name(
                 rotation: None,
                 scale: None,
                 translation: None,
-                skin: skin_index.clone(),
+                skin: skin_index,
                 weights: None,
             });
         }
@@ -535,6 +535,7 @@ pub fn export_to_gltf_with_buffer_name(
 }
 
 /// Create a mesh primitive from vertices and indices.
+#[allow(clippy::too_many_arguments)]
 fn create_primitive(
     vertices: &[UnpackedVertex],
     indices: &[u16],
@@ -561,7 +562,7 @@ fn create_primitive(
 
     // Write positions
     // Pad to 4-byte boundary for float alignment
-    while buffer_data.len() % 4 != 0 {
+    while !buffer_data.len().is_multiple_of(4) {
         buffer_data.push(0);
     }
     let pos_view_idx = buffer_views.len() as u32;
@@ -795,7 +796,7 @@ fn create_primitive(
 
         // JOINTS_0 - bone indices as u8 (<=256 bones) or u16 (>256 bones)
         // Pad to 2-byte boundary if using u16
-        if use_u16_joints && buffer_data.len() % 2 != 0 {
+        if use_u16_joints && !buffer_data.len().is_multiple_of(2) {
             buffer_data.push(0);
         }
         let joints_view_idx = buffer_views.len() as u32;
@@ -870,7 +871,7 @@ fn create_primitive(
 
         // WEIGHTS_0 - bone weights as floats
         // Pad to 4-byte boundary for float alignment
-        while buffer_data.len() % 4 != 0 {
+        while !buffer_data.len().is_multiple_of(4) {
             buffer_data.push(0);
         }
         let weights_view_idx = buffer_views.len() as u32;
@@ -933,7 +934,7 @@ fn create_primitive(
     });
     if has_colors {
         // Pad to 4-byte boundary for float alignment
-        while buffer_data.len() % 4 != 0 {
+        while !buffer_data.len().is_multiple_of(4) {
             buffer_data.push(0);
         }
         let color_view_idx = buffer_views.len() as u32;
@@ -982,7 +983,7 @@ fn create_primitive(
 
     // Write indices
     // Pad to 2-byte boundary for u16 alignment
-    if buffer_data.len() % 2 != 0 {
+    if !buffer_data.len().is_multiple_of(2) {
         buffer_data.push(0);
     }
     let idx_view_idx = buffer_views.len() as u32;
@@ -1108,6 +1109,7 @@ fn get_section_bone_names(
 /// 1. Exact match (section bones == mesh bones)
 /// 2. Smallest superset (mesh contains all section bones with fewest extras)
 /// 3. Highest overlap if no complete containment
+///
 /// Returns the mesh index, or mesh count to create a new mesh if none match.
 fn find_best_matching_mesh(
     section_bones: &std::collections::HashSet<String>,
@@ -1221,7 +1223,7 @@ fn create_skeleton_nodes(
 
         nodes.push(json::Node {
             camera: None,
-            children: if children.as_ref().map_or(true, |c| c.is_empty()) {
+            children: if children.as_ref().is_none_or(|c| c.is_empty()) {
                 None
             } else {
                 children
@@ -1241,7 +1243,7 @@ fn create_skeleton_nodes(
 
     // Write inverse bind matrices.
     // model_to_bone rows flat = column-major of GL IBM (same derivation as granny path).
-    while buffer_data.len() % 4 != 0 {
+    while !buffer_data.len().is_multiple_of(4) {
         buffer_data.push(0);
     }
     let ibm_view_idx = buffer_views.len() as u32;
@@ -1357,7 +1359,7 @@ fn create_skeleton_nodes_from_granny(
 
         nodes.push(json::Node {
             camera: None,
-            children: if children.as_ref().map_or(true, |c| c.is_empty()) {
+            children: if children.as_ref().is_none_or(|c| c.is_empty()) {
                 None
             } else {
                 children
@@ -1379,7 +1381,7 @@ fn create_skeleton_nodes_from_granny(
     // IWM is the model->bone transform in DX convention.
     // glTF IBM in GL convention = IWM^T.
     // column-major(IWM^T) = row-major(IWM), so just write IWM rows flat.
-    while buffer_data.len() % 4 != 0 {
+    while !buffer_data.len().is_multiple_of(4) {
         buffer_data.push(0);
     }
     let ibm_view_idx = buffer_views.len() as u32;

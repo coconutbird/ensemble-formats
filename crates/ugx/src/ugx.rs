@@ -600,8 +600,8 @@ impl UgxGeom {
 
         // UV array (8 elements)
         let mut uv_types = [VertexElementType::Ignore; 8];
-        for i in 0..8 {
-            uv_types[i] = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
+        for uv_type in &mut uv_types {
+            *uv_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
         }
 
         let indices_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);

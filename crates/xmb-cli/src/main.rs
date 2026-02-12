@@ -3,7 +3,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use xmb::{Node, XmbData, XmbFormat, XmbReader, XmbWriter};
 
 #[derive(Parser)]
@@ -179,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Generate an output path by appending the new extension.
 /// If `overwrite` is false and the file exists, adds "_1", "_2", etc.
-fn output_path(base: &PathBuf, new_ext: &str, overwrite: bool) -> PathBuf {
+fn output_path(base: &Path, new_ext: &str, overwrite: bool) -> PathBuf {
     let base_name = base.as_os_str().to_string_lossy();
     let output_name = format!("{}.{}", base_name, new_ext);
     let output = PathBuf::from(&output_name);

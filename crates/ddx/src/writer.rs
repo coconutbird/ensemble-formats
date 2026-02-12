@@ -97,8 +97,8 @@ impl DdxTexture {
 fn calculate_linear_size(width: u32, height: u32, format: DataFormat) -> u32 {
     if format.is_dxt() {
         // Block-compressed: ((width+3)/4) * ((height+3)/4) * block_size
-        let block_width = (width + 3) / 4;
-        let block_height = (height + 3) / 4;
+        let block_width = width.div_ceil(4);
+        let block_height = height.div_ceil(4);
         let block_size = format.dxt_block_size() as u32;
         block_width * block_height * block_size
     } else {

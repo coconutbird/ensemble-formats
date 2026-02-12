@@ -242,6 +242,7 @@ dependencies = [
  "flate2",
  "sha1",
  "thiserror",
+ "tiger",
 ]
 
 [[package]]
@@ -565,6 +566,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tiger"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "579abbce4ad73b04386dbeb34369c9873a8f9b749c7b99cbf479a2949ff715ed"
+dependencies = [
+ "digest",
 ]
 
 [[package]]

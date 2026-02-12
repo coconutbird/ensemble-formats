@@ -93,7 +93,7 @@ impl XmbData {
 
         xml_writer
             .write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
 
         xml_writer.get_mut().write_all(b"\n").map_err(Error::Io)?;
 
@@ -202,17 +202,17 @@ fn write_node_xml<W: Write>(node: &Node, writer: &mut Writer<W>) -> Result<()> {
     if !has_text && !has_children {
         writer
             .write_event(Event::Empty(elem))
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
     } else {
         writer
             .write_event(Event::Start(elem.borrow()))
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
 
         if has_text {
             let text = node.text.to_string_value();
             writer
                 .write_event(Event::Text(BytesText::new(&text)))
-                .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+                .map_err(|e| Error::Io(std::io::Error::other(e)))?;
         }
 
         for child in &node.children {
@@ -221,7 +221,7 @@ fn write_node_xml<W: Write>(node: &Node, writer: &mut Writer<W>) -> Result<()> {
 
         writer
             .write_event(Event::End(BytesEnd::new(&node.name)))
-            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
     }
 
     Ok(())
