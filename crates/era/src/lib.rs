@@ -111,11 +111,13 @@ mod tests {
         writer.write(encrypt_writer).expect("Failed to write");
         let data1 = buffer1.into_inner();
 
-        // Read back and create new writer
+        // Read back and collect hashes
         let cursor = Cursor::new(data1.clone());
         let decrypt_reader = DecryptReader::new(cursor, keys);
         let archive = EraArchive::new(decrypt_reader).expect("Failed to read");
+        let hashes1: Vec<_> = archive.iter().map(|e| e.extra.comp_tiger128).collect();
 
+        // Create new writer from extracted files
         let mut writer2 = EraWriter::new();
         for i in 1..archive.len() {
             let entry = archive.entry(i).unwrap();
@@ -135,7 +137,18 @@ mod tests {
             .expect("Failed to write second time");
         let data2 = buffer2.into_inner();
 
+        // Read second archive and collect hashes
+        let cursor2 = Cursor::new(data2.clone());
+        let decrypt_reader2 = DecryptReader::new(cursor2, keys);
+        let archive2 = EraArchive::new(decrypt_reader2).expect("Failed to read second");
+        let hashes2: Vec<_> = archive2.iter().map(|e| e.extra.comp_tiger128).collect();
+
+        // Verify identical bytes and hashes
         assert_eq!(data1, data2, "Round-trip should produce identical bytes");
+        assert_eq!(
+            hashes1, hashes2,
+            "Tiger128 hashes should match after roundtrip"
+        );
     }
 
     #[test]
