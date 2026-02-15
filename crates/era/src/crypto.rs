@@ -3,6 +3,7 @@
 //! ERA archives are encrypted using a modified TEA cipher in CTR mode with 64-byte blocks.
 //! The key is derived from a password using SHA-1.
 
+use rayon::prelude::*;
 use sha1::{Digest, Sha1};
 
 /// Default TEA initialization vector
@@ -516,4 +517,48 @@ pub fn tea_encrypt_data(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
 
         data[offset..offset + 64].copy_from_slice(&dst);
     }
+}
+
+/// Decrypt data in-place using parallel processing (for large buffers)
+///
+/// This is faster than `tea_decrypt_data` for large amounts of data by
+/// utilizing multiple CPU cores. Each 64-byte block is independent in CTR mode.
+pub fn tea_decrypt_data_parallel(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
+    assert!(data.len().is_multiple_of(TEA_BLOCK_SIZE));
+    assert!(start_offset.is_multiple_of(TEA_BLOCK_SIZE as u64));
+
+    let start_counter = (start_offset / TEA_BLOCK_SIZE as u64) as u32;
+
+    data.par_chunks_mut(TEA_BLOCK_SIZE)
+        .enumerate()
+        .for_each(|(i, chunk)| {
+            let counter = start_counter + i as u32;
+            let mut src = [0u8; 64];
+            src.copy_from_slice(chunk);
+            let mut dst = [0u8; 64];
+            tea_decrypt_block64(keys, &src, &mut dst, counter);
+            chunk.copy_from_slice(&dst);
+        });
+}
+
+/// Encrypt data in-place using parallel processing (for large buffers)
+///
+/// This is faster than `tea_encrypt_data` for large amounts of data by
+/// utilizing multiple CPU cores. Each 64-byte block is independent in CTR mode.
+pub fn tea_encrypt_data_parallel(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
+    assert!(data.len().is_multiple_of(TEA_BLOCK_SIZE));
+    assert!(start_offset.is_multiple_of(TEA_BLOCK_SIZE as u64));
+
+    let start_counter = (start_offset / TEA_BLOCK_SIZE as u64) as u32;
+
+    data.par_chunks_mut(TEA_BLOCK_SIZE)
+        .enumerate()
+        .for_each(|(i, chunk)| {
+            let counter = start_counter + i as u32;
+            let mut src = [0u8; 64];
+            src.copy_from_slice(chunk);
+            let mut dst = [0u8; 64];
+            tea_encrypt_block64(keys, &src, &mut dst, counter);
+            chunk.copy_from_slice(&dst);
+        });
 }

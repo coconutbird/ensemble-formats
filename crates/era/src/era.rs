@@ -372,4 +372,33 @@ impl<R: Read + Seek> EraArchive<R> {
 
         Ok(decompressed)
     }
+
+    /// Read compressed data for an entry WITHOUT decompressing
+    ///
+    /// This is useful for copying files between archives without the overhead
+    /// of decompression and recompression. Returns the compressed bytes along
+    /// with metadata needed to write to another archive.
+    ///
+    /// Returns: (compressed_data, decompressed_size, tiger128_hash)
+    pub fn read_entry_compressed(&mut self, index: usize) -> Result<(Vec<u8>, u32, [u8; 16])> {
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(Error::ChunkIndexOutOfBounds {
+                index,
+                count: self.entries.len(),
+            })?
+            .clone();
+
+        self.reader
+            .seek(SeekFrom::Start(entry.chunk.offset as u64))?;
+        let mut compressed = vec![0u8; entry.chunk.size as usize];
+        self.reader.read_exact(&mut compressed)?;
+
+        Ok((
+            compressed,
+            entry.extra.decomp_size,
+            entry.extra.comp_tiger128,
+        ))
+    }
 }

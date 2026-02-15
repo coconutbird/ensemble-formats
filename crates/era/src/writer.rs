@@ -7,6 +7,7 @@ use std::path::Path;
 use byteorder::{BigEndian, WriteBytesExt};
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
+use rayon::prelude::*;
 use tiger::{Digest, Tiger};
 
 use crate::crypto::TeaKeys;
@@ -20,7 +21,7 @@ const ERA_FILE_ID: u32 = 0x0076C900;
 /// ERA chunk ID (used for both filename table and file entries)
 const ERA_CHUNK_ID: u64 = 0x8DAFB100;
 
-/// A file to be added to an ERA archive
+/// A file to be added to an ERA archive (uncompressed)
 struct PendingFile {
     /// Filename (relative path with backslashes)
     filename: String,
@@ -28,29 +29,69 @@ struct PendingFile {
     data: Vec<u8>,
 }
 
-/// Compressed data with its Tiger128 hash
-struct CompressedData {
-    /// Compressed bytes
-    data: Vec<u8>,
+/// A pre-compressed file to be added to an ERA archive
+struct PreCompressedFile {
+    /// Filename (relative path with backslashes)
+    filename: String,
+    /// Already compressed data
+    compressed_data: Vec<u8>,
+    /// Decompressed size
+    decompressed_size: u32,
     /// Tiger128 hash of compressed data
     tiger128: [u8; 16],
 }
 
-/// ERA archive writer
+/// Compressed data with its Tiger128 hash
+pub struct CompressedData {
+    /// Compressed bytes
+    pub data: Vec<u8>,
+    /// Tiger128 hash of compressed data
+    pub tiger128: [u8; 16],
+    /// Original decompressed size
+    pub decompressed_size: u32,
+}
+
+/// ERA archive writer with parallel compression support
 pub struct EraWriter {
+    /// Uncompressed files to be compressed during write
     files: Vec<PendingFile>,
+    /// Pre-compressed files (skip compression)
+    precompressed: Vec<PreCompressedFile>,
 }
 
 impl EraWriter {
     /// Create a new ERA writer
     pub fn new() -> Self {
-        Self { files: Vec::new() }
+        Self {
+            files: Vec::new(),
+            precompressed: Vec::new(),
+        }
     }
 
-    /// Add a file to the archive
+    /// Add a file to the archive (will be compressed during write)
     pub fn add_file(&mut self, filename: impl Into<String>, data: Vec<u8>) {
         let filename = filename.into().replace('/', "\\");
         self.files.push(PendingFile { filename, data });
+    }
+
+    /// Add a pre-compressed file to the archive (skips compression)
+    ///
+    /// This is useful when copying files from another archive without
+    /// decompressing and recompressing them.
+    pub fn add_compressed_file(
+        &mut self,
+        filename: impl Into<String>,
+        compressed_data: Vec<u8>,
+        decompressed_size: u32,
+        tiger128: [u8; 16],
+    ) {
+        let filename = filename.into().replace('/', "\\");
+        self.precompressed.push(PreCompressedFile {
+            filename,
+            compressed_data,
+            decompressed_size,
+            tiger128,
+        });
     }
 
     /// Write the archive to a file
@@ -69,10 +110,20 @@ impl EraWriter {
 
     /// Write the archive to a writer (should be an EncryptWriter for proper encryption)
     pub fn write<W: Write + Seek>(&self, mut writer: W) -> Result<()> {
-        // Build filename table
+        // Build filename table (includes both regular and precompressed files)
         let mut filename_table = Vec::new();
         let mut name_offsets = Vec::new();
+
+        // Add regular files to filename table
         for file in &self.files {
+            name_offsets.push(filename_table.len() as u32);
+            filename_table.extend_from_slice(file.filename.as_bytes());
+            filename_table.push(0); // null terminator
+        }
+
+        // Add precompressed files to filename table
+        let precomp_name_start = name_offsets.len();
+        for file in &self.precompressed {
             name_offsets.push(filename_table.len() as u32);
             filename_table.extend_from_slice(file.filename.as_bytes());
             filename_table.push(0); // null terminator
@@ -81,15 +132,16 @@ impl EraWriter {
         // Compress filename table
         let compressed_names = compress_data(&filename_table)?;
 
-        // Compress all file data
-        let compressed_files: Vec<_> = self
+        // Compress all file data IN PARALLEL using rayon
+        let compressed_files: Vec<CompressedData> = self
             .files
-            .iter()
+            .par_iter()
             .map(|f| compress_data(&f.data))
             .collect::<Result<_>>()?;
 
         // Calculate layout
-        let num_chunks = 1 + self.files.len(); // filename table + files
+        let total_files = self.files.len() + self.precompressed.len();
+        let num_chunks = 1 + total_files; // filename table + files
         let total_header_size = 32 + 16; // EcfHeader + EraArchiveHeader
         let chunk_header_size = 24 + 32; // EcfChunkHeader + EraChunkExtra
         let headers_size = total_header_size + chunk_header_size * num_chunks;
@@ -108,7 +160,7 @@ impl EraWriter {
         });
         data_offset = align16(data_offset + compressed_names.data.len());
 
-        // File chunks
+        // Regular file chunks (freshly compressed)
         for (i, (file, compressed)) in self.files.iter().zip(&compressed_files).enumerate() {
             chunks.push(ChunkData {
                 id: ERA_CHUNK_ID,
@@ -119,6 +171,19 @@ impl EraWriter {
                 comp_tiger128: compressed.tiger128,
             });
             data_offset = align16(data_offset + compressed.data.len());
+        }
+
+        // Pre-compressed file chunks (skip compression)
+        for (i, file) in self.precompressed.iter().enumerate() {
+            chunks.push(ChunkData {
+                id: ERA_CHUNK_ID,
+                offset: data_offset as u32,
+                size: file.compressed_data.len() as u32,
+                decomp_size: file.decompressed_size,
+                name_offset: name_offsets[precomp_name_start + i],
+                comp_tiger128: file.tiger128,
+            });
+            data_offset = align16(data_offset + file.compressed_data.len());
         }
 
         // Build ECF header
@@ -145,7 +210,13 @@ impl EraWriter {
         }
 
         // Write chunk data with padding
-        write_chunk_data(&mut writer, &chunks, &compressed_names, &compressed_files)?;
+        write_chunk_data_all(
+            &mut writer,
+            &chunks,
+            &compressed_names,
+            &compressed_files,
+            &self.precompressed,
+        )?;
 
         writer.flush()?;
         Ok(())
@@ -184,6 +255,7 @@ fn align16(n: usize) -> usize {
 
 /// Compress data and compute its Tiger128 hash
 fn compress_data(data: &[u8]) -> Result<CompressedData> {
+    let decompressed_size = data.len() as u32;
     let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(data)?;
     let compressed = encoder.finish()?;
@@ -196,7 +268,13 @@ fn compress_data(data: &[u8]) -> Result<CompressedData> {
     Ok(CompressedData {
         data: compressed,
         tiger128,
+        decompressed_size,
     })
+}
+
+/// Compress data and compute its Tiger128 hash (public version for external use)
+pub fn compress_file_data(data: &[u8]) -> Result<CompressedData> {
+    compress_data(data)
 }
 
 /// Compute adler32 over header fields and chunk headers
@@ -259,19 +337,26 @@ fn write_chunk_header<W: Write>(writer: &mut W, chunk: &ChunkData) -> Result<()>
     Ok(())
 }
 
-/// Write chunk data with padding
-fn write_chunk_data<W: Write + Seek>(
+/// Write chunk data with padding (handles both regular and pre-compressed files)
+fn write_chunk_data_all<W: Write + Seek>(
     writer: &mut W,
     chunks: &[ChunkData],
     filename_table: &CompressedData,
-    files: &[CompressedData],
+    compressed_files: &[CompressedData],
+    precompressed_files: &[PreCompressedFile],
 ) -> Result<()> {
     // Write filename table (first chunk)
     write_padded(writer, chunks[0].offset as usize, &filename_table.data)?;
 
-    // Write file data
-    for (chunk, file) in chunks[1..].iter().zip(files) {
+    // Write regular compressed file data
+    let regular_count = compressed_files.len();
+    for (chunk, file) in chunks[1..=regular_count].iter().zip(compressed_files) {
         write_padded(writer, chunk.offset as usize, &file.data)?;
+    }
+
+    // Write pre-compressed file data
+    for (chunk, file) in chunks[regular_count + 1..].iter().zip(precompressed_files) {
+        write_padded(writer, chunk.offset as usize, &file.compressed_data)?;
     }
 
     Ok(())

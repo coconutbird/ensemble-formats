@@ -24,19 +24,26 @@
 //! writer.write_to_file("output.era").unwrap();
 //! ```
 
+pub mod buffer_pool;
 pub mod crypto;
 mod decrypt_reader;
 mod encrypt_writer;
 mod era;
 mod error;
+pub mod mmap;
 mod writer;
 
-pub use crypto::{TeaKeys, ARCHIVE_PASSWORD, TEA_BLOCK_SIZE};
+pub use buffer_pool::{BufferPool, PooledBuffer};
+pub use crypto::{
+    tea_decrypt_data_parallel, tea_encrypt_data_parallel, TeaKeys, ARCHIVE_PASSWORD,
+    TEA_BLOCK_SIZE,
+};
 pub use decrypt_reader::DecryptReader;
 pub use encrypt_writer::EncryptWriter;
 pub use era::*;
 pub use error::*;
-pub use writer::EraWriter;
+pub use mmap::MmapEraArchive;
+pub use writer::{compress_file_data, CompressedData, EraWriter};
 
 // Re-export ECF types that are used in the public API
 pub use ecf::{CompressionMethod, EcfChunkHeader, EcfHeader};
@@ -186,6 +193,97 @@ mod tests {
         tea_decrypt_block64(&keys, &encrypted, &mut decrypted, 0);
 
         assert_eq!(original, decrypted);
+    }
+
+    #[test]
+    fn test_parallel_encryption_roundtrip() {
+        use crate::crypto::{
+            tea_decrypt_data_parallel, tea_encrypt_data, tea_encrypt_data_parallel,
+        };
+
+        let keys = TeaKeys::default_archive_keys();
+
+        // Create 10 blocks of data (640 bytes)
+        let original: Vec<u8> = (0..640).map(|i| (i % 256) as u8).collect();
+
+        // Test parallel encrypt + parallel decrypt
+        let mut data1 = original.clone();
+        tea_encrypt_data_parallel(&keys, &mut data1, 0);
+        tea_decrypt_data_parallel(&keys, &mut data1, 0);
+        assert_eq!(original, data1);
+
+        // Test sequential encrypt + parallel decrypt (mixed usage)
+        let mut data2 = original.clone();
+        tea_encrypt_data(&keys, &mut data2, 0);
+        tea_decrypt_data_parallel(&keys, &mut data2, 0);
+        assert_eq!(original, data2);
+    }
+
+    #[test]
+    fn test_precompressed_file() {
+        // Test that we can add pre-compressed files to an archive
+        let mut writer = EraWriter::new();
+
+        // Add a regular file
+        writer.add_file("regular.txt", b"Hello, World!".to_vec());
+
+        // Add a pre-compressed file (simulate copying from another archive)
+        let compressed = compress_file_data(b"Pre-compressed data").unwrap();
+        writer.add_compressed_file(
+            "precompressed.txt",
+            compressed.data.clone(),
+            compressed.decompressed_size,
+            compressed.tiger128,
+        );
+
+        let mut buffer = Cursor::new(Vec::new());
+        let keys = TeaKeys::default_archive_keys();
+        let encrypt_writer = EncryptWriter::new(&mut buffer, keys);
+        writer.write(encrypt_writer).expect("Failed to write");
+
+        let data = buffer.into_inner();
+        let cursor = Cursor::new(data);
+        let decrypt_reader = DecryptReader::new(cursor, keys);
+        let mut archive = EraArchive::new(decrypt_reader).expect("Failed to read");
+
+        assert_eq!(archive.len(), 3); // filename chunk + 2 files
+
+        let content1 = archive.read_entry(1).expect("Failed to read entry 1");
+        assert_eq!(content1, b"Hello, World!");
+
+        let content2 = archive.read_entry(2).expect("Failed to read entry 2");
+        assert_eq!(content2, b"Pre-compressed data");
+    }
+
+    #[test]
+    fn test_read_entry_compressed() {
+        let mut writer = EraWriter::new();
+        writer.add_file("test.txt", b"Test content for compression".to_vec());
+
+        let mut buffer = Cursor::new(Vec::new());
+        let keys = TeaKeys::default_archive_keys();
+        let encrypt_writer = EncryptWriter::new(&mut buffer, keys);
+        writer.write(encrypt_writer).expect("Failed to write");
+
+        let data = buffer.into_inner();
+        let cursor = Cursor::new(data.clone());
+        let decrypt_reader = DecryptReader::new(cursor, keys);
+        let mut archive = EraArchive::new(decrypt_reader).expect("Failed to read");
+
+        // Read compressed
+        let (compressed, decomp_size, tiger128) =
+            archive.read_entry_compressed(1).expect("Failed to read");
+
+        assert_eq!(decomp_size, 28); // "Test content for compression".len()
+        assert!(!compressed.is_empty());
+        assert_ne!(tiger128, [0u8; 16]); // Hash should be set
+
+        // Verify we can read the same data normally
+        let cursor2 = Cursor::new(data);
+        let decrypt_reader2 = DecryptReader::new(cursor2, keys);
+        let mut archive2 = EraArchive::new(decrypt_reader2).expect("Failed to read");
+        let decompressed = archive2.read_entry(1).expect("Failed to read");
+        assert_eq!(decompressed, b"Test content for compression");
     }
 
     #[test]

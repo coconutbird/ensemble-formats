@@ -14,4 +14,6 @@ flate2.workspace = true
 thiserror.workspace = true
 sha1.workspace = true
 tiger.workspace = true
+rayon.workspace = true
+memmap2.workspace = true
 

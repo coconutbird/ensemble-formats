@@ -80,6 +80,12 @@ enum Commands {
         /// Output directory (defaults to archive name without extension)
         #[arg(short, long)]
         output: Option<String>,
+        /// Unix shell style glob pattern to filter files (e.g., "*.ugx", "data/**/*.xmb")
+        #[arg(short, long)]
+        filter: Option<String>,
+        /// Specific files to extract
+        #[arg(trailing_var_arg = true)]
+        files: Vec<String>,
     },
     /// Create an ERA archive from a directory
     Create {
@@ -96,9 +102,19 @@ fn main() {
     let exit_code = match &cli.command {
         Commands::List { file } => list_archive(file, cli.json),
         Commands::Info { file } => info_archive(file, cli.json),
-        Commands::Extract { file, output } => {
-            extract_archive(file, output.as_deref(), cli.json, cli.quiet)
-        }
+        Commands::Extract {
+            file,
+            output,
+            filter,
+            files,
+        } => extract_archive(
+            file,
+            output.as_deref(),
+            filter.as_deref(),
+            files,
+            cli.json,
+            cli.quiet,
+        ),
         Commands::Create { output, input } => create_archive(output, input, cli.json, cli.quiet),
     };
 
@@ -363,7 +379,14 @@ struct ExtractedFile {
     error: Option<String>,
 }
 
-fn extract_archive(path: &str, outdir: Option<&str>, json: bool, quiet: bool) -> i32 {
+fn extract_archive(
+    path: &str,
+    outdir: Option<&str>,
+    filter: Option<&str>,
+    specific_files: &[String],
+    json: bool,
+    quiet: bool,
+) -> i32 {
     let mut archive = match EraArchive::open(path) {
         Ok(a) => a,
         Err(e) => {
@@ -375,6 +398,14 @@ fn extract_archive(path: &str, outdir: Option<&str>, json: bool, quiet: bool) ->
             return exit_code::FILE_NOT_FOUND;
         }
     };
+
+    // Compile glob pattern if provided
+    let pattern = filter.map(|f| {
+        glob::Pattern::new(f).unwrap_or_else(|e| {
+            eprintln!("Invalid glob pattern '{}': {}", f, e);
+            std::process::exit(exit_code::ERROR);
+        })
+    });
 
     // Default output directory is the archive name without extension
     let default_outdir = Path::new(path)
@@ -406,6 +437,28 @@ fn extract_archive(path: &str, outdir: Option<&str>, json: bool, quiet: bool) ->
     for i in 1..archive.len() {
         let entry = archive.entry(i).unwrap().clone();
         let filename = entry.filename.as_deref().unwrap_or("<unnamed>").to_string();
+
+        // Normalize filename for matching (use forward slashes)
+        let normalized = filename.replace('\\', "/");
+
+        // Check if file matches filter criteria
+        let matches = if !specific_files.is_empty() {
+            // Check against specific file list
+            specific_files.iter().any(|f| {
+                let f_normalized = f.replace('\\', "/");
+                normalized == f_normalized || normalized.ends_with(&format!("/{}", f_normalized))
+            })
+        } else if let Some(ref pat) = pattern {
+            // Check against glob pattern
+            pat.matches(&normalized)
+        } else {
+            // No filter, extract all
+            true
+        };
+
+        if !matches {
+            continue;
+        }
 
         // Read entry data
         let data = match archive.read_entry(i) {
