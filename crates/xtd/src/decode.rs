@@ -224,8 +224,11 @@ impl XtdFile {
         let mut normals = Vec::with_capacity(num_verts);
 
         for i in 0..num_verts {
-            let grid_x = (i % width) as f32;
-            let grid_z = (i / width) as f32;
+            // Note: The texture data is stored transposed - the shader accesses with
+            // tex2Dlod(..., float4(uv.y, uv.x, 0, 0)) which swaps the coordinates.
+            // This means z varies fast (columns) and x varies slow (rows).
+            let grid_z = (i % width) as f32;
+            let grid_x = (i / width) as f32;
 
             let displacement = unpack_position(linear_positions[i], &header.mid, &header.range);
 
