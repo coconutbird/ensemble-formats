@@ -25,6 +25,9 @@ pub use reader::XtdReader;
 mod writer;
 pub use writer::XtdWriter;
 
+mod decode;
+pub use decode::{unpack_normal, unpack_position, AtlasHeader, TerrainVertices};
+
 // ============================================================================
 // XTD Constants
 // ============================================================================
@@ -153,6 +156,54 @@ mod tests {
             panic!(
                 "XTD roundtrip failed: {} non-checksum differences!",
                 diff_count
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires extracted XTD file"]
+    fn test_decode_vertices() {
+        let data = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
+        let file = XtdReader::read(&data).expect("Failed to parse XTD");
+
+        let vertices = file.decode_vertices().expect("Failed to decode vertices");
+
+        println!("Atlas Header:");
+        println!("  Mid: {:?}", vertices.header.mid);
+        println!("  Range: {:?}", vertices.header.range);
+        println!("\nTerrain grid: {}x{}", vertices.num_verts_per_axis, vertices.num_verts_per_axis);
+        println!("Total vertices: {}", vertices.positions.len());
+        println!("Total normals: {}", vertices.normals.len());
+
+        // Print first few vertices
+        println!("\nFirst 5 vertices:");
+        for i in 0..5.min(vertices.positions.len()) {
+            println!(
+                "  [{:3}] pos={:?} norm={:?}",
+                i, vertices.positions[i], vertices.normals[i]
+            );
+        }
+
+        // Generate indices
+        let indices = vertices.generate_indices();
+        println!("\nGenerated {} indices ({} triangles)", indices.len(), indices.len() / 3);
+
+        // Sanity checks
+        assert_eq!(vertices.positions.len(), vertices.normals.len());
+        assert_eq!(
+            vertices.positions.len(),
+            vertices.num_verts_per_axis * vertices.num_verts_per_axis
+        );
+
+        // Check normals are normalized (approximately)
+        for (i, norm) in vertices.normals.iter().take(100).enumerate() {
+            let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();
+            assert!(
+                (len - 1.0).abs() < 0.1,
+                "Normal {} not normalized: {:?} (len={})",
+                i,
+                norm,
+                len
             );
         }
     }
