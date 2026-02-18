@@ -1,3 +1,8 @@
+[package]
+name = "ensemble-rs"
+version = "0.1.0"
+edition = "2021"
+
 [workspace]
 resolver = "2"
 members = [
@@ -14,6 +19,15 @@ members = [
     "crates/xmb-cli",
     "crates/ugx-cli",
 ]
+
+[dependencies]
+xtt = { path = "crates/xtt" }
+byteorder = "1.5"
+image = "0.25"
+
+[[example]]
+name = "test_xtt"
+path = "examples/test_xtt.rs"
 
 [workspace.package]
 version = "0.1.0"
@@ -37,6 +51,7 @@ ugx-cli = { path = "crates/ugx-cli" }
 
 # External dependencies
 byteorder = "1.5"
+texture2ddecoder = "0.1"
 flate2 = "1.0"
 thiserror = "2.0"
 sha1 = "0.10"

@@ -180,6 +180,8 @@ pub struct TerrainVertices {
     pub positions: Vec<[f32; 3]>,
     /// Decoded vertex normals.
     pub normals: Vec<[f32; 3]>,
+    /// Texture coordinates for terrain atlas (0-1 range).
+    pub uvs: Vec<[f32; 2]>,
     /// Number of vertices per axis (square terrain).
     pub num_verts_per_axis: usize,
 }
@@ -225,24 +227,20 @@ impl XtdFile {
             packed_normals.push(LittleEndian::read_u32(&self.atlas_data[norm_offset..norm_offset + 4]));
         }
 
-        // Unpack positions and normals
+        // Unpack positions, normals, and compute UVs
         // The packed data stores DISPLACEMENTS from the base grid position.
         // World position = base_grid_position + displacement
         let tile_scale = self.header.tile_scale;
         let mut positions = Vec::with_capacity(num_verts);
         let mut normals = Vec::with_capacity(num_verts);
+        let mut uvs = Vec::with_capacity(num_verts);
+        let width_f = (width - 1) as f32;
 
         for i in 0..num_verts {
-            // The texture data is stored transposed - the shader accesses with
-            // tex2Dlod(..., float4(uv.y, uv.x, 0, 0)) which swaps the coordinates.
-            // This means z varies fast (columns) and x varies slow (rows).
-            //
-            // We flip the Z axis to avoid upside-down terrain rendering.
-            // TODO: Verify this doesn't cause left-right mirroring by comparing
-            // with in-game map layouts. If mirrored, try removing the flip or
-            // flipping X instead of Z.
-            let grid_z = ((width - 1) - (i % width)) as f32;
-            let grid_x = (i / width) as f32;
+            // The terrain data is stored transposed relative to the texture.
+            // We swap row/column mapping and flip X to mirror left-right.
+            let grid_x = ((width - 1) - (i % width)) as f32;
+            let grid_z = ((width - 1) - (i / width)) as f32;
 
             let displacement = unpack_position(packed_positions[i], &header.mid, &header.range);
 
@@ -254,12 +252,18 @@ impl XtdFile {
             ]);
 
             normals.push(unpack_normal(packed_normals[i]));
+
+            // UV coordinates: simple grid mapping
+            let u = (i % width) as f32 / width_f;
+            let v = (i / width) as f32 / width_f;
+            uvs.push([u, v]);
         }
 
         Ok(TerrainVertices {
             header,
             positions,
             normals,
+            uvs,
             num_verts_per_axis: width,
         })
     }

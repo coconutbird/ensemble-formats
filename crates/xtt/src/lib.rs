@@ -24,6 +24,9 @@ pub use reader::XttReader;
 mod writer;
 pub use writer::XttWriter;
 
+mod decode;
+pub use decode::{AlbedoAtlas, AlbedoHeader};
+
 // ============================================================================
 // XTT Constants
 // ============================================================================

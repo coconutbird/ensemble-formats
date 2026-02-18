@@ -11,6 +11,7 @@ authors.workspace = true
 ecf = { workspace = true }
 byteorder = { workspace = true }
 thiserror = { workspace = true }
+texture2ddecoder = { workspace = true }
 
 [dev-dependencies]
 era = { workspace = true }
