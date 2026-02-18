@@ -71,7 +71,16 @@ impl XttWriter {
     }
 
     fn write_linker(linker: &XttLinker) -> Result<Vec<u8>> {
-        let mut buffer = Vec::with_capacity(XttLinker::HEADER_SIZE + linker.splat_data.len());
+        // Calculate total size
+        let splat_ids_size = linker.splat_layer_ids.len() * 4;
+        let decal_ids_size = linker.decal_layer_ids.len() * 4;
+        let total_size = XttLinker::HEADER_SIZE
+            + splat_ids_size
+            + linker.splat_alpha_data.len()
+            + decal_ids_size
+            + linker.decal_alpha_data.len();
+
+        let mut buffer = Vec::with_capacity(total_size);
         let mut cursor = Cursor::new(&mut buffer);
 
         cursor.write_i32::<BigEndian>(linker.grid_x)?;
@@ -84,8 +93,21 @@ impl XttWriter {
         cursor.write_i32::<BigEndian>(linker.num_splat_layers)?;
         cursor.write_i32::<BigEndian>(linker.num_decal_layers)?;
 
-        // Write splat data
-        cursor.get_mut().extend_from_slice(&linker.splat_data);
+        // Write splat layer IDs
+        for &id in &linker.splat_layer_ids {
+            cursor.write_i32::<BigEndian>(id)?;
+        }
+
+        // Write splat alpha data
+        cursor.get_mut().extend_from_slice(&linker.splat_alpha_data);
+
+        // Write decal layer IDs
+        for &id in &linker.decal_layer_ids {
+            cursor.write_i32::<BigEndian>(id)?;
+        }
+
+        // Write decal alpha data
+        cursor.get_mut().extend_from_slice(&linker.decal_alpha_data);
 
         Ok(buffer)
     }

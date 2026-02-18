@@ -198,6 +198,12 @@ impl XtdFile {
         }
 
         let header = AtlasHeader::from_bytes(&self.atlas_data)?;
+
+        // Debug: print header values
+        eprintln!("Atlas Header:");
+        eprintln!("  mid:   [{:.2}, {:.2}, {:.2}]", header.mid[0], header.mid[1], header.mid[2]);
+        eprintln!("  range: [{:.2}, {:.2}, {:.2}]", header.range[0], header.range[1], header.range[2]);
+
         let width = self.header.num_x_verts as usize;
         let num_verts = width * width;
 
@@ -242,20 +248,32 @@ impl XtdFile {
             let grid_x = ((width - 1) - (i % width)) as f32;
             let grid_z = ((width - 1) - (i / width)) as f32;
 
-            let displacement = unpack_position(packed_positions[i], &header.mid, &header.range);
+            // The packed data contains position data that needs to be combined with grid position.
+            // X/Z: grid position provides the base, packed data adds displacement
+            // Y: comes entirely from the packed data (height)
+            let unpacked = unpack_position(packed_positions[i], &header.mid, &header.range);
 
-            // Add base grid position to displacement to get world position
+            // Debug: print first few positions
+            if i < 5 || i == num_verts / 2 {
+                eprintln!("  unpacked[{}]: [{:.2}, {:.2}, {:.2}]", i, unpacked[0], unpacked[1], unpacked[2]);
+                eprintln!("    grid: x={:.2}, z={:.2}, scale={:.2}", grid_x, grid_z, tile_scale);
+            }
+
+            // Use grid position for X/Z base, unpacked Y for height
+            // The unpacked X/Z may be small displacements (detail offsets)
             positions.push([
-                grid_x * tile_scale + displacement[0],
-                displacement[1], // Y is just the height (displacement)
-                grid_z * tile_scale + displacement[2],
+                grid_x * tile_scale + unpacked[0],
+                unpacked[1],
+                grid_z * tile_scale + unpacked[2],
             ]);
 
             normals.push(unpack_normal(packed_normals[i]));
 
-            // UV coordinates: simple grid mapping
-            let u = (i % width) as f32 / width_f;
-            let v = (i / width) as f32 / width_f;
+            // UV coordinates: based on grid position (0-1 range over the terrain)
+            // The terrain data uses X-major ordering (row = i / width = Z, col = i % width = X)
+            // We need to flip to match texture orientation
+            let u = grid_x / width_f;
+            let v = grid_z / width_f;
             uvs.push([u, v]);
         }
 

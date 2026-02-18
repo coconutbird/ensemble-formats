@@ -1,8 +1,9 @@
 //! XTT reader implementation.
 
 use crate::{
-    ChunkMeta, Error, Result, XttFile, XttHeader, XttLinker, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
-    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, XTT_VERSION,
+    ActiveDecalInfo, ActiveDecalInstance, ActiveTextureInfo, ChunkMeta, Error, Result, XttFile,
+    XttHeader, XttLinker, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK, CHUNK_FOLIAGE_HEADER,
+    CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, XTT_VERSION,
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;
@@ -50,6 +51,8 @@ impl XttReader {
                     if chunk_data.len() > XttHeader::SIZE {
                         file.header_extra = chunk_data[XttHeader::SIZE..].to_vec();
                     }
+                    // Parse active textures, decals, and decal instances
+                    Self::parse_header_extra(&mut file)?;
                 }
                 CHUNK_ATLAS_LINK => {
                     let linker = Self::read_linker(&chunk_data)?;
@@ -123,8 +126,47 @@ impl XttReader {
         let num_splat_layers = cursor.read_i32::<BigEndian>()?;
         let num_decal_layers = cursor.read_i32::<BigEndian>()?;
 
-        // Rest is splat + decal data
-        let remaining = data[XttLinker::HEADER_SIZE..].to_vec();
+        // Parse splat layer IDs
+        let mut splat_layer_ids = Vec::with_capacity(num_splat_layers as usize);
+        for _ in 0..num_splat_layers {
+            splat_layer_ids.push(cursor.read_i32::<BigEndian>()?);
+        }
+
+        // Parse splat alpha data (if more than 1 layer)
+        let splat_alpha_data = if num_splat_layers > 1 {
+            // Calculate size: numAlignedLayers * 64 * 64 * 16bpp / 8
+            let num_aligned_layers = ((num_splat_layers - 1) >> 2) + 1;
+            let mem_size = (num_aligned_layers as usize
+                * XttLinker::ALPHA_TEXTURE_WIDTH
+                * XttLinker::ALPHA_TEXTURE_HEIGHT
+                * XttLinker::ALPHA_BPP)
+                >> 3;
+            let mut alpha_data = vec![0u8; mem_size];
+            cursor.read_exact(&mut alpha_data)?;
+            alpha_data
+        } else {
+            Vec::new()
+        };
+
+        // Parse decal layer IDs (if any decal layers)
+        let mut decal_layer_ids = Vec::new();
+        let mut decal_alpha_data = Vec::new();
+
+        if num_decal_layers > 0 {
+            for _ in 0..num_decal_layers {
+                decal_layer_ids.push(cursor.read_i32::<BigEndian>()?);
+            }
+
+            // Parse decal alpha data
+            let num_aligned_layers = ((num_decal_layers - 1) >> 2) + 1;
+            let mem_size = (num_aligned_layers as usize
+                * XttLinker::ALPHA_TEXTURE_WIDTH
+                * XttLinker::ALPHA_TEXTURE_HEIGHT
+                * XttLinker::ALPHA_BPP)
+                >> 3;
+            decal_alpha_data = vec![0u8; mem_size];
+            cursor.read_exact(&mut decal_alpha_data)?;
+        }
 
         Ok(XttLinker {
             grid_x,
@@ -136,8 +178,103 @@ impl XttReader {
             is_fully_opaque,
             num_splat_layers,
             num_decal_layers,
-            splat_data: remaining.clone(), // For now, store all as splat
-            decal_data: Vec::new(),
+            splat_layer_ids,
+            splat_alpha_data,
+            decal_layer_ids,
+            decal_alpha_data,
+        })
+    }
+
+    /// Parse header_extra data to extract active textures, decals, and decal instances.
+    fn parse_header_extra(file: &mut XttFile) -> Result<()> {
+        if file.header_extra.is_empty() {
+            return Ok(());
+        }
+
+        let mut cursor = Cursor::new(&file.header_extra);
+
+        // Parse active textures
+        for _ in 0..file.header.num_active_textures {
+            let texture = Self::read_active_texture(&mut cursor)?;
+            file.active_textures.push(texture);
+        }
+
+        // Parse active decals (if any)
+        for _ in 0..file.header.num_active_decals {
+            let decal = Self::read_active_decal(&mut cursor)?;
+            file.active_decals.push(decal);
+        }
+
+        // Parse decal instances (if any)
+        for _ in 0..file.header.num_active_decal_instances {
+            let instance = Self::read_decal_instance(&mut cursor)?;
+            file.decal_instances.push(instance);
+        }
+
+        Ok(())
+    }
+
+    /// Read a single active texture from the cursor.
+    fn read_active_texture<R: Read>(reader: &mut R) -> Result<ActiveTextureInfo> {
+        // Read 256-byte filename (null-terminated string)
+        let mut filename_bytes = [0u8; 256];
+        reader.read_exact(&mut filename_bytes)?;
+
+        // Find null terminator and convert to string
+        let filename = {
+            let end = filename_bytes
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(filename_bytes.len());
+            String::from_utf8_lossy(&filename_bytes[..end]).to_string()
+        };
+
+        // Read scale and blend op (BigEndian for Xbox 360)
+        let u_scale = reader.read_i32::<BigEndian>()?;
+        let v_scale = reader.read_i32::<BigEndian>()?;
+        let blend_op = reader.read_i32::<BigEndian>()?;
+
+        Ok(ActiveTextureInfo {
+            filename,
+            u_scale,
+            v_scale,
+            blend_op,
+        })
+    }
+
+    /// Read a single active decal from the cursor.
+    fn read_active_decal<R: Read>(reader: &mut R) -> Result<ActiveDecalInfo> {
+        // Read 256-byte filename (null-terminated string)
+        let mut filename_bytes = [0u8; 256];
+        reader.read_exact(&mut filename_bytes)?;
+
+        let filename = {
+            let end = filename_bytes
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(filename_bytes.len());
+            String::from_utf8_lossy(&filename_bytes[..end]).to_string()
+        };
+
+        Ok(ActiveDecalInfo { filename })
+    }
+
+    /// Read a single decal instance from the cursor.
+    fn read_decal_instance<R: Read>(reader: &mut R) -> Result<ActiveDecalInstance> {
+        let active_decal_index = reader.read_i32::<BigEndian>()?;
+        let rotation = f32::from_bits(reader.read_u32::<BigEndian>()?);
+        let tile_center_x = f32::from_bits(reader.read_u32::<BigEndian>()?);
+        let tile_center_y = f32::from_bits(reader.read_u32::<BigEndian>()?);
+        let u_scale = f32::from_bits(reader.read_u32::<BigEndian>()?);
+        let v_scale = f32::from_bits(reader.read_u32::<BigEndian>()?);
+
+        Ok(ActiveDecalInstance {
+            active_decal_index,
+            rotation,
+            tile_center_x,
+            tile_center_y,
+            u_scale,
+            v_scale,
         })
     }
 }

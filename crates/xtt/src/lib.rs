@@ -25,7 +25,7 @@ mod writer;
 pub use writer::XttWriter;
 
 mod decode;
-pub use decode::{AlbedoAtlas, AlbedoHeader};
+pub use decode::{AlbedoAtlas, AlbedoHeader, SplatAlphaData, ALPHA_TEXTURE_SIZE};
 
 // ============================================================================
 // XTT Constants

@@ -389,6 +389,7 @@ dependencies = [
  "ecf",
  "era",
  "flate2",
+ "texture2ddecoder",
  "thiserror",
 ]
 

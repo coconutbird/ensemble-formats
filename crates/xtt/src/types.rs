@@ -13,6 +13,69 @@ pub struct ChunkMeta {
     pub resource_flags: u16,
 }
 
+/// Active texture information.
+///
+/// From TerrainTexturing.h:
+/// ```cpp
+/// class BTerrainActiveTextureInfo {
+///     BFixedString256 mFilename;
+///     int mUScale;
+///     int mVScale;
+///     int mBlendOp;
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct ActiveTextureInfo {
+    /// Local texture filename (e.g., "arctic/snowdrift_01").
+    pub filename: String,
+    /// U texture coordinate scale.
+    pub u_scale: i32,
+    /// V texture coordinate scale.
+    pub v_scale: i32,
+    /// Blend operation.
+    pub blend_op: i32,
+}
+
+impl ActiveTextureInfo {
+    /// Size of one active texture entry in bytes.
+    /// 256 bytes for filename + 3 * 4 bytes for scales and blend op.
+    pub const SIZE: usize = 256 + 4 + 4 + 4;
+}
+
+/// Decal texture information.
+#[derive(Debug, Clone)]
+pub struct ActiveDecalInfo {
+    /// Local decal texture filename.
+    pub filename: String,
+}
+
+impl ActiveDecalInfo {
+    /// Size of one decal entry in bytes (just 256 bytes for filename).
+    pub const SIZE: usize = 256;
+}
+
+/// Decal instance information.
+#[derive(Debug, Clone)]
+pub struct ActiveDecalInstance {
+    /// Index into active decals array.
+    pub active_decal_index: i32,
+    /// Rotation angle.
+    pub rotation: f32,
+    /// Tile center X.
+    pub tile_center_x: f32,
+    /// Tile center Y.
+    pub tile_center_y: f32,
+    /// U scale.
+    pub u_scale: f32,
+    /// V scale.
+    pub v_scale: f32,
+}
+
+impl ActiveDecalInstance {
+    /// Size of one decal instance in bytes.
+    pub const SIZE: usize = 4 + 5 * 4;
+}
+
 /// XTT file header.
 ///
 /// From TerrainIO.h:
@@ -77,15 +140,25 @@ pub struct XttLinker {
     pub num_splat_layers: i32,
     /// Number of decal layers (aligned to multiple of 4).
     pub num_decal_layers: i32,
-    /// Raw splat layer data.
-    pub splat_data: Vec<u8>,
-    /// Raw decal layer data.
-    pub decal_data: Vec<u8>,
+    /// Parsed splat layer active texture indices.
+    pub splat_layer_ids: Vec<i32>,
+    /// Raw splat alpha texture data (packed A4R4G4B4, 64x64, tile-swapped).
+    pub splat_alpha_data: Vec<u8>,
+    /// Parsed decal layer instance indices.
+    pub decal_layer_ids: Vec<i32>,
+    /// Raw decal alpha texture data (packed A4R4G4B4, 64x64, tile-swapped).
+    pub decal_alpha_data: Vec<u8>,
 }
 
 impl XttLinker {
     /// Fixed header size (9 * 4 = 36 bytes).
     pub const HEADER_SIZE: usize = 36;
+    /// Alpha texture width.
+    pub const ALPHA_TEXTURE_WIDTH: usize = 64;
+    /// Alpha texture height.
+    pub const ALPHA_TEXTURE_HEIGHT: usize = 64;
+    /// Bits per pixel for A4R4G4B4 format.
+    pub const ALPHA_BPP: usize = 16;
 }
 
 /// Foliage data.
@@ -110,6 +183,12 @@ pub struct XttFile {
     pub header: XttHeader,
     /// Header chunk raw data (includes texture info beyond base header).
     pub header_extra: Vec<u8>,
+    /// Parsed active texture definitions.
+    pub active_textures: Vec<ActiveTextureInfo>,
+    /// Parsed active decal definitions.
+    pub active_decals: Vec<ActiveDecalInfo>,
+    /// Parsed decal instances.
+    pub decal_instances: Vec<ActiveDecalInstance>,
     /// Atlas linker chunks (one per terrain tile).
     pub linkers: Vec<XttLinker>,
     /// Albedo atlas texture data.
@@ -128,6 +207,9 @@ impl Default for XttFile {
             chunk_order: Vec::new(),
             header: XttHeader::default(),
             header_extra: Vec::new(),
+            active_textures: Vec::new(),
+            active_decals: Vec::new(),
+            decal_instances: Vec::new(),
             linkers: Vec::new(),
             albedo_data: Vec::new(),
             road_data: Vec::new(),

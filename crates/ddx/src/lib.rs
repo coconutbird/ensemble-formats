@@ -29,12 +29,14 @@
 //! println!("Mip levels: {}", texture.info.num_mip_levels);
 //! ```
 
+mod decode;
 mod error;
 mod format;
 mod header;
 mod reader;
 mod writer;
 
+pub use decode::DecodedTexture;
 pub use error::{Error, Result};
 pub use format::DataFormat;
 pub use header::{

@@ -52,6 +52,10 @@ pub enum Error {
     /// Invalid checksum.
     #[error("Invalid checksum: expected 0x{expected:08X}, got 0x{actual:08X}")]
     InvalidChecksum { expected: u32, actual: u32 },
+
+    /// Unsupported texture format for decoding.
+    #[error("Unsupported texture format for decoding: {0:?}")]
+    UnsupportedFormat(crate::format::DataFormat),
 }
 
 /// Result type for DDX operations.
