@@ -22,8 +22,12 @@ members = [
 
 [dependencies]
 xtt = { path = "crates/xtt" }
+ecf = { path = "crates/ecf" }
 byteorder = "1.5"
 image = "0.25"
+
+[dev-dependencies]
+cargo-husky = { version = "1.5.0", features = ["precommit-hook", "user-hooks"] }
 
 [[example]]
 name = "test_xtt"

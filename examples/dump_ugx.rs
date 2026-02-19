@@ -1,7 +1,6 @@
 //! Dump UGX file structure for debugging.
 
 use std::fs::File;
-use std::io::{Cursor, Seek, SeekFrom};
 
 use ecf::EcfReader;
 
@@ -29,7 +28,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Read and dump cached data chunk
     let cached_data = ecf.read_chunk_data_by_id(0x700)?;
-    println!("\n=== Cached Data (0x700) - {} bytes ===", cached_data.len());
+    println!(
+        "\n=== Cached Data (0x700) - {} bytes ===",
+        cached_data.len()
+    );
     hexdump(&cached_data, 256);
 
     // Read IB chunk
@@ -78,4 +80,3 @@ fn hexdump(data: &[u8], max: usize) {
         println!("  ... ({} more bytes)", data.len() - max);
     }
 }
-

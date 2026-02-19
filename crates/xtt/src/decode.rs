@@ -5,7 +5,7 @@
 //! Also provides alpha texture unpacking for splat blending.
 
 use crate::{Error, Result, XttFile, XttLinker};
-use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt};
 use std::io::Cursor;
 
 /// Decoded albedo atlas information.
@@ -236,10 +236,10 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
             // Extract 4-bit channel using original shiftOffset = {8, 4, 0, 12}
             // Layer 0 → bits 8-11, Layer 1 → bits 4-7, Layer 2 → bits 0-3, Layer 3 → bits 12-15
             let alpha_4bit = match channel_idx {
-                0 => ((pixel >> 8) & 0x0F) as u8,    // Layer 0: bits 8-11
-                1 => ((pixel >> 4) & 0x0F) as u8,    // Layer 1: bits 4-7
-                2 => (pixel & 0x000F) as u8,         // Layer 2: bits 0-3
-                3 => ((pixel >> 12) & 0x0F) as u8,   // Layer 3: bits 12-15
+                0 => ((pixel >> 8) & 0x0F) as u8,  // Layer 0: bits 8-11
+                1 => ((pixel >> 4) & 0x0F) as u8,  // Layer 1: bits 4-7
+                2 => (pixel & 0x000F) as u8,       // Layer 2: bits 0-3
+                3 => ((pixel >> 12) & 0x0F) as u8, // Layer 3: bits 12-15
                 _ => unreachable!(),
             };
 
@@ -251,4 +251,3 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
 
     Ok(alpha_map)
 }
-
