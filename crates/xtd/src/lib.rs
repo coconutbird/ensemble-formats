@@ -26,7 +26,9 @@ mod writer;
 pub use writer::XtdWriter;
 
 mod decode;
-pub use decode::{unpack_normal, unpack_position, AtlasHeader, TerrainVertices};
+pub use decode::{
+    unpack_normal, unpack_position, AtlasHeader, RawTerrainData, TerrainVertices, TessellatedMesh,
+};
 
 // ============================================================================
 // XTD Constants
@@ -66,8 +68,9 @@ pub const CHUNK_ALPHA: u64 = 0xDDDD;
 mod tests {
     use super::*;
 
-    // Test files are in the extracted --filter directory (relative to workspace root)
-    const TEST_XTD_PATH: &str = "../../--filter/scenario/skirmish/design/release/release.xtd";
+    // Test files are in the extracted test_extract directory (relative to workspace root)
+    const TEST_XTD_PATH: &str =
+        "../../test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtd";
 
     #[test]
     #[ignore = "requires extracted XTD file"]
@@ -171,7 +174,10 @@ mod tests {
         println!("Atlas Header:");
         println!("  Mid: {:?}", vertices.header.mid);
         println!("  Range: {:?}", vertices.header.range);
-        println!("\nTerrain grid: {}x{}", vertices.num_verts_per_axis, vertices.num_verts_per_axis);
+        println!(
+            "\nTerrain grid: {}x{}",
+            vertices.num_verts_per_axis, vertices.num_verts_per_axis
+        );
         println!("Total vertices: {}", vertices.positions.len());
         println!("Total normals: {}", vertices.normals.len());
 
@@ -186,7 +192,11 @@ mod tests {
 
         // Generate indices
         let indices = vertices.generate_indices();
-        println!("\nGenerated {} indices ({} triangles)", indices.len(), indices.len() / 3);
+        println!(
+            "\nGenerated {} indices ({} triangles)",
+            indices.len(),
+            indices.len() / 3
+        );
 
         // Sanity checks
         assert_eq!(vertices.positions.len(), vertices.normals.len());
@@ -204,6 +214,109 @@ mod tests {
                 i,
                 norm,
                 len
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires extracted XTD file"]
+    fn test_decode_tessellation() {
+        let data = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
+        let file = XtdReader::read(&data).expect("Failed to parse XTD");
+
+        println!("Raw tess_data size: {} bytes", file.tess_data.len());
+
+        let tess = file
+            .decode_tessellation()
+            .expect("Failed to decode tessellation");
+
+        println!("\nTessellation Data:");
+        println!("  NumXPatches: {}", tess.num_x_patches);
+        println!("  NumZPatches: {}", tess.num_z_patches);
+        println!("  Total patches: {}", tess.num_patches());
+        println!("  MaxTessLevel: {}", tess.max_tess_level);
+        println!(
+            "  Patch tess levels: {} entries",
+            tess.patch_tess_levels.len()
+        );
+        println!(
+            "  Patch bounding boxes: {} entries",
+            tess.patch_bounding_boxes.len()
+        );
+
+        // Print tessellation level distribution
+        let mut level_counts = std::collections::HashMap::new();
+        for &level in &tess.patch_tess_levels {
+            *level_counts.entry(level).or_insert(0) += 1;
+        }
+        println!("\n  Tess level distribution:");
+        let mut sorted_levels: Vec<_> = level_counts.into_iter().collect();
+        sorted_levels.sort_by_key(|(level, _)| *level);
+        for (level, count) in sorted_levels {
+            println!("    Level {}: {} patches", level, count);
+        }
+
+        // Print a few bounding boxes
+        println!("\n  First 5 patch bounding boxes:");
+        for i in 0..5.min(tess.patch_bounding_boxes.len()) {
+            let bbox = &tess.patch_bounding_boxes[i];
+            println!("    [{:3}] min={:?}, max={:?}", i, bbox.min, bbox.max);
+        }
+
+        // Sanity checks
+        assert_eq!(tess.patch_tess_levels.len(), tess.num_patches());
+        assert_eq!(tess.patch_bounding_boxes.len(), tess.num_patches());
+        assert!(tess.max_tess_level > 0, "Max tess level should be > 0");
+    }
+
+    #[test]
+    #[ignore = "requires extracted XTD file"]
+    fn test_cpu_tessellation() {
+        let data = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
+        let file = XtdReader::read(&data).expect("Failed to parse XTD");
+
+        let vertices = file.decode_vertices().expect("Failed to decode vertices");
+        let tess = file
+            .decode_tessellation()
+            .expect("Failed to decode tessellation");
+
+        println!("Original mesh:");
+        println!("  Vertices: {}", vertices.positions.len());
+        let original_indices = vertices.generate_indices();
+        println!("  Triangles: {}", original_indices.len() / 3);
+
+        // Generate tessellated mesh
+        let tessellated = vertices.tessellate(&tess);
+
+        println!("\nTessellated mesh:");
+        println!("  Vertices: {}", tessellated.positions.len());
+        println!("  Triangles: {}", tessellated.indices.len() / 3);
+        println!(
+            "  Vertex increase: {:.1}x",
+            tessellated.positions.len() as f32 / vertices.positions.len() as f32
+        );
+        println!(
+            "  Triangle increase: {:.1}x",
+            tessellated.indices.len() as f32 / original_indices.len() as f32
+        );
+
+        // Verify tessellated mesh is valid
+        assert!(
+            tessellated.positions.len() >= vertices.positions.len(),
+            "Tessellated mesh should have at least as many vertices"
+        );
+        assert!(
+            tessellated.indices.len() >= original_indices.len(),
+            "Tessellated mesh should have at least as many indices"
+        );
+
+        // Check all indices are valid
+        for &idx in &tessellated.indices {
+            assert!(
+                (idx as usize) < tessellated.positions.len(),
+                "Invalid index {} (max {})",
+                idx,
+                tessellated.positions.len()
             );
         }
     }

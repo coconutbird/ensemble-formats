@@ -1,14 +1,15 @@
 //! Test XTD vertex decoding with a real file.
 
+use byteorder::{BigEndian, ByteOrder};
 use std::env;
 use xtd::XtdReader;
-use byteorder::{BigEndian, ByteOrder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    let path = args.get(1).map(|s| s.as_str()).unwrap_or(
-        "test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtd",
-    );
+    let path = args
+        .get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtd");
 
     println!("Loading XTD file: {}", path);
     let data = std::fs::read(path)?;
@@ -53,7 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let x = (packed_be >> 22) & 0x3FF;
             let y = (packed_be >> 11) & 0x3FF;
             let z = packed_be & 0x3FF;
-            println!("    [{}] 0x{:08x} -> X={:4} Y={:4} Z={:4}", i, packed_be, x, y, z);
+            println!(
+                "    [{}] 0x{:08x} -> X={:4} Y={:4} Z={:4}",
+                i, packed_be, x, y, z
+            );
         }
     }
 
@@ -65,7 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if offset1 + 4 <= atlas_data.len() {
             let p0 = BigEndian::read_u32(&atlas_data[offset0..offset0 + 4]);
             let p1 = BigEndian::read_u32(&atlas_data[offset1..offset1 + 4]);
-            println!("    Row 0 col {}: 0x{:08x}   Row 1 col {}: 0x{:08x}", i, p0, i, p1);
+            println!(
+                "    Row 0 col {}: 0x{:08x}   Row 1 col {}: 0x{:08x}",
+                i, p0, i, p1
+            );
         }
     }
     println!(
@@ -111,8 +118,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     println!("\n  Position bounds:");
-    println!("    Min: ({:.2}, {:.2}, {:.2})", min_pos[0], min_pos[1], min_pos[2]);
-    println!("    Max: ({:.2}, {:.2}, {:.2})", max_pos[0], max_pos[1], max_pos[2]);
+    println!(
+        "    Min: ({:.2}, {:.2}, {:.2})",
+        min_pos[0], min_pos[1], min_pos[2]
+    );
+    println!(
+        "    Max: ({:.2}, {:.2}, {:.2})",
+        max_pos[0], max_pos[1], max_pos[2]
+    );
 
     // Generate indices
     let indices = vertices.generate_indices();
@@ -156,4 +169,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

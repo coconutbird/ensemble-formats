@@ -186,23 +186,105 @@ pub struct TerrainVertices {
     pub num_verts_per_axis: usize,
 }
 
+/// Raw packed terrain data for GPU tessellation.
+///
+/// Contains the packed position/normal data that can be uploaded as textures
+/// and decoded in the vertex shader for GPU-based tessellation.
+#[derive(Debug, Clone)]
+pub struct RawTerrainData {
+    /// Packed position data (R10G10B10A2 format, one u32 per vertex).
+    pub packed_positions: Vec<u32>,
+    /// Packed normal data (one u32 per vertex).
+    pub packed_normals: Vec<u32>,
+    /// Number of vertices per axis (e.g., 1025 for 1024x1024 terrain).
+    pub num_verts_per_axis: u32,
+    /// Atlas mid point for position decoding.
+    pub mid: [f32; 3],
+    /// Atlas range for position decoding.
+    pub range: [f32; 3],
+    /// Tile scale for world position calculation.
+    pub tile_scale: f32,
+    /// World min bounds.
+    pub world_min: [f32; 3],
+    /// World max bounds.
+    pub world_max: [f32; 3],
+}
+
 impl XtdFile {
+    /// Extract raw packed terrain data for GPU tessellation.
+    ///
+    /// This returns the packed position/normal data that can be uploaded
+    /// as GPU textures and decoded in the vertex shader.
+    pub fn extract_raw_data(&self) -> Result<RawTerrainData> {
+        if self.atlas_data.is_empty() {
+            return Err(Error::InvalidChunkData("Atlas chunk is empty".to_string()));
+        }
+
+        let header = AtlasHeader::from_bytes(&self.atlas_data)?;
+        let width = self.header.num_x_verts as usize;
+        let num_verts = width * width;
+
+        // Expected size: header + positions + normals
+        let expected_size = AtlasHeader::SIZE + num_verts * 4 + num_verts * 4;
+        if self.atlas_data.len() < expected_size {
+            return Err(Error::InvalidChunkData(format!(
+                "Atlas data too small: {} < {} (expected {} verts)",
+                self.atlas_data.len(),
+                expected_size,
+                num_verts
+            )));
+        }
+
+        let pos_start = AtlasHeader::SIZE;
+        let norm_start = pos_start + num_verts * 4;
+
+        let mut packed_positions = Vec::with_capacity(num_verts);
+        let mut packed_normals = Vec::with_capacity(num_verts);
+
+        for i in 0..num_verts {
+            let pos_offset = pos_start + i * 4;
+            packed_positions.push(LittleEndian::read_u32(
+                &self.atlas_data[pos_offset..pos_offset + 4],
+            ));
+
+            let norm_offset = norm_start + i * 4;
+            packed_normals.push(LittleEndian::read_u32(
+                &self.atlas_data[norm_offset..norm_offset + 4],
+            ));
+        }
+
+        Ok(RawTerrainData {
+            packed_positions,
+            packed_normals,
+            num_verts_per_axis: width as u32,
+            mid: header.mid,
+            range: header.range,
+            tile_scale: self.header.tile_scale,
+            world_min: self.header.world_min,
+            world_max: self.header.world_max,
+        })
+    }
+
     /// Decode terrain vertices from the atlas chunk.
     ///
     /// Returns positions and normals as Vec<[f32; 3]>.
     pub fn decode_vertices(&self) -> Result<TerrainVertices> {
         if self.atlas_data.is_empty() {
-            return Err(Error::InvalidChunkData(
-                "Atlas chunk is empty".to_string(),
-            ));
+            return Err(Error::InvalidChunkData("Atlas chunk is empty".to_string()));
         }
 
         let header = AtlasHeader::from_bytes(&self.atlas_data)?;
 
         // Debug: print header values
         eprintln!("Atlas Header:");
-        eprintln!("  mid:   [{:.2}, {:.2}, {:.2}]", header.mid[0], header.mid[1], header.mid[2]);
-        eprintln!("  range: [{:.2}, {:.2}, {:.2}]", header.range[0], header.range[1], header.range[2]);
+        eprintln!(
+            "  mid:   [{:.2}, {:.2}, {:.2}]",
+            header.mid[0], header.mid[1], header.mid[2]
+        );
+        eprintln!(
+            "  range: [{:.2}, {:.2}, {:.2}]",
+            header.range[0], header.range[1], header.range[2]
+        );
 
         let width = self.header.num_x_verts as usize;
         let num_verts = width * width;
@@ -227,10 +309,14 @@ impl XtdFile {
 
         for i in 0..num_verts {
             let pos_offset = pos_start + i * 4;
-            packed_positions.push(LittleEndian::read_u32(&self.atlas_data[pos_offset..pos_offset + 4]));
+            packed_positions.push(LittleEndian::read_u32(
+                &self.atlas_data[pos_offset..pos_offset + 4],
+            ));
 
             let norm_offset = norm_start + i * 4;
-            packed_normals.push(LittleEndian::read_u32(&self.atlas_data[norm_offset..norm_offset + 4]));
+            packed_normals.push(LittleEndian::read_u32(
+                &self.atlas_data[norm_offset..norm_offset + 4],
+            ));
         }
 
         // Unpack positions, normals, and compute UVs
@@ -268,7 +354,10 @@ impl XtdFile {
                 eprintln!("  [{}] packed=0x{:08X}", i, packed);
                 eprintln!("       PC:   x={}, y={}, z={}", pc_x, pc_y, pc_z);
                 eprintln!("       Xbox: x={}, y={}, z={}", xbox_x, xbox_y, xbox_z);
-                eprintln!("       unpacked: [{:.2}, {:.2}, {:.2}]", unpacked[0], unpacked[1], unpacked[2]);
+                eprintln!(
+                    "       unpacked: [{:.2}, {:.2}, {:.2}]",
+                    unpacked[0], unpacked[1], unpacked[2]
+                );
             }
 
             // Use grid position for X/Z base, unpacked Y for height
@@ -339,5 +428,263 @@ impl TerrainVertices {
     pub fn world_size(&self) -> [f32; 3] {
         self.header.range
     }
+
+    /// Generate tessellated terrain mesh with CPU subdivision.
+    ///
+    /// This subdivides patches based on their tessellation levels to produce
+    /// a higher-resolution mesh similar to what the retail game achieves with
+    /// GPU tessellation shaders.
+    ///
+    /// Returns new positions, normals, uvs, and indices for the tessellated mesh.
+    pub fn tessellate(&self, tess_data: &crate::TessellationData) -> TessellatedMesh {
+        use std::collections::HashMap;
+
+        let n = self.num_verts_per_axis;
+
+        // Calculate vertices per patch (terrain is n x n, patches are num_x_patches x num_z_patches)
+        // So each patch spans (n-1)/num_patches + 1 vertices
+        let verts_per_patch_x = (n - 1) / tess_data.num_x_patches as usize + 1;
+        let verts_per_patch_z = (n - 1) / tess_data.num_z_patches as usize + 1;
+
+        // For efficient lookups, index existing vertices
+        // Key: grid (x, z) position, Value: index in positions array
+        let mut vertex_map: HashMap<(usize, usize), usize> = HashMap::new();
+        for z in 0..n {
+            for x in 0..n {
+                vertex_map.insert((x, z), z * n + x);
+            }
+        }
+
+        // Output buffers - start with copies of existing data
+        let mut positions = self.positions.clone();
+        let mut normals = self.normals.clone();
+        let mut uvs = self.uvs.clone();
+        let mut indices = Vec::new();
+
+        // Track newly created vertices with fractional grid positions
+        // Key: (x * 10000 + frac_x, z * 10000 + frac_z), Value: index
+        let mut new_vertex_map: HashMap<(u64, u64), usize> = HashMap::new();
+
+        // Helper to encode fractional position as u64
+        let encode_pos =
+            |x: f32, z: f32| -> (u64, u64) { ((x * 10000.0) as u64, (z * 10000.0) as u64) };
+
+        // Helper to get or create interpolated vertex
+        let get_or_create_vertex = |positions: &mut Vec<[f32; 3]>,
+                                    normals: &mut Vec<[f32; 3]>,
+                                    uvs: &mut Vec<[f32; 2]>,
+                                    new_vertex_map: &mut HashMap<(u64, u64), usize>,
+                                    vertex_map: &HashMap<(usize, usize), usize>,
+                                    x: f32,
+                                    z: f32,
+                                    n: usize|
+         -> usize {
+            // Check if this is an existing integer vertex
+            let ix = x as usize;
+            let iz = z as usize;
+            let frac_x = x - ix as f32;
+            let frac_z = z - iz as f32;
+
+            if frac_x.abs() < 0.001 && frac_z.abs() < 0.001 && ix < n && iz < n {
+                // Exact grid vertex
+                return *vertex_map.get(&(ix, iz)).unwrap();
+            }
+
+            // Check if we've already created this vertex
+            let key = encode_pos(x, z);
+            if let Some(&idx) = new_vertex_map.get(&key) {
+                return idx;
+            }
+
+            // Bilinear interpolation
+            let x0 = ix.min(n - 2);
+            let z0 = iz.min(n - 2);
+            let x1 = (x0 + 1).min(n - 1);
+            let z1 = (z0 + 1).min(n - 1);
+
+            let fx = x - x0 as f32;
+            let fz = z - z0 as f32;
+
+            let i00 = *vertex_map.get(&(x0, z0)).unwrap();
+            let i10 = *vertex_map.get(&(x1, z0)).unwrap();
+            let i01 = *vertex_map.get(&(x0, z1)).unwrap();
+            let i11 = *vertex_map.get(&(x1, z1)).unwrap();
+
+            // Interpolate position
+            let p00 = positions[i00];
+            let p10 = positions[i10];
+            let p01 = positions[i01];
+            let p11 = positions[i11];
+
+            let pos = [
+                (1.0 - fx) * (1.0 - fz) * p00[0]
+                    + fx * (1.0 - fz) * p10[0]
+                    + (1.0 - fx) * fz * p01[0]
+                    + fx * fz * p11[0],
+                (1.0 - fx) * (1.0 - fz) * p00[1]
+                    + fx * (1.0 - fz) * p10[1]
+                    + (1.0 - fx) * fz * p01[1]
+                    + fx * fz * p11[1],
+                (1.0 - fx) * (1.0 - fz) * p00[2]
+                    + fx * (1.0 - fz) * p10[2]
+                    + (1.0 - fx) * fz * p01[2]
+                    + fx * fz * p11[2],
+            ];
+
+            // Interpolate and renormalize normal
+            let n00 = normals[i00];
+            let n10 = normals[i10];
+            let n01 = normals[i01];
+            let n11 = normals[i11];
+
+            let mut norm = [
+                (1.0 - fx) * (1.0 - fz) * n00[0]
+                    + fx * (1.0 - fz) * n10[0]
+                    + (1.0 - fx) * fz * n01[0]
+                    + fx * fz * n11[0],
+                (1.0 - fx) * (1.0 - fz) * n00[1]
+                    + fx * (1.0 - fz) * n10[1]
+                    + (1.0 - fx) * fz * n01[1]
+                    + fx * fz * n11[1],
+                (1.0 - fx) * (1.0 - fz) * n00[2]
+                    + fx * (1.0 - fz) * n10[2]
+                    + (1.0 - fx) * fz * n01[2]
+                    + fx * fz * n11[2],
+            ];
+            let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();
+            if len > 0.001 {
+                norm[0] /= len;
+                norm[1] /= len;
+                norm[2] /= len;
+            }
+
+            // Interpolate UV
+            let uv00 = uvs[i00];
+            let uv10 = uvs[i10];
+            let uv01 = uvs[i01];
+            let uv11 = uvs[i11];
+
+            let uv = [
+                (1.0 - fx) * (1.0 - fz) * uv00[0]
+                    + fx * (1.0 - fz) * uv10[0]
+                    + (1.0 - fx) * fz * uv01[0]
+                    + fx * fz * uv11[0],
+                (1.0 - fx) * (1.0 - fz) * uv00[1]
+                    + fx * (1.0 - fz) * uv10[1]
+                    + (1.0 - fx) * fz * uv01[1]
+                    + fx * fz * uv11[1],
+            ];
+
+            let idx = positions.len();
+            positions.push(pos);
+            normals.push(norm);
+            uvs.push(uv);
+            new_vertex_map.insert(key, idx);
+            idx
+        };
+
+        // Process each patch
+        for patch_z in 0..tess_data.num_z_patches as usize {
+            for patch_x in 0..tess_data.num_x_patches as usize {
+                let patch_idx = patch_z * tess_data.num_x_patches as usize + patch_x;
+                let tess_level = tess_data.patch_tess_levels[patch_idx];
+
+                // Vertex range for this patch
+                let base_x = patch_x * (verts_per_patch_x - 1);
+                let base_z = patch_z * (verts_per_patch_z - 1);
+                let end_x = (base_x + verts_per_patch_x - 1).min(n - 1);
+                let end_z = (base_z + verts_per_patch_z - 1).min(n - 1);
+
+                // Subdivision factor: 2^tess_level
+                let subdiv = 1 << tess_level;
+
+                // Generate triangles for this patch with subdivision
+                for cell_z in base_z..end_z {
+                    for cell_x in base_x..end_x {
+                        // Subdivide this quad
+                        let step = 1.0 / subdiv as f32;
+
+                        for sub_z in 0..subdiv {
+                            for sub_x in 0..subdiv {
+                                let x0 = cell_x as f32 + sub_x as f32 * step;
+                                let z0 = cell_z as f32 + sub_z as f32 * step;
+                                let x1 = x0 + step;
+                                let z1 = z0 + step;
+
+                                let v00 = get_or_create_vertex(
+                                    &mut positions,
+                                    &mut normals,
+                                    &mut uvs,
+                                    &mut new_vertex_map,
+                                    &vertex_map,
+                                    x0,
+                                    z0,
+                                    n,
+                                );
+                                let v10 = get_or_create_vertex(
+                                    &mut positions,
+                                    &mut normals,
+                                    &mut uvs,
+                                    &mut new_vertex_map,
+                                    &vertex_map,
+                                    x1,
+                                    z0,
+                                    n,
+                                );
+                                let v01 = get_or_create_vertex(
+                                    &mut positions,
+                                    &mut normals,
+                                    &mut uvs,
+                                    &mut new_vertex_map,
+                                    &vertex_map,
+                                    x0,
+                                    z1,
+                                    n,
+                                );
+                                let v11 = get_or_create_vertex(
+                                    &mut positions,
+                                    &mut normals,
+                                    &mut uvs,
+                                    &mut new_vertex_map,
+                                    &vertex_map,
+                                    x1,
+                                    z1,
+                                    n,
+                                );
+
+                                // Two triangles per sub-quad
+                                indices.push(v00 as u32);
+                                indices.push(v01 as u32);
+                                indices.push(v10 as u32);
+
+                                indices.push(v10 as u32);
+                                indices.push(v01 as u32);
+                                indices.push(v11 as u32);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        TessellatedMesh {
+            positions,
+            normals,
+            uvs,
+            indices,
+        }
+    }
 }
 
+/// Result of CPU tessellation.
+#[derive(Debug, Clone)]
+pub struct TessellatedMesh {
+    /// Vertex positions (original + interpolated).
+    pub positions: Vec<[f32; 3]>,
+    /// Vertex normals (original + interpolated).
+    pub normals: Vec<[f32; 3]>,
+    /// Texture coordinates (original + interpolated).
+    pub uvs: Vec<[f32; 2]>,
+    /// Triangle indices.
+    pub indices: Vec<u32>,
+}

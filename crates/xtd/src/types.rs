@@ -1,5 +1,66 @@
 //! XTD data types.
 
+/// Tessellation data for terrain patches.
+///
+/// From the binary analysis:
+/// - Each patch has a max tessellation level (1 byte)
+/// - Each patch has a bounding box (32 bytes = 2x XMFLOAT4 for min/max)
+#[derive(Debug, Clone, Default)]
+pub struct TessellationData {
+    /// Number of patches along X axis.
+    pub num_x_patches: i32,
+    /// Number of patches along Z axis.
+    pub num_z_patches: i32,
+    /// Maximum tessellation level (computed from all patches).
+    pub max_tess_level: u8,
+    /// Per-patch maximum tessellation levels (num_x_patches * num_z_patches).
+    pub patch_tess_levels: Vec<u8>,
+    /// Per-patch bounding boxes (min/max as [f32; 4] each).
+    pub patch_bounding_boxes: Vec<PatchBoundingBox>,
+}
+
+impl TessellationData {
+    /// Get the total number of patches.
+    pub fn num_patches(&self) -> usize {
+        (self.num_x_patches * self.num_z_patches) as usize
+    }
+
+    /// Get the tessellation level for a specific patch.
+    pub fn get_patch_tess_level(&self, x: i32, z: i32) -> Option<u8> {
+        if x < 0 || x >= self.num_x_patches || z < 0 || z >= self.num_z_patches {
+            return None;
+        }
+        let index = (z * self.num_x_patches + x) as usize;
+        self.patch_tess_levels.get(index).copied()
+    }
+
+    /// Get the bounding box for a specific patch.
+    pub fn get_patch_bbox(&self, x: i32, z: i32) -> Option<&PatchBoundingBox> {
+        if x < 0 || x >= self.num_x_patches || z < 0 || z >= self.num_z_patches {
+            return None;
+        }
+        let index = (z * self.num_x_patches + x) as usize;
+        self.patch_bounding_boxes.get(index)
+    }
+}
+
+/// Bounding box for a tessellation patch.
+///
+/// 32 bytes total: min (16 bytes) + max (16 bytes)
+/// Each is an XMFLOAT4 (x, y, z, w where w is typically 1.0)
+#[derive(Debug, Clone, Default)]
+pub struct PatchBoundingBox {
+    /// Minimum corner of the bounding box (x, y, z, w).
+    pub min: [f32; 4],
+    /// Maximum corner of the bounding box (x, y, z, w).
+    pub max: [f32; 4],
+}
+
+impl PatchBoundingBox {
+    /// Size of a patch bounding box in bytes.
+    pub const SIZE: usize = 32;
+}
+
 /// XTD file header.
 ///
 /// From TerrainIO.h:
@@ -120,5 +181,65 @@ impl Default for XtdFile {
             ao_data: Vec::new(),
             alpha_data: Vec::new(),
         }
+    }
+}
+
+impl XtdFile {
+    /// Decode tessellation data from the raw tess_data chunk.
+    ///
+    /// Returns None if there is no tessellation data.
+    pub fn decode_tessellation(&self) -> Option<TessellationData> {
+        use byteorder::{BigEndian, ReadBytesExt};
+        use std::io::Cursor;
+
+        if self.tess_data.is_empty() {
+            return None;
+        }
+
+        let mut cursor = Cursor::new(&self.tess_data);
+
+        // Read patch counts
+        let num_x_patches = cursor.read_i32::<BigEndian>().ok()?;
+        let num_z_patches = cursor.read_i32::<BigEndian>().ok()?;
+
+        let num_patches = (num_x_patches * num_z_patches) as usize;
+        if num_patches == 0 {
+            return None;
+        }
+
+        // Read per-patch tessellation levels (1 byte each)
+        let mut patch_tess_levels = vec![0u8; num_patches];
+        std::io::Read::read_exact(&mut cursor, &mut patch_tess_levels).ok()?;
+
+        // Calculate max tessellation level
+        let max_tess_level = *patch_tess_levels.iter().max().unwrap_or(&0);
+
+        // Read per-patch bounding boxes (32 bytes each)
+        let mut patch_bounding_boxes = Vec::with_capacity(num_patches);
+        for _ in 0..num_patches {
+            let bbox = PatchBoundingBox {
+                min: [
+                    cursor.read_f32::<BigEndian>().ok()?,
+                    cursor.read_f32::<BigEndian>().ok()?,
+                    cursor.read_f32::<BigEndian>().ok()?,
+                    cursor.read_f32::<BigEndian>().ok()?,
+                ],
+                max: [
+                    cursor.read_f32::<BigEndian>().ok()?,
+                    cursor.read_f32::<BigEndian>().ok()?,
+                    cursor.read_f32::<BigEndian>().ok()?,
+                    cursor.read_f32::<BigEndian>().ok()?,
+                ],
+            };
+            patch_bounding_boxes.push(bbox);
+        }
+
+        Some(TessellationData {
+            num_x_patches,
+            num_z_patches,
+            max_tess_level,
+            patch_tess_levels,
+            patch_bounding_boxes,
+        })
     }
 }
