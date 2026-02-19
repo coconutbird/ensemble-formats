@@ -243,20 +243,32 @@ impl XtdFile {
         let width_f = (width - 1) as f32;
 
         for i in 0..num_verts {
-            // The terrain data is stored transposed relative to the texture.
-            // We swap row/column mapping and flip X to mirror left-right.
-            let grid_x = ((width - 1) - (i % width)) as f32;
-            let grid_z = ((width - 1) - (i / width)) as f32;
+            // Standard grid mapping: row-major order
+            // i % width = column = X position
+            // i / width = row = Z position
+            let grid_x = (i % width) as f32;
+            let grid_z = (i / width) as f32;
 
             // The packed data contains position data that needs to be combined with grid position.
             // X/Z: grid position provides the base, packed data adds displacement
             // Y: comes entirely from the packed data (height)
             let unpacked = unpack_position(packed_positions[i], &header.mid, &header.range);
 
-            // Debug: print first few positions
+            // Debug: print first few positions with raw packed values
             if i < 5 || i == num_verts / 2 {
-                eprintln!("  unpacked[{}]: [{:.2}, {:.2}, {:.2}]", i, unpacked[0], unpacked[1], unpacked[2]);
-                eprintln!("    grid: x={:.2}, z={:.2}, scale={:.2}", grid_x, grid_z, tile_scale);
+                let packed = packed_positions[i];
+                // PC layout
+                let pc_x = packed & 0x3FF;
+                let pc_y = (packed >> 10) & 0x3FF;
+                let pc_z = (packed >> 20) & 0x3FF;
+                // Xbox 360 layout
+                let xbox_x = (packed >> 22) & 0x3FF;
+                let xbox_y = (packed >> 11) & 0x3FF;
+                let xbox_z = packed & 0x3FF;
+                eprintln!("  [{}] packed=0x{:08X}", i, packed);
+                eprintln!("       PC:   x={}, y={}, z={}", pc_x, pc_y, pc_z);
+                eprintln!("       Xbox: x={}, y={}, z={}", xbox_x, xbox_y, xbox_z);
+                eprintln!("       unpacked: [{:.2}, {:.2}, {:.2}]", unpacked[0], unpacked[1], unpacked[2]);
             }
 
             // Use grid position for X/Z base, unpacked Y for height
