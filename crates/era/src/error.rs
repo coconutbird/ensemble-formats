@@ -27,4 +27,8 @@ pub enum Error {
     /// Decompression error
     #[error("decompression error: {0}")]
     DecompressionError(String),
+
+    /// Operation was cancelled by the progress callback
+    #[error("operation cancelled")]
+    Cancelled,
 }

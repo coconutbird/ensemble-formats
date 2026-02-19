@@ -109,7 +109,42 @@ impl EraWriter {
     }
 
     /// Write the archive to a writer (should be an EncryptWriter for proper encryption)
-    pub fn write<W: Write + Seek>(&self, mut writer: W) -> Result<()> {
+    pub fn write<W: Write + Seek>(&self, writer: W) -> Result<()> {
+        self.write_with_progress(writer, None)
+    }
+
+    /// Write the archive to a writer with optional progress callback
+    ///
+    /// The progress callback receives `(bytes_written, total_bytes)` and should return
+    /// `true` to continue or `false` to cancel the operation.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use era::{EraWriter, EncryptWriter, TeaKeys};
+    /// use std::fs::OpenOptions;
+    ///
+    /// let writer = EraWriter::new();
+    /// let file = OpenOptions::new()
+    ///     .read(true)
+    ///     .write(true)
+    ///     .create(true)
+    ///     .truncate(true)
+    ///     .open("output.era")
+    ///     .unwrap();
+    /// let keys = TeaKeys::default_archive_keys();
+    /// let encrypt_writer = EncryptWriter::new(file, keys);
+    ///
+    /// writer.write_with_progress(encrypt_writer, Some(&mut |written, total| {
+    ///     println!("Progress: {}/{} bytes ({:.1}%)", written, total, (written as f64 / total as f64) * 100.0);
+    ///     true // return false to cancel
+    /// })).unwrap();
+    /// ```
+    pub fn write_with_progress<W: Write + Seek>(
+        &self,
+        mut writer: W,
+        mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
+    ) -> Result<()> {
         // Build filename table (includes both regular and precompressed files)
         let mut filename_table = Vec::new();
         let mut name_offsets = Vec::new();
@@ -209,13 +244,14 @@ impl EraWriter {
             write_chunk_header(&mut writer, chunk)?;
         }
 
-        // Write chunk data with padding
+        // Write chunk data with padding and progress reporting
         write_chunk_data_all(
             &mut writer,
             &chunks,
             &compressed_names,
             &compressed_files,
             &self.precompressed,
+            &mut progress,
         )?;
 
         writer.flush()?;
@@ -344,19 +380,50 @@ fn write_chunk_data_all<W: Write + Seek>(
     filename_table: &CompressedData,
     compressed_files: &[CompressedData],
     precompressed_files: &[PreCompressedFile],
+    progress: &mut Option<&mut dyn FnMut(u64, u64) -> bool>,
 ) -> Result<()> {
+    // Calculate total bytes to write for progress reporting
+    let total_bytes: u64 = filename_table.data.len() as u64
+        + compressed_files
+            .iter()
+            .map(|f| f.data.len() as u64)
+            .sum::<u64>()
+        + precompressed_files
+            .iter()
+            .map(|f| f.compressed_data.len() as u64)
+            .sum::<u64>();
+    let mut bytes_written: u64 = 0;
+
     // Write filename table (first chunk)
     write_padded(writer, chunks[0].offset as usize, &filename_table.data)?;
+    bytes_written += filename_table.data.len() as u64;
+    if let Some(ref mut cb) = progress {
+        if !cb(bytes_written, total_bytes) {
+            return Err(crate::error::Error::Cancelled);
+        }
+    }
 
     // Write regular compressed file data
     let regular_count = compressed_files.len();
     for (chunk, file) in chunks[1..=regular_count].iter().zip(compressed_files) {
         write_padded(writer, chunk.offset as usize, &file.data)?;
+        bytes_written += file.data.len() as u64;
+        if let Some(ref mut cb) = progress {
+            if !cb(bytes_written, total_bytes) {
+                return Err(crate::error::Error::Cancelled);
+            }
+        }
     }
 
     // Write pre-compressed file data
     for (chunk, file) in chunks[regular_count + 1..].iter().zip(precompressed_files) {
         write_padded(writer, chunk.offset as usize, &file.compressed_data)?;
+        bytes_written += file.compressed_data.len() as u64;
+        if let Some(ref mut cb) = progress {
+            if !cb(bytes_written, total_bytes) {
+                return Err(crate::error::Error::Cancelled);
+            }
+        }
     }
 
     Ok(())

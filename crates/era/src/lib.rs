@@ -286,6 +286,76 @@ mod tests {
     }
 
     #[test]
+    fn test_write_with_progress() {
+        let mut writer = EraWriter::new();
+        writer.add_file("test/file1.txt", b"Hello, World!".to_vec());
+        writer.add_file("test/file2.txt", b"Second file content".to_vec());
+        writer.add_file("test/file3.txt", b"Third file with more data here".to_vec());
+
+        let mut buffer = Cursor::new(Vec::new());
+        let keys = TeaKeys::default_archive_keys();
+        let encrypt_writer = EncryptWriter::new(&mut buffer, keys);
+
+        let mut progress_calls = Vec::new();
+        writer
+            .write_with_progress(
+                encrypt_writer,
+                Some(&mut |written, total| {
+                    progress_calls.push((written, total));
+                    true // continue
+                }),
+            )
+            .expect("Failed to write");
+
+        // Should have 4 progress calls (filename table + 3 files)
+        assert_eq!(progress_calls.len(), 4);
+
+        // Verify progress is monotonically increasing
+        for i in 1..progress_calls.len() {
+            assert!(
+                progress_calls[i].0 > progress_calls[i - 1].0,
+                "Progress should increase"
+            );
+        }
+
+        // Last call should have written == total
+        let (last_written, last_total) = progress_calls.last().unwrap();
+        assert_eq!(last_written, last_total);
+
+        // Verify the archive can be read back
+        let data = buffer.into_inner();
+        let cursor = Cursor::new(data);
+        let decrypt_reader = DecryptReader::new(cursor, keys);
+        let mut archive = EraArchive::new(decrypt_reader).expect("Failed to read");
+        assert_eq!(archive.len(), 4); // filename chunk + 3 files
+        let content = archive.read_entry(1).expect("Failed to read entry");
+        assert_eq!(content, b"Hello, World!");
+    }
+
+    #[test]
+    fn test_write_with_progress_cancellation() {
+        let mut writer = EraWriter::new();
+        writer.add_file("test/file1.txt", b"Hello, World!".to_vec());
+        writer.add_file("test/file2.txt", b"Second file content".to_vec());
+
+        let mut buffer = Cursor::new(Vec::new());
+        let keys = TeaKeys::default_archive_keys();
+        let encrypt_writer = EncryptWriter::new(&mut buffer, keys);
+
+        let mut call_count = 0;
+        let result = writer.write_with_progress(
+            encrypt_writer,
+            Some(&mut |_written, _total| {
+                call_count += 1;
+                call_count < 2 // Cancel after first callback
+            }),
+        );
+
+        // Should return Cancelled error
+        assert!(matches!(result, Err(Error::Cancelled)));
+    }
+
+    #[test]
     #[ignore]
     fn search_era_foxcannon() {
         let archive = EraArchive::open("root.era").expect("Failed to open root.era");

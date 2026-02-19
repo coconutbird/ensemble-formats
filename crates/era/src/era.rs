@@ -401,4 +401,26 @@ impl<R: Read + Seek> EraArchive<R> {
             entry.extra.comp_tiger128,
         ))
     }
+
+    /// Read multiple entries sequentially
+    ///
+    /// Note: For parallel reading, use `MmapEraArchive` which supports
+    /// `read_entries_parallel()` for concurrent decompression.
+    pub fn read_entries(&mut self, indices: &[usize]) -> Result<Vec<Vec<u8>>> {
+        indices.iter().map(|&idx| self.read_entry(idx)).collect()
+    }
+
+    /// Read compressed data for multiple entries sequentially
+    ///
+    /// Note: For parallel reading, use `MmapEraArchive` which supports
+    /// `read_entries_compressed_parallel()` for concurrent access.
+    pub fn read_entries_compressed(
+        &mut self,
+        indices: &[usize],
+    ) -> Result<Vec<(Vec<u8>, u32, [u8; 16])>> {
+        indices
+            .iter()
+            .map(|&idx| self.read_entry_compressed(idx))
+            .collect()
+    }
 }
