@@ -41,8 +41,13 @@ impl DdxTexture {
                         self.data.len()
                     )));
                 }
-                texture2ddecoder::decode_bc1(&self.data[..expected_size], width, height, &mut pixels_u32)
-                    .map_err(|e| Error::DecompressionError(format!("BC1 decode error: {}", e)))?;
+                texture2ddecoder::decode_bc1(
+                    &self.data[..expected_size],
+                    width,
+                    height,
+                    &mut pixels_u32,
+                )
+                .map_err(|e| Error::DecompressionError(format!("BC1 decode error: {}", e)))?;
             }
             DataFormat::Dxt3 => {
                 // DXT3/BC2: 4x4 blocks, 16 bytes per block
@@ -54,8 +59,13 @@ impl DdxTexture {
                         self.data.len()
                     )));
                 }
-                texture2ddecoder::decode_bc2(&self.data[..expected_size], width, height, &mut pixels_u32)
-                    .map_err(|e| Error::DecompressionError(format!("BC2 decode error: {}", e)))?;
+                texture2ddecoder::decode_bc2(
+                    &self.data[..expected_size],
+                    width,
+                    height,
+                    &mut pixels_u32,
+                )
+                .map_err(|e| Error::DecompressionError(format!("BC2 decode error: {}", e)))?;
             }
             DataFormat::Dxt5 | DataFormat::Dxt5N | DataFormat::Dxt5Y | DataFormat::Dxt5H => {
                 // DXT5/BC3: 4x4 blocks, 16 bytes per block
@@ -67,8 +77,13 @@ impl DdxTexture {
                         self.data.len()
                     )));
                 }
-                texture2ddecoder::decode_bc3(&self.data[..expected_size], width, height, &mut pixels_u32)
-                    .map_err(|e| Error::DecompressionError(format!("BC3 decode error: {}", e)))?;
+                texture2ddecoder::decode_bc3(
+                    &self.data[..expected_size],
+                    width,
+                    height,
+                    &mut pixels_u32,
+                )
+                .map_err(|e| Error::DecompressionError(format!("BC3 decode error: {}", e)))?;
             }
             DataFormat::Dxn => {
                 // DXN/BC5: 4x4 blocks, 16 bytes per block (two-channel normal maps)
@@ -80,8 +95,13 @@ impl DdxTexture {
                         self.data.len()
                     )));
                 }
-                texture2ddecoder::decode_bc5(&self.data[..expected_size], width, height, &mut pixels_u32)
-                    .map_err(|e| Error::DecompressionError(format!("BC5 decode error: {}", e)))?;
+                texture2ddecoder::decode_bc5(
+                    &self.data[..expected_size],
+                    width,
+                    height,
+                    &mut pixels_u32,
+                )
+                .map_err(|e| Error::DecompressionError(format!("BC5 decode error: {}", e)))?;
             }
             DataFormat::A8R8G8B8 => {
                 // Raw 32-bit ARGB - just copy (reorder to RGBA)
@@ -146,4 +166,3 @@ impl DdxTexture {
         })
     }
 }
-

@@ -63,10 +63,8 @@ impl MmapEraArchive {
         let archive_header = EraArchiveHeader::read(&mut cursor)?;
 
         // Calculate total header size including chunk headers
-        let chunk_header_size =
-            24 + ecf_header.chunk_extra_data_size as usize; // EcfChunkHeader + extra
-        let total_header_size =
-            header_size + chunk_header_size * ecf_header.num_chunks as usize;
+        let chunk_header_size = 24 + ecf_header.chunk_extra_data_size as usize; // EcfChunkHeader + extra
+        let total_header_size = header_size + chunk_header_size * ecf_header.num_chunks as usize;
 
         // Decrypt full header area
         let full_header_blocks = (total_header_size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE;
@@ -95,9 +93,7 @@ impl MmapEraArchive {
                 extra
             } else {
                 if ecf_header.chunk_extra_data_size > 0 {
-                    cursor.seek(SeekFrom::Current(
-                        ecf_header.chunk_extra_data_size as i64,
-                    ))?;
+                    cursor.seek(SeekFrom::Current(ecf_header.chunk_extra_data_size as i64))?;
                 }
                 EraChunkExtra {
                     date: 0,
@@ -223,10 +219,13 @@ impl MmapEraArchive {
 
     /// Read a single entry (thread-safe due to memory mapping)
     pub fn read_entry(&self, index: usize) -> Result<Vec<u8>> {
-        let entry = self.entries.get(index).ok_or(Error::ChunkIndexOutOfBounds {
-            index,
-            count: self.entries.len(),
-        })?;
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(Error::ChunkIndexOutOfBounds {
+                index,
+                count: self.entries.len(),
+            })?;
 
         let offset = entry.chunk.offset as usize;
         let size = entry.chunk.size as usize;
@@ -247,10 +246,13 @@ impl MmapEraArchive {
 
     /// Read compressed data without decompressing (thread-safe)
     pub fn read_entry_compressed(&self, index: usize) -> Result<(Vec<u8>, u32, [u8; 16])> {
-        let entry = self.entries.get(index).ok_or(Error::ChunkIndexOutOfBounds {
-            index,
-            count: self.entries.len(),
-        })?;
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(Error::ChunkIndexOutOfBounds {
+                index,
+                count: self.entries.len(),
+            })?;
 
         let offset = entry.chunk.offset as usize;
         let size = entry.chunk.size as usize;
@@ -265,7 +267,11 @@ impl MmapEraArchive {
         let data_start = offset - block_start;
         let compressed = data[data_start..data_start + size].to_vec();
 
-        Ok((compressed, entry.extra.decomp_size, entry.extra.comp_tiger128))
+        Ok((
+            compressed,
+            entry.extra.decomp_size,
+            entry.extra.comp_tiger128,
+        ))
     }
 
     /// Read multiple entries in parallel

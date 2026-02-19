@@ -154,4 +154,3 @@ mod tests {
         assert_eq!(pool.available(), 0); // Not returned to pool
     }
 }
-

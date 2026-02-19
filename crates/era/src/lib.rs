@@ -35,8 +35,7 @@ mod writer;
 
 pub use buffer_pool::{BufferPool, PooledBuffer};
 pub use crypto::{
-    tea_decrypt_data_parallel, tea_encrypt_data_parallel, TeaKeys, ARCHIVE_PASSWORD,
-    TEA_BLOCK_SIZE,
+    tea_decrypt_data_parallel, tea_encrypt_data_parallel, TeaKeys, ARCHIVE_PASSWORD, TEA_BLOCK_SIZE,
 };
 pub use decrypt_reader::DecryptReader;
 pub use encrypt_writer::EncryptWriter;
