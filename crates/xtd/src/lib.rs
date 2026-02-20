@@ -27,7 +27,8 @@ pub use writer::XtdWriter;
 
 mod decode;
 pub use decode::{
-    unpack_normal, unpack_position, AtlasHeader, RawTerrainData, TerrainVertices, TessellatedMesh,
+    unpack_normal, unpack_position, AlphaData, AmbientOcclusionData, AtlasHeader, RawTerrainData,
+    TerrainVertices, TessellatedMesh,
 };
 
 // ============================================================================

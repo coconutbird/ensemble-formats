@@ -688,3 +688,182 @@ pub struct TessellatedMesh {
     /// Triangle indices.
     pub indices: Vec<u32>,
 }
+
+/// Decoded ambient occlusion data.
+///
+/// Based on IDA reverse engineering: AO is stored at half resolution
+/// (512×1024 for a 1024×1024 terrain) and sampled with bilinear filtering
+/// in the vertex shader via gVertSampler_ao_Texture.
+#[derive(Debug, Clone)]
+pub struct AmbientOcclusionData {
+    /// AO values per texel (0-255, where 255 = fully lit, 0 = fully occluded).
+    pub values: Vec<u8>,
+    /// Texture width (half the terrain vertex count in X).
+    pub width: usize,
+    /// Texture height (same as terrain vertex count in Z).
+    pub height: usize,
+}
+
+/// Decoded alpha (transparency) data.
+///
+/// Uses the same compression/format as AO data.
+/// Sampled via gVertSampler_alpha_Texture in the vertex shader.
+#[derive(Debug, Clone)]
+pub struct AlphaData {
+    /// Alpha values per texel (0-255, where 255 = fully opaque, 0 = fully transparent).
+    pub values: Vec<u8>,
+    /// Texture width (half the terrain vertex count in X).
+    pub width: usize,
+    /// Texture height (same as terrain vertex count in Z).
+    pub height: usize,
+}
+
+impl XtdFile {
+    /// Decode ambient occlusion data from the AO chunk.
+    ///
+    /// Based on IDA reverse engineering of the game's decompression (sub_1407E3440):
+    /// - Input: 524,288 bytes (8 bytes per block × 65,536 blocks)
+    /// - For each 8-byte input block:
+    ///   - Read 4× 16-bit big-endian values
+    ///   - Byte-swap each to little-endian
+    ///   - Write 8 bytes of swapped data + 8 bytes of 0xFF padding (16 bytes total)
+    /// - Game allocates (8 * chunk_size) >> 2 = 2× input size for output buffer
+    ///
+    /// The actual AO data is the first 8 bytes of each 16-byte decompressed block.
+    /// Total actual data: 65,536 blocks × 8 bytes = 524,288 bytes = 512×1024 R8 texture
+    ///
+    /// The game samples this half-resolution texture with bilinear filtering and
+    /// applies it in the vertex shader via gVertSampler_ao_Texture.
+    ///
+    /// Returns AO values at half resolution (512×1024 for a 1024×1024 terrain).
+    pub fn decode_ao(&self) -> Result<AmbientOcclusionData> {
+        if self.ao_data.is_empty() {
+            return Err(Error::InvalidChunkData("AO chunk is empty".to_string()));
+        }
+
+        let num_verts_per_axis = self.header.num_x_verts as usize;
+
+        // Decompress matching the game's algorithm exactly
+        // Each 8-byte input block produces 8 bytes of actual AO data
+        // (The game also writes 8 bytes of 0xFF padding which we skip)
+        let num_blocks = self.ao_data.len() / 8;
+        let mut decompressed = Vec::with_capacity(num_blocks * 8);
+
+        for block_idx in 0..num_blocks {
+            let in_offset = block_idx * 8;
+
+            // Read 4× 16-bit values and byte-swap each (big-endian to little-endian)
+            for word_idx in 0..4 {
+                let offset = in_offset + word_idx * 2;
+                if offset + 1 < self.ao_data.len() {
+                    // Byte swap: read as [hi, lo], write as [lo, hi]
+                    let hi = self.ao_data[offset];
+                    let lo = self.ao_data[offset + 1];
+                    decompressed.push(lo);
+                    decompressed.push(hi);
+                }
+            }
+            // Skip 0xFF padding - we don't write it
+        }
+
+        // The decompressed data is 8 bytes per block = 524,288 bytes total
+        // This represents a half-resolution texture (512×1024 for 1024×1024 terrain)
+        //
+        // For R8 format with half the vertices in one dimension:
+        // 512 × 1024 = 524,288 texels
+        //
+        // The game uses bilinear sampling to interpolate this to full resolution
+
+        // Calculate half-resolution dimensions
+        let half_width = num_verts_per_axis / 2;
+        let half_height = num_verts_per_axis;
+        let expected_size = half_width * half_height;
+
+        // Take just the low byte of each 16-bit value for R8 format
+        // The decompressed data has pairs of [lo, hi] bytes per 16-bit value
+        // We take every other byte (the more significant byte after swap)
+        let values: Vec<u8> = decompressed
+            .chunks(2)
+            .map(|chunk| {
+                // After byte swap, the first byte is the original low byte
+                // The second byte is the original high byte
+                // For AO data, we want the high byte (more significant)
+                if chunk.len() >= 2 {
+                    chunk[1]
+                } else {
+                    chunk.get(0).copied().unwrap_or(255)
+                }
+            })
+            .take(expected_size)
+            .collect();
+
+        // Pad if necessary
+        let mut values = values;
+        if values.len() < expected_size {
+            values.resize(expected_size, 255);
+        }
+
+        Ok(AmbientOcclusionData {
+            values,
+            width: half_width,
+            height: half_height,
+        })
+    }
+
+    /// Decode alpha (transparency) data from the Alpha chunk.
+    ///
+    /// Uses the same decompression as AO data.
+    /// Returns alpha values at half resolution.
+    pub fn decode_alpha(&self) -> Result<AlphaData> {
+        if self.alpha_data.is_empty() {
+            return Err(Error::InvalidChunkData("Alpha chunk is empty".to_string()));
+        }
+
+        let num_verts_per_axis = self.header.num_x_verts as usize;
+
+        // Same decompression as AO
+        let num_blocks = self.alpha_data.len() / 8;
+        let mut decompressed = Vec::with_capacity(num_blocks * 8);
+
+        for block_idx in 0..num_blocks {
+            let in_offset = block_idx * 8;
+
+            for word_idx in 0..4 {
+                let offset = in_offset + word_idx * 2;
+                if offset + 1 < self.alpha_data.len() {
+                    let hi = self.alpha_data[offset];
+                    let lo = self.alpha_data[offset + 1];
+                    decompressed.push(lo);
+                    decompressed.push(hi);
+                }
+            }
+        }
+
+        let half_width = num_verts_per_axis / 2;
+        let half_height = num_verts_per_axis;
+        let expected_size = half_width * half_height;
+
+        let values: Vec<u8> = decompressed
+            .chunks(2)
+            .map(|chunk| {
+                if chunk.len() >= 2 {
+                    chunk[1]
+                } else {
+                    chunk.get(0).copied().unwrap_or(255)
+                }
+            })
+            .take(expected_size)
+            .collect();
+
+        let mut values = values;
+        if values.len() < expected_size {
+            values.resize(expected_size, 255);
+        }
+
+        Ok(AlphaData {
+            values,
+            width: half_width,
+            height: half_height,
+        })
+    }
+}
