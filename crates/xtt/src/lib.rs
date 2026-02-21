@@ -154,3 +154,25 @@ mod tests {
         }
     }
 }
+
+#[test]
+fn check_blood_gulch_layer_ids() {
+    // Path is relative to workspace root (ensemble-rs/)
+    let data =
+        std::fs::read("../../test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtt")
+            .expect("Failed to read XTT file");
+    let file = XttReader::read(&data).expect("Failed to parse XTT");
+
+    println!("\n=== ACTIVE TEXTURES ===");
+    for (i, tex) in file.active_textures.iter().enumerate() {
+        println!("[{}] {}", i, tex.filename);
+    }
+
+    println!("\n=== FIRST 5 LINKER SPLAT_LAYER_IDS ===");
+    for linker in file.linkers.iter().take(5) {
+        println!(
+            "Chunk ({}, {}): {:?}",
+            linker.grid_x, linker.grid_z, linker.splat_layer_ids
+        );
+    }
+}
