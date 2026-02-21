@@ -767,46 +767,30 @@ impl XtdFile {
         }
 
         // The decompressed data is 8 bytes per block = 524,288 bytes total
-        // This represents a half-resolution texture (512×1024 for 1024×1024 terrain)
-        //
-        // For R8 format with half the vertices in one dimension:
-        // 512 × 1024 = 524,288 texels
+        // This represents a half-resolution texture in R8 format:
+        // - Full width (1024) × half height (512) = 524,288 texels
         //
         // The game uses bilinear sampling to interpolate this to full resolution
+        // via gVertSampler_ao_Texture
 
-        // Calculate half-resolution dimensions
-        let half_width = num_verts_per_axis / 2;
-        let half_height = num_verts_per_axis;
-        let expected_size = half_width * half_height;
+        // Calculate dimensions: full width, half height
+        let width = num_verts_per_axis;
+        let height = num_verts_per_axis / 2;
+        let expected_size = width * height;
 
-        // Take just the low byte of each 16-bit value for R8 format
-        // The decompressed data has pairs of [lo, hi] bytes per 16-bit value
-        // We take every other byte (the more significant byte after swap)
-        let values: Vec<u8> = decompressed
-            .chunks(2)
-            .map(|chunk| {
-                // After byte swap, the first byte is the original low byte
-                // The second byte is the original high byte
-                // For AO data, we want the high byte (more significant)
-                if chunk.len() >= 2 {
-                    chunk[1]
-                } else {
-                    chunk.get(0).copied().unwrap_or(255)
-                }
-            })
-            .take(expected_size)
-            .collect();
-
-        // Pad if necessary
-        let mut values = values;
+        // Use the decompressed bytes directly as R8 values
+        // Each byte is one AO texel (0 = fully occluded, 255 = fully lit)
+        let mut values = decompressed;
         if values.len() < expected_size {
             values.resize(expected_size, 255);
+        } else if values.len() > expected_size {
+            values.truncate(expected_size);
         }
 
         Ok(AmbientOcclusionData {
             values,
-            width: half_width,
-            height: half_height,
+            width,
+            height,
         })
     }
 
@@ -839,31 +823,23 @@ impl XtdFile {
             }
         }
 
-        let half_width = num_verts_per_axis / 2;
-        let half_height = num_verts_per_axis;
-        let expected_size = half_width * half_height;
+        // Full width, half height (same as AO)
+        let width = num_verts_per_axis;
+        let height = num_verts_per_axis / 2;
+        let expected_size = width * height;
 
-        let values: Vec<u8> = decompressed
-            .chunks(2)
-            .map(|chunk| {
-                if chunk.len() >= 2 {
-                    chunk[1]
-                } else {
-                    chunk.get(0).copied().unwrap_or(255)
-                }
-            })
-            .take(expected_size)
-            .collect();
-
-        let mut values = values;
+        // Use decompressed bytes directly as R8 values
+        let mut values = decompressed;
         if values.len() < expected_size {
             values.resize(expected_size, 255);
+        } else if values.len() > expected_size {
+            values.truncate(expected_size);
         }
 
         Ok(AlphaData {
             values,
-            width: half_width,
-            height: half_height,
+            width,
+            height,
         })
     }
 }
