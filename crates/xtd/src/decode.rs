@@ -75,6 +75,56 @@ fn morton_index(x: usize, y: usize) -> usize {
     result
 }
 
+/// Xbox 360 tile size for R8 (8-bit) format textures.
+/// R8 uses 8x8 tiles (64 bytes per tile).
+const R8_TILE_SIZE: usize = 8;
+
+/// Un-tile Xbox 360 R8 texture data.
+///
+/// Xbox 360 R8 textures use 8x8 tiles with Morton (Z-order) swizzling within tiles.
+/// This converts tiled data back to linear row-major order.
+fn untile_r8_texture(tiled: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut linear = vec![0u8; width * height];
+
+    let tiles_x = (width + R8_TILE_SIZE - 1) / R8_TILE_SIZE;
+    let tiles_y = (height + R8_TILE_SIZE - 1) / R8_TILE_SIZE;
+
+    for tile_y in 0..tiles_y {
+        for tile_x in 0..tiles_x {
+            // Calculate base offset for this tile in the tiled data
+            let tile_index = tile_y * tiles_x + tile_x;
+            let tile_base = tile_index * R8_TILE_SIZE * R8_TILE_SIZE;
+
+            // Un-tile each pixel within the tile
+            for local_y in 0..R8_TILE_SIZE {
+                for local_x in 0..R8_TILE_SIZE {
+                    // Calculate global position
+                    let global_x = tile_x * R8_TILE_SIZE + local_x;
+                    let global_y = tile_y * R8_TILE_SIZE + local_y;
+
+                    // Skip if outside texture bounds
+                    if global_x >= width || global_y >= height {
+                        continue;
+                    }
+
+                    // Calculate the swizzled index within the tile using Morton code
+                    let swizzled_idx = morton_index(local_x, local_y);
+                    let tiled_idx = tile_base + swizzled_idx;
+
+                    // Calculate linear destination
+                    let linear_idx = global_y * width + global_x;
+
+                    if tiled_idx < tiled.len() && linear_idx < linear.len() {
+                        linear[linear_idx] = tiled[tiled_idx];
+                    }
+                }
+            }
+        }
+    }
+
+    linear
+}
+
 /// Atlas chunk header containing position encoding parameters.
 ///
 /// From ExportXTD.cs:
@@ -778,14 +828,18 @@ impl XtdFile {
         let height = num_verts_per_axis / 2;
         let expected_size = width * height;
 
-        // Use the decompressed bytes directly as R8 values
-        // Each byte is one AO texel (0 = fully occluded, 255 = fully lit)
-        let mut values = decompressed;
-        if values.len() < expected_size {
-            values.resize(expected_size, 255);
-        } else if values.len() > expected_size {
-            values.truncate(expected_size);
+        // Resize to expected size
+        let mut tiled_data = decompressed;
+        if tiled_data.len() < expected_size {
+            tiled_data.resize(expected_size, 255);
+        } else if tiled_data.len() > expected_size {
+            tiled_data.truncate(expected_size);
         }
+
+        // Xbox 360 R8 textures are stored in tiled format
+        // For R8 format, tiles are typically 64 bytes arranged as 8x8 pixels
+        // The data needs to be un-tiled to linear row-major order
+        let values = untile_r8_texture(&tiled_data, width, height);
 
         Ok(AmbientOcclusionData {
             values,
