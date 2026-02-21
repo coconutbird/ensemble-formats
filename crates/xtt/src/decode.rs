@@ -197,49 +197,100 @@ impl XttLinker {
     }
 }
 
+/// Calculate Xbox 360 tiled texture offset for 16bpp texture.
+///
+/// Xbox 360 uses a tiled memory layout. This converts (x, y) to the
+/// u16 index in the tiled source data.
+///
+/// Reverse engineered from untile_xbox360_alpha_texture (0x1407E34E0).
+/// Translated directly from the assembly to ensure correctness.
+fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
+    // Block width calculation: (width + 31) >> 5
+    let block_width = (width + 31) >> 5;
+
+    // Pre-computed values from y (computed once per row in the game)
+    let r10 = (y & 6) << 2; // (y & 6) * 4
+    let r15 = (y & 1) << 3; // (y & 1) * 8
+    let rbx = (y & 8) << 1; // (y & 8) * 2
+    let eax = (y & 0x10) << 4; // (y & 0x10) * 16
+    let r11 = (y >> 5) * block_width;
+    let r12 = (y & 0xF8) << 1; // 2 * (y & 0xF8)
+
+    // Per-pixel calculation (inner loop)
+    let mut r8 = (x & 7) + r10;
+    r8 += r8; // r8 *= 2
+
+    let mut edx = (r11 << 5) + (x & 0xFFFFFFE0);
+
+    let ecx_masked = r8 & 0xFFFFFFF0;
+    r8 &= 0xF;
+
+    let ecx_plus_r15 = ecx_masked + r15;
+    edx = ecx_plus_r15 + (edx << 2); // ecx + edx * 4
+
+    let ecx2 = r8 + (rbx << 3); // r8 + rbx * 8
+    let r9 = ecx2 + (edx << 1); // ecx + edx * 2 = v20
+
+    // Extract bits for v21
+    let edx2 = (r9 & 0xFFFFFE00) + eax;
+    let ecx3 = r9 & 0x1C0;
+    let r9_low = r9 & 0x3F;
+
+    let edx3 = ecx3 + (edx2 << 1); // ecx + edx * 2 = v21
+
+    // Final calculation
+    let v22 = r12 + x; // v19 + x
+    let ecx4 = (v22 << 3) & 0xC0; // (v22 * 8) & 0xC0
+
+    let r8_final = ecx4 + (edx3 << 2) + r9_low; // ecx + edx * 4 + r9
+
+    (r8_final >> 1) as usize // >> 1 to get u16 index
+}
+
 /// Decode a single layer's alpha map from the packed alpha data.
 ///
-/// From ExportXTT.cs writePacked4bitLayers():
-/// The original Xbox 360 export packs layers with shiftOffset = {8, 4, 0, 12}:
-/// - Layer 0 → shift 8 → bits 8-11
-/// - Layer 1 → shift 4 → bits 4-7
-/// - Layer 2 → shift 0 → bits 0-3
-/// - Layer 3 → shift 12 → bits 12-15
+/// The alpha data is stored in Xbox 360 tiled format and needs deswizzling.
+/// Each 16-bit pixel contains 4 layers of 4-bit alpha packed together.
 ///
-/// The intArrayToByteArrayToFile() function writes bytes in big-endian order
-/// for Xbox 360. When we read the file as BigEndian, we get the original
-/// Int16 bit layout back.
+/// IMPORTANT: The Xbox 360 tiled format treats all slices as ONE tall texture.
+/// For a texture with N slices, the total height is 64*N and width is 64.
+/// The tiling algorithm uses GLOBAL y coordinates across all slices.
 ///
-/// Slice layout:
-/// - Slice 0: layers 0-3
-/// - Slice 1: layers 4-7
-/// - etc.
+/// Channel extraction order (from game's untile function at 0x1407E34E0):
+/// - Channel 0: bits 0-3
+/// - Channel 1: bits 12-15
+/// - Channel 2: bits 8-11
+/// - Channel 3: bits 4-7
 fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Result<Vec<u8>> {
-    // layer_idx is 0-based
+    // layer_idx comes in 1-based (layer 1 = first overlay)
+    // Slice/channel calculation: layer 1 → slice 0, channel 1; layer 4 → slice 1, channel 0
     let slice_idx = layer_idx / 4;
     let channel_idx = layer_idx % 4;
 
-    let slice_size = ALPHA_TEXTURE_SIZE * ALPHA_TEXTURE_SIZE * 2; // 8192 bytes per slice
-    let slice_offset = slice_idx * slice_size;
-
     let mut alpha_map = vec![0u8; ALPHA_TEXTURE_SIZE * ALPHA_TEXTURE_SIZE];
-    let mut cursor = Cursor::new(&data[slice_offset..]);
 
     for y in 0..ALPHA_TEXTURE_SIZE {
         for x in 0..ALPHA_TEXTURE_SIZE {
-            // Read 16-bit pixel as BigEndian (matches Xbox 360 export format)
-            // This gives us the original packed Int16 bit layout
-            let pixel = cursor.read_u16::<BigEndian>().map_err(|e| {
-                Error::InvalidChunkData(format!("Failed to read alpha pixel: {}", e))
-            })?;
+            // Use GLOBAL y coordinate - slices are stacked vertically in tiled data
+            let global_y = (slice_idx * ALPHA_TEXTURE_SIZE + y) as u32;
 
-            // Extract 4-bit channel using original shiftOffset = {8, 4, 0, 12}
-            // Layer 0 → bits 8-11, Layer 1 → bits 4-7, Layer 2 → bits 0-3, Layer 3 → bits 12-15
+            // Get tiled offset for this (x, global_y) position
+            let tiled_idx = xbox360_tiled_offset(x as u32, global_y, ALPHA_TEXTURE_SIZE as u32);
+            let byte_offset = tiled_idx * 2;
+
+            if byte_offset + 1 >= data.len() {
+                continue; // Skip if out of bounds
+            }
+
+            // Read as little-endian (native x86 format - game uses movzx word ptr)
+            let pixel = u16::from_le_bytes([data[byte_offset], data[byte_offset + 1]]);
+
+            // Extract using game's channel order: {0, 12, 8, 4} shifts
             let alpha_4bit = match channel_idx {
-                0 => ((pixel >> 8) & 0x0F) as u8,  // Layer 0: bits 8-11
-                1 => ((pixel >> 4) & 0x0F) as u8,  // Layer 1: bits 4-7
-                2 => (pixel & 0x000F) as u8,       // Layer 2: bits 0-3
-                3 => ((pixel >> 12) & 0x0F) as u8, // Layer 3: bits 12-15
+                0 => (pixel & 0x000F) as u8,       // bits 0-3
+                1 => ((pixel >> 12) & 0x0F) as u8, // bits 12-15
+                2 => ((pixel >> 8) & 0x0F) as u8,  // bits 8-11
+                3 => ((pixel >> 4) & 0x0F) as u8,  // bits 4-7
                 _ => unreachable!(),
             };
 
