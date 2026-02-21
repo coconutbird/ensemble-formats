@@ -805,6 +805,30 @@ impl XtdFile {
 
         let num_verts_per_axis = self.header.num_x_verts as usize;
 
+        // Full width, half height (same as AO)
+        let width = num_verts_per_axis;
+        let height = num_verts_per_axis / 2;
+        let expected_size = width * height;
+
+        // Check for "placeholder" alpha pattern: [255, 255, 0, 0, 0, 0, 0, 0] repeating
+        // This indicates no terrain holes - return all-opaque texture
+        // Blood Gulch and other maps without terrain holes use this pattern
+        let is_placeholder = self.alpha_data.len() >= 8 && {
+            let pattern = &[255u8, 255, 0, 0, 0, 0, 0, 0];
+            self.alpha_data
+                .chunks(8)
+                .take(100)
+                .all(|chunk| chunk == pattern)
+        };
+
+        if is_placeholder {
+            return Ok(AlphaData {
+                values: vec![255u8; expected_size],
+                width,
+                height,
+            });
+        }
+
         // Same decompression as AO
         let num_blocks = self.alpha_data.len() / 8;
         let mut decompressed = Vec::with_capacity(num_blocks * 8);
@@ -822,11 +846,6 @@ impl XtdFile {
                 }
             }
         }
-
-        // Full width, half height (same as AO)
-        let width = num_verts_per_axis;
-        let height = num_verts_per_axis / 2;
-        let expected_size = width * height;
 
         // Use decompressed bytes directly as R8 values
         let mut values = decompressed;
