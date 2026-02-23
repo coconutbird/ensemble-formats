@@ -195,6 +195,58 @@ impl XttLinker {
             alpha_maps,
         })
     }
+
+    /// Decode the packed A4R4G4B4 decal alpha data into individual layer alpha maps.
+    ///
+    /// Uses the same format as splat alpha data:
+    /// - 64x64 pixels, 16bpp (A4R4G4B4)
+    /// - 4 alpha channels per pixel
+    /// - Multiple "slices" for chunks with more than 4 decal layers
+    ///
+    /// Returns alpha maps for decal layers (one per decal layer).
+    pub fn decode_decal_alpha(&self) -> Result<DecalAlphaData> {
+        if self.num_decal_layers <= 0 {
+            return Ok(DecalAlphaData {
+                num_layers: 0,
+                alpha_maps: Vec::new(),
+            });
+        }
+
+        let num_layers = self.num_decal_layers as usize;
+        let num_slices = ((num_layers - 1) >> 2) + 1;
+        let expected_size = num_slices * ALPHA_TEXTURE_SIZE * ALPHA_TEXTURE_SIZE * 2;
+
+        if self.decal_alpha_data.len() < expected_size {
+            return Err(Error::InvalidChunkData(format!(
+                "Decal alpha data too small: expected {} bytes, have {}",
+                expected_size,
+                self.decal_alpha_data.len()
+            )));
+        }
+
+        // Decode each decal layer's alpha
+        let mut alpha_maps = Vec::with_capacity(num_layers);
+
+        for layer_idx in 0..num_layers {
+            let alpha_map = decode_layer_alpha(&self.decal_alpha_data, layer_idx, num_slices)?;
+            alpha_maps.push(alpha_map);
+        }
+
+        Ok(DecalAlphaData {
+            num_layers,
+            alpha_maps,
+        })
+    }
+}
+
+/// Decoded decal alpha data for a terrain chunk.
+#[derive(Debug, Clone)]
+pub struct DecalAlphaData {
+    /// Number of decal layers in this chunk.
+    pub num_layers: usize,
+    /// Alpha maps for each decal layer.
+    /// Each map is 64x64 = 4096 bytes.
+    pub alpha_maps: Vec<Vec<u8>>,
 }
 
 /// Calculate Xbox 360 tiled texture offset for 16bpp texture.

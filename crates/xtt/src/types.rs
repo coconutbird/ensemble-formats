@@ -161,13 +161,56 @@ impl XttLinker {
     pub const ALPHA_BPP: usize = 16;
 }
 
+/// Foliage set information.
+///
+/// From TerrainFoliage.cpp:
+/// The foliage header contains the number of sets and filenames for each set.
+/// The filename is expected as "foliage\\foliageset" format pointing to:
+/// - art/{filename}_df.ddx (diffuse/albedo)
+/// - art/{filename}_nm.ddx (normal)
+/// - art/{filename}_sp.ddx (specular)
+/// - art/{filename}_op.ddx (opacity)
+/// - art/{filename}.xml (positions/normals for blade geometry)
+#[derive(Debug, Clone)]
+pub struct FoliageSetInfo {
+    /// Filename path (e.g., "foliage\\foliageset").
+    pub filename: String,
+}
+
+/// Foliage quad-node chunk data.
+///
+/// From TerrainFoliage.h:
+/// ```cpp
+/// class BTerrainFoliageQNChunk {
+///    uint mQNParentIndex;
+///    uint mNumSets;
+///    int *mSetIndexes;
+///    int *mSetPolyCount;
+///    LPDIRECT3DINDEXBUFFER9 *mSetIBs;
+///    void *mpPhysicalMemoryPointer;
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct FoliageQNChunk {
+    /// Parent quad-node index.
+    pub qn_parent_index: u32,
+    /// Number of foliage sets used in this chunk.
+    pub num_sets: u32,
+    /// Indices into the foliage sets array.
+    pub set_indices: Vec<i32>,
+    /// Polygon count for each set (for DrawIndexedPrimitive).
+    pub set_poly_counts: Vec<i32>,
+    /// Raw index buffer data for each set.
+    pub index_buffers: Vec<Vec<u8>>,
+}
+
 /// Foliage data.
 #[derive(Debug, Clone, Default)]
 pub struct XttFoliage {
-    /// Foliage header data.
-    pub header_data: Vec<u8>,
-    /// Foliage quantization chunks.
-    pub qn_chunks: Vec<Vec<u8>>,
+    /// Foliage sets defined in the header.
+    pub sets: Vec<FoliageSetInfo>,
+    /// Foliage QN chunks (per-quad-node foliage data).
+    pub qn_chunks: Vec<FoliageQNChunk>,
 }
 
 /// Complete XTT file data.

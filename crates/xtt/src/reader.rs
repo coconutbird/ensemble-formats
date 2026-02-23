@@ -1,13 +1,16 @@
 //! XTT reader implementation.
 
 use crate::{
-    ActiveDecalInfo, ActiveDecalInstance, ActiveTextureInfo, ChunkMeta, Error, Result, XttFile,
-    XttHeader, XttLinker, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK, CHUNK_FOLIAGE_HEADER,
-    CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, XTT_VERSION,
+    ActiveDecalInfo, ActiveDecalInstance, ActiveTextureInfo, ChunkMeta, Error, FoliageQNChunk,
+    FoliageSetInfo, Result, XttFile, XttHeader, XttLinker, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
+    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, XTT_VERSION,
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;
 use std::io::{Cursor, Read, Seek};
+
+/// Size of filename strings in XTT files.
+const XTT_FILENAME_SIZE: usize = 256;
 
 /// XTT file reader.
 pub struct XttReader;
@@ -65,10 +68,11 @@ impl XttReader {
                     file.road_data = chunk_data;
                 }
                 CHUNK_FOLIAGE_HEADER => {
-                    file.foliage.header_data = chunk_data;
+                    file.foliage.sets = Self::read_foliage_header(&chunk_data)?;
                 }
                 CHUNK_FOLIAGE_QN => {
-                    file.foliage.qn_chunks.push(chunk_data);
+                    let qn_chunk = Self::read_foliage_qn_chunk(&chunk_data)?;
+                    file.foliage.qn_chunks.push(qn_chunk);
                 }
                 _ => {
                     // Unknown chunk, skip
@@ -275,6 +279,107 @@ impl XttReader {
             tile_center_y,
             u_scale,
             v_scale,
+        })
+    }
+
+    /// Parse the foliage header chunk.
+    ///
+    /// From TerrainIO.cpp:
+    /// ```cpp
+    /// case cXTT_FoliageHeaderChunk:
+    ///    ecfReader.getStream()->readObj(numSetsUsed);
+    ///    for(uint i=0;i<numSetsUsed;i++) {
+    ///       ecfReader.getStream()->readBytes(&mFilename, cXTT_FilenameSize);
+    ///       gFoliageManager.newSet(mFilename);
+    ///    }
+    /// ```
+    fn read_foliage_header(data: &[u8]) -> Result<Vec<FoliageSetInfo>> {
+        if data.len() < 4 {
+            return Ok(Vec::new());
+        }
+
+        let mut cursor = Cursor::new(data);
+        let num_sets = cursor.read_u32::<BigEndian>()?;
+
+        let mut sets = Vec::with_capacity(num_sets as usize);
+        for _ in 0..num_sets {
+            let mut filename_bytes = [0u8; XTT_FILENAME_SIZE];
+            cursor.read_exact(&mut filename_bytes)?;
+
+            let filename = {
+                let end = filename_bytes
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(filename_bytes.len());
+                String::from_utf8_lossy(&filename_bytes[..end]).to_string()
+            };
+
+            sets.push(FoliageSetInfo { filename });
+        }
+
+        Ok(sets)
+    }
+
+    /// Parse a foliage QN (quad-node) chunk.
+    ///
+    /// From TerrainIO.cpp:
+    /// ```cpp
+    /// case cXTT_FoliageQNChunk:
+    ///    ecfReader.getStream()->readObj(qnc->mQNParentIndex);
+    ///    ecfReader.getStream()->readObj(qnc->mNumSets);
+    ///    ecfReader.getStream()->readBytes(qnc->mSetIndexes, qnc->mNumSets * sizeof(uint));
+    ///    ecfReader.getStream()->readBytes(qnc->mSetPolyCount, qnc->mNumSets * sizeof(uint));
+    ///    ecfReader.getStream()->readObj(totalPhysicalMemory);
+    ///    ecfReader.getStream()->readBytes(indMemSizes, qnc->mNumSets * sizeof(uint));
+    ///    // Raw index buffer data follows
+    /// ```
+    fn read_foliage_qn_chunk(data: &[u8]) -> Result<FoliageQNChunk> {
+        if data.len() < 8 {
+            return Err(Error::InvalidChunkData(
+                "Foliage QN chunk too small".to_string(),
+            ));
+        }
+
+        let mut cursor = Cursor::new(data);
+
+        let qn_parent_index = cursor.read_u32::<BigEndian>()?;
+        let num_sets = cursor.read_u32::<BigEndian>()?;
+
+        // Read set indices
+        let mut set_indices = Vec::with_capacity(num_sets as usize);
+        for _ in 0..num_sets {
+            set_indices.push(cursor.read_i32::<BigEndian>()?);
+        }
+
+        // Read poly counts
+        let mut set_poly_counts = Vec::with_capacity(num_sets as usize);
+        for _ in 0..num_sets {
+            set_poly_counts.push(cursor.read_i32::<BigEndian>()?);
+        }
+
+        // Read total physical memory size
+        let _total_physical_memory = cursor.read_i32::<BigEndian>()?;
+
+        // Read individual memory sizes per set
+        let mut ind_mem_sizes = Vec::with_capacity(num_sets as usize);
+        for _ in 0..num_sets {
+            ind_mem_sizes.push(cursor.read_i32::<BigEndian>()? as usize);
+        }
+
+        // Read raw index buffer data for each set
+        let mut index_buffers = Vec::with_capacity(num_sets as usize);
+        for &size in &ind_mem_sizes {
+            let mut buf = vec![0u8; size];
+            cursor.read_exact(&mut buf)?;
+            index_buffers.push(buf);
+        }
+
+        Ok(FoliageQNChunk {
+            qn_parent_index,
+            num_sets,
+            set_indices,
+            set_poly_counts,
+            index_buffers,
         })
     }
 }

@@ -67,9 +67,9 @@ fn main() {
     }
 
     println!("\nRoad data size: {} bytes", xtt.road_data.len());
-    println!(
-        "Foliage header size: {} bytes",
-        xtt.foliage.header_data.len()
-    );
+    println!("Foliage sets: {}", xtt.foliage.sets.len());
+    for (i, set) in xtt.foliage.sets.iter().enumerate() {
+        println!("  [{}] {}", i, set.filename);
+    }
     println!("Foliage QN chunks: {}", xtt.foliage.qn_chunks.len());
 }

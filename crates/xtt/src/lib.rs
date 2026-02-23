@@ -25,7 +25,7 @@ mod writer;
 pub use writer::XttWriter;
 
 mod decode;
-pub use decode::{AlbedoAtlas, AlbedoHeader, SplatAlphaData, ALPHA_TEXTURE_SIZE};
+pub use decode::{AlbedoAtlas, AlbedoHeader, DecalAlphaData, SplatAlphaData, ALPHA_TEXTURE_SIZE};
 
 // ============================================================================
 // XTT Constants
@@ -80,7 +80,10 @@ mod tests {
         println!("Header extra: {} bytes", file.header_extra.len());
         println!("Albedo data: {} bytes", file.albedo_data.len());
         println!("Road data: {} bytes", file.road_data.len());
-        println!("Foliage header: {} bytes", file.foliage.header_data.len());
+        println!("Foliage sets: {}", file.foliage.sets.len());
+        for (i, set) in file.foliage.sets.iter().enumerate() {
+            println!("  [{}] {}", i, set.filename);
+        }
         println!("Foliage QN chunks: {}", file.foliage.qn_chunks.len());
 
         assert_eq!(file.header.version, XTT_VERSION);
