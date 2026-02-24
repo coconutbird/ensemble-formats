@@ -162,6 +162,92 @@ impl EraEntry {
     pub fn compressed_size(&self) -> u32 {
         self.chunk.size
     }
+
+    /// Decompress data for this entry
+    ///
+    /// Takes compressed bytes and decompresses them according to the entry's
+    /// compression method. This is the shared decompression logic used by
+    /// both `EraArchive` and `MmapEraArchive`.
+    pub fn decompress(&self, compressed: &[u8]) -> Result<Vec<u8>> {
+        match self.chunk.compression_method() {
+            CompressionMethod::Stored => Ok(compressed.to_vec()),
+            CompressionMethod::DeflateRaw => {
+                use flate2::read::DeflateDecoder;
+                let mut decoder = DeflateDecoder::new(compressed);
+                let mut decompressed = vec![0u8; self.extra.decomp_size as usize];
+                decoder
+                    .read_exact(&mut decompressed)
+                    .map_err(|e| Error::DecompressionError(format!("deflate raw: {}", e)))?;
+                Ok(decompressed)
+            }
+            CompressionMethod::DeflateStream => {
+                ecf::decompress_bdeflate_stream(compressed).map_err(Error::from)
+            }
+            CompressionMethod::Unknown(n) => Err(Error::DecompressionError(format!(
+                "unknown compression method: {}",
+                n
+            ))),
+        }
+    }
+}
+
+/// Resolve a filename from the filename table
+///
+/// The filename table is a sequence of null-terminated strings. Each entry
+/// has a `name_offset` that points to its filename within this table.
+pub fn resolve_filename(table: &[u8], offset: u32) -> Option<String> {
+    if table.is_empty() || offset as usize >= table.len() {
+        return None;
+    }
+    let start = offset as usize;
+    let end = table[start..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|p| start + p)
+        .unwrap_or(table.len());
+    String::from_utf8(table[start..end].to_vec()).ok()
+}
+
+/// Parse chunk headers from a reader
+///
+/// This is shared logic used by both `EraArchive` and `MmapEraArchive` to
+/// parse the chunk headers after the main ECF and ERA headers.
+pub fn parse_chunk_headers<R: Read + Seek>(
+    reader: &mut R,
+    ecf_header: &EcfHeader,
+) -> Result<Vec<EraEntry>> {
+    let mut entries = Vec::with_capacity(ecf_header.num_chunks as usize);
+
+    for _ in 0..ecf_header.num_chunks {
+        let chunk = EcfChunkHeader::read(reader)?;
+
+        let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
+            let extra = EraChunkExtra::read(reader)?;
+            let remaining = ecf_header.chunk_extra_data_size as i64 - EraChunkExtra::SIZE as i64;
+            if remaining > 0 {
+                reader.seek(SeekFrom::Current(remaining))?;
+            }
+            extra
+        } else {
+            if ecf_header.chunk_extra_data_size > 0 {
+                reader.seek(SeekFrom::Current(ecf_header.chunk_extra_data_size as i64))?;
+            }
+            EraChunkExtra {
+                date: 0,
+                decomp_size: chunk.size,
+                comp_tiger128: [0; 16],
+                name_offset: 0,
+            }
+        };
+
+        entries.push(EraEntry {
+            chunk,
+            extra,
+            filename: None,
+        });
+    }
+
+    Ok(entries)
 }
 
 /// An ERA archive reader
@@ -200,46 +286,15 @@ impl<R: Read + Seek> EraArchive<R> {
         // Read archive header extension
         let archive_header = EraArchiveHeader::read(&mut reader)?;
 
-        // Skip signature data
+        // Skip signature data (seek to where chunk headers start)
         let signature_skip =
             ecf_header.header_size as i64 - EcfHeader::SIZE as i64 - EraArchiveHeader::SIZE as i64;
         if signature_skip > 0 {
             reader.seek(SeekFrom::Current(signature_skip))?;
         }
 
-        // Read chunk headers (filename chunk is always at index 0)
-        let mut entries = Vec::with_capacity(ecf_header.num_chunks as usize);
-
-        for _i in 0..ecf_header.num_chunks as usize {
-            let chunk = EcfChunkHeader::read(&mut reader)?;
-
-            // Read extra data if present
-            let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
-                let extra = EraChunkExtra::read(&mut reader)?;
-                let remaining =
-                    ecf_header.chunk_extra_data_size as i64 - EraChunkExtra::SIZE as i64;
-                if remaining > 0 {
-                    reader.seek(SeekFrom::Current(remaining))?;
-                }
-                extra
-            } else {
-                if ecf_header.chunk_extra_data_size > 0 {
-                    reader.seek(SeekFrom::Current(ecf_header.chunk_extra_data_size as i64))?;
-                }
-                EraChunkExtra {
-                    date: 0,
-                    decomp_size: chunk.size,
-                    comp_tiger128: [0; 16],
-                    name_offset: 0,
-                }
-            };
-
-            entries.push(EraEntry {
-                chunk,
-                extra,
-                filename: None,
-            });
-        }
+        // Parse chunk headers using shared function
+        let mut entries = parse_chunk_headers(&mut reader, &ecf_header)?;
 
         // Read and decompress filename table (always at index 0)
         let filename_table = if !entries.is_empty() {
@@ -251,7 +306,7 @@ impl<R: Read + Seek> EraArchive<R> {
         // Resolve filenames for all entries (skip index 0 which is the filename table)
         for (i, entry) in entries.iter_mut().enumerate() {
             if i > 0 {
-                entry.filename = Self::resolve_filename(&filename_table, entry.extra.name_offset);
+                entry.filename = resolve_filename(&filename_table, entry.extra.name_offset);
             }
         }
 
@@ -268,40 +323,7 @@ impl<R: Read + Seek> EraArchive<R> {
         reader.seek(SeekFrom::Start(entry.chunk.offset as u64))?;
         let mut compressed = vec![0u8; entry.chunk.size as usize];
         reader.read_exact(&mut compressed)?;
-
-        let decompressed = match entry.chunk.compression_method() {
-            CompressionMethod::Stored => compressed,
-            CompressionMethod::DeflateRaw => {
-                use flate2::read::DeflateDecoder;
-                let mut decoder = DeflateDecoder::new(&compressed[..]);
-                let mut decompressed = vec![0u8; entry.extra.decomp_size as usize];
-                decoder
-                    .read_exact(&mut decompressed)
-                    .map_err(|e| Error::DecompressionError(format!("deflate raw: {}", e)))?;
-                decompressed
-            }
-            CompressionMethod::DeflateStream => ecf::decompress_bdeflate_stream(&compressed)?,
-            CompressionMethod::Unknown(n) => {
-                return Err(Error::DecompressionError(format!(
-                    "unknown compression method: {}",
-                    n
-                )));
-            }
-        };
-        Ok(decompressed)
-    }
-
-    fn resolve_filename(table: &[u8], offset: u32) -> Option<String> {
-        if table.is_empty() || offset as usize >= table.len() {
-            return None;
-        }
-        let start = offset as usize;
-        let end = table[start..]
-            .iter()
-            .position(|&b| b == 0)
-            .map(|p| start + p)
-            .unwrap_or(table.len());
-        String::from_utf8(table[start..end].to_vec()).ok()
+        entry.decompress(&compressed)
     }
 
     /// Get the number of entries in the archive
@@ -350,27 +372,7 @@ impl<R: Read + Seek> EraArchive<R> {
         let mut compressed = vec![0u8; entry.chunk.size as usize];
         self.reader.read_exact(&mut compressed)?;
 
-        let decompressed = match entry.chunk.compression_method() {
-            CompressionMethod::Stored => compressed,
-            CompressionMethod::DeflateRaw => {
-                use flate2::read::DeflateDecoder;
-                let mut decoder = DeflateDecoder::new(&compressed[..]);
-                let mut decompressed = vec![0u8; entry.extra.decomp_size as usize];
-                decoder
-                    .read_exact(&mut decompressed)
-                    .map_err(|e| Error::DecompressionError(format!("deflate raw: {}", e)))?;
-                decompressed
-            }
-            CompressionMethod::DeflateStream => ecf::decompress_bdeflate_stream(&compressed)?,
-            CompressionMethod::Unknown(n) => {
-                return Err(Error::DecompressionError(format!(
-                    "unknown compression method: {}",
-                    n
-                )));
-            }
-        };
-
-        Ok(decompressed)
+        entry.decompress(&compressed)
     }
 
     /// Read compressed data for an entry WITHOUT decompressing

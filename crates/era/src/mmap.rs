@@ -4,7 +4,7 @@
 //! file and supporting parallel decompression of multiple entries.
 
 use std::fs::File;
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -12,9 +12,9 @@ use memmap2::Mmap;
 use rayon::prelude::*;
 
 use crate::crypto::{tea_decrypt_data, TeaKeys, TEA_BLOCK_SIZE};
-use crate::era::{EraArchiveHeader, EraChunkExtra, EraEntry};
+use crate::era::{parse_chunk_headers, resolve_filename, EraArchiveHeader, EraEntry};
 use crate::error::{Error, Result};
-use ecf::{CompressionMethod, EcfChunkHeader, EcfHeader};
+use ecf::EcfHeader;
 
 /// Memory-mapped ERA archive for parallel operations
 pub struct MmapEraArchive {
@@ -44,10 +44,10 @@ impl MmapEraArchive {
     fn from_mmap(mmap: Mmap, keys: TeaKeys) -> Result<Self> {
         // Decrypt and parse headers
         // Headers are at the start of the file, we need to decrypt them first
-        let header_size = 32 + 16; // EcfHeader + EraArchiveHeader minimum
+        let base_header_size = 32 + 16; // EcfHeader + EraArchiveHeader minimum
 
         // Read and decrypt header area (at least first block)
-        let header_blocks = (header_size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE;
+        let header_blocks = (base_header_size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE;
         let header_bytes = header_blocks * TEA_BLOCK_SIZE;
 
         let mut decrypted_header = mmap[..header_bytes.min(mmap.len())].to_vec();
@@ -62,9 +62,10 @@ impl MmapEraArchive {
         // Parse ERA archive header
         let archive_header = EraArchiveHeader::read(&mut cursor)?;
 
-        // Calculate total header size including chunk headers
+        // The chunk headers start at ecf_header.header_size (accounts for signature/padding)
+        let chunk_headers_start = ecf_header.header_size as usize;
         let chunk_header_size = 24 + ecf_header.chunk_extra_data_size as usize; // EcfChunkHeader + extra
-        let total_header_size = header_size + chunk_header_size * ecf_header.num_chunks as usize;
+        let total_header_size = chunk_headers_start + chunk_header_size * ecf_header.num_chunks as usize;
 
         // Decrypt full header area
         let full_header_blocks = (total_header_size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE;
@@ -74,41 +75,12 @@ impl MmapEraArchive {
         full_header.resize(full_header_bytes, 0);
         tea_decrypt_data(&keys, &mut full_header, 0);
 
-        // Re-parse with full header
+        // Re-parse with full header - seek to where chunk headers start
         let mut cursor = Cursor::new(&full_header);
-        cursor.seek(SeekFrom::Start(header_size as u64))?;
+        cursor.seek(SeekFrom::Start(chunk_headers_start as u64))?;
 
-        // Parse chunk headers
-        let mut entries = Vec::with_capacity(ecf_header.num_chunks as usize);
-        for _ in 0..ecf_header.num_chunks {
-            let chunk = EcfChunkHeader::read(&mut cursor)?;
-
-            let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
-                let extra = EraChunkExtra::read(&mut cursor)?;
-                let remaining =
-                    ecf_header.chunk_extra_data_size as i64 - EraChunkExtra::SIZE as i64;
-                if remaining > 0 {
-                    cursor.seek(SeekFrom::Current(remaining))?;
-                }
-                extra
-            } else {
-                if ecf_header.chunk_extra_data_size > 0 {
-                    cursor.seek(SeekFrom::Current(ecf_header.chunk_extra_data_size as i64))?;
-                }
-                EraChunkExtra {
-                    date: 0,
-                    decomp_size: chunk.size,
-                    comp_tiger128: [0; 16],
-                    name_offset: 0,
-                }
-            };
-
-            entries.push(EraEntry {
-                chunk,
-                extra,
-                filename: None,
-            });
-        }
+        // Parse chunk headers using shared function
+        let mut entries = parse_chunk_headers(&mut cursor, &ecf_header)?;
 
         // Read and parse filename table
         let filename_table = if !entries.is_empty() {
@@ -117,10 +89,10 @@ impl MmapEraArchive {
             Vec::new()
         };
 
-        // Resolve filenames
+        // Resolve filenames using shared function
         for (i, entry) in entries.iter_mut().enumerate() {
             if i > 0 {
-                entry.filename = Self::resolve_filename(&filename_table, entry.extra.name_offset);
+                entry.filename = resolve_filename(&filename_table, entry.extra.name_offset);
             }
         }
 
@@ -149,42 +121,7 @@ impl MmapEraArchive {
         let data_start = offset - block_start;
         let compressed = &data[data_start..data_start + size];
 
-        Self::decompress_data(compressed, entry)
-    }
-
-    fn decompress_data(compressed: &[u8], entry: &EraEntry) -> Result<Vec<u8>> {
-        match entry.chunk.compression_method() {
-            CompressionMethod::Stored => Ok(compressed.to_vec()),
-            CompressionMethod::DeflateRaw => {
-                use flate2::read::DeflateDecoder;
-                let mut decoder = DeflateDecoder::new(compressed);
-                let mut decompressed = vec![0u8; entry.extra.decomp_size as usize];
-                decoder
-                    .read_exact(&mut decompressed)
-                    .map_err(|e| Error::DecompressionError(format!("deflate raw: {}", e)))?;
-                Ok(decompressed)
-            }
-            CompressionMethod::DeflateStream => {
-                ecf::decompress_bdeflate_stream(compressed).map_err(Error::from)
-            }
-            CompressionMethod::Unknown(n) => Err(Error::DecompressionError(format!(
-                "unknown compression method: {}",
-                n
-            ))),
-        }
-    }
-
-    fn resolve_filename(table: &[u8], offset: u32) -> Option<String> {
-        if table.is_empty() || offset as usize >= table.len() {
-            return None;
-        }
-        let start = offset as usize;
-        let end = table[start..]
-            .iter()
-            .position(|&b| b == 0)
-            .map(|p| start + p)
-            .unwrap_or(table.len());
-        String::from_utf8(table[start..end].to_vec()).ok()
+        entry.decompress(compressed)
     }
 
     /// Get the number of entries
@@ -241,7 +178,7 @@ impl MmapEraArchive {
         let data_start = offset - block_start;
         let compressed = &data[data_start..data_start + size];
 
-        Self::decompress_data(compressed, entry)
+        entry.decompress(compressed)
     }
 
     /// Read compressed data without decompressing (thread-safe)
