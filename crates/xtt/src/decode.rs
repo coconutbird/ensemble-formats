@@ -256,6 +256,8 @@ pub struct DecalAlphaData {
 ///
 /// Reverse engineered from untile_xbox360_alpha_texture (0x1407E34E0).
 /// Translated directly from the assembly to ensure correctness.
+/// Xbox 360 tiled texture offset calculation.
+/// This matches the game's untile_xbox360_alpha_texture function at 0x1407E34E0.
 fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
     // Block width calculation: (width + 31) >> 5
     let block_width = (width + 31) >> 5;
@@ -304,10 +306,6 @@ fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
 /// The alpha data is stored in Xbox 360 tiled format and needs deswizzling.
 /// Each 16-bit pixel contains 4 layers of 4-bit alpha packed together.
 ///
-/// IMPORTANT: The Xbox 360 tiled format treats all slices as ONE tall texture.
-/// For a texture with N slices, the total height is 64*N and width is 64.
-/// The tiling algorithm uses GLOBAL y coordinates across all slices.
-///
 /// Channel extraction order (from game's untile function at 0x1407E34E0):
 /// - Channel 0: bits 0-3
 /// - Channel 1: bits 12-15
@@ -334,10 +332,12 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
                 continue; // Skip if out of bounds
             }
 
-            // Read as little-endian (native x86 format - game uses movzx word ptr)
-            let pixel = u16::from_le_bytes([data[byte_offset], data[byte_offset + 1]]);
+            // Read as big-endian (Xbox 360 format - raw file data)
+            // This gives the same 16-bit value as game's "swap then read LE"
+            let pixel = u16::from_be_bytes([data[byte_offset], data[byte_offset + 1]]);
 
-            // Extract using game's channel order: {0, 12, 8, 4} shifts
+            // Extract using game's channel order (from IDA at 0x1407E34E0):
+            // Channel 0: bits 0-3, Channel 1: bits 12-15, Channel 2: bits 8-11, Channel 3: bits 4-7
             let alpha_4bit = match channel_idx {
                 0 => (pixel & 0x000F) as u8,       // bits 0-3
                 1 => ((pixel >> 12) & 0x0F) as u8, // bits 12-15
