@@ -306,18 +306,42 @@ fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
 /// The alpha data is stored in Xbox 360 tiled format and needs deswizzling.
 /// Each 16-bit pixel contains 4 layers of 4-bit alpha packed together.
 ///
-/// Channel extraction order matching GPU A4R4G4B4 texture sampling.
+/// Channel extraction from A4R4G4B4 Xbox 360 alpha texture data.
 ///
-/// The original game's GPU compositor (gpuTerrainComposite.fx) samples the alpha
-/// texture as A4R4G4B4 and indexes channels with `tex3D(...)[channel]`:
-///   [0] = .r = R = bits 8-11
-///   [1] = .g = G = bits 4-7
-///   [2] = .b = B = bits 0-3
-///   [3] = .a = A = bits 12-15
+/// # How it works
 ///
-/// The layer-to-channel mapping in the compositor vertex shader is:
-///   alphaChannel = layerIndex % 4
-/// So layer 0 → channel 0 (R), layer 1 → channel 1 (G), etc.
+/// The XTT alpha data is stored as Xbox 360 tiled A4R4G4B4 pixels. The DE game's
+/// `untile_xbox360_alpha_texture` (0x1407E34E0) reads each pixel as a little-endian
+/// u16 and writes 4 expanded bytes per pixel. We replicate this exactly, extracting
+/// one channel at a time.
+///
+/// The A4R4G4B4 data was authored for the Xbox 360 (big-endian). Reading the same
+/// bytes as LE u16 on PC byte-swaps the two bytes, shuffling the nibble positions:
+///
+///   BE layout: bits 12-15=A, 8-11=R, 4-7=G, 0-3=B
+///   LE layout: bits 12-15=G, 8-11=B, 4-7=A, 0-3=R
+///
+/// The untile function extracts nibbles by their A4R4G4B4 *field name* at each LE
+/// bit position, producing bytes in "BARG" order. But because of the endian swap,
+/// the actual *content* at each position is the original Xbox 360 channel data:
+///
+///   channel 0 → LE bits 0-3  (field "B") → content: **R**
+///   channel 1 → LE bits 12-15 (field "A") → content: **G**
+///   channel 2 → LE bits 8-11  (field "R") → content: **B**
+///   channel 3 → LE bits 4-7   (field "G") → content: **A**
+///
+/// This matches the Xbox 360 GPU's native A4R4G4B4 sampling order:
+///   `[0]`=.r=R, `[1]`=.g=G, `[2]`=.b=B, `[3]`=.a=A
+///
+/// # DE game's pipeline (for reference)
+///
+/// In `BTerrainIOLoader::loadXTTInternal` (0x14066C990), the DE:
+/// 1. Calls `untile_xbox360_alpha_texture` to produce BARG-ordered bytes.
+/// 2. The byte-swap loop at 0x14066CCB2 does **not** operate on the alpha data —
+///    it endian-swaps the **splat layer ID array** (int32 texture indices) from
+///    Xbox 360 big-endian to PC little-endian.
+/// 3. Both buffers are passed to `processLinkerData` (0x14066D890), which stores
+///    them using X-major chunk indexing: `gridZ + numXChunks * gridX`.
 fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Result<Vec<u8>> {
     // layer_idx comes in 1-based (layer 1 = first overlay)
     // Slice/channel calculation: layer 1 → slice 0, channel 1; layer 4 → slice 1, channel 0
@@ -339,20 +363,19 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
                 continue; // Skip if out of bounds
             }
 
-            // Read as big-endian (Xbox 360 format - raw file data)
-            // This gives the same 16-bit value as game's "swap then read LE"
-            let pixel = u16::from_be_bytes([data[byte_offset], data[byte_offset + 1]]);
+            // Read as little-endian (PC/DE format, matching game's x86 uint16 read)
+            let pixel = u16::from_le_bytes([data[byte_offset], data[byte_offset + 1]]);
 
-            // Extract using GPU A4R4G4B4 sampling order:
-            // Channel 0 (.r) = R = bits 8-11
-            // Channel 1 (.g) = G = bits 4-7
-            // Channel 2 (.b) = B = bits 0-3
-            // Channel 3 (.a) = A = bits 12-15
+            // BARG extraction: LE bit positions → original Xbox 360 channel content
+            //   channel 0 → bits 0-3  ("B" field) → Xbox R
+            //   channel 1 → bits 12-15 ("A" field) → Xbox G
+            //   channel 2 → bits 8-11  ("R" field) → Xbox B
+            //   channel 3 → bits 4-7   ("G" field) → Xbox A
             let alpha_4bit = match channel_idx {
-                0 => ((pixel >> 8) & 0x0F) as u8,  // R = bits 8-11
-                1 => ((pixel >> 4) & 0x0F) as u8,  // G = bits 4-7
-                2 => (pixel & 0x000F) as u8,       // B = bits 0-3
-                3 => ((pixel >> 12) & 0x0F) as u8, // A = bits 12-15
+                0 => (pixel & 0x0F) as u8,         // "B" field → Xbox R
+                1 => ((pixel >> 12) & 0x0F) as u8, // "A" field → Xbox G
+                2 => ((pixel >> 8) & 0x0F) as u8,  // "R" field → Xbox B
+                3 => ((pixel >> 4) & 0x0F) as u8,  // "G" field → Xbox A
                 _ => unreachable!(),
             };
 

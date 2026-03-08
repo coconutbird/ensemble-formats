@@ -420,11 +420,15 @@ impl XtdFile {
 
             normals.push(unpack_normal(packed_normals[i]));
 
-            // UV coordinates: based on grid position (0-1 range over the terrain)
-            // The terrain data uses X-major ordering (row = i / width = Z, col = i % width = X)
-            // We need to flip to match texture orientation
-            let u = grid_x / width_f;
-            let v = grid_z / width_f;
+            // UV coordinates: Z→U, X→V (matching the game's convention).
+            //
+            // The original Halo Wars shaders consistently use world Z for the U axis
+            // and world X for the V axis (e.g. the roads shader samples `gPos.zx`).
+            // All terrain textures — splat alpha, albedo, AO — are authored for this
+            // convention, so we adopt it here at the source rather than compensating
+            // with rotation/transpose hacks downstream.
+            let u = grid_z / width_f;
+            let v = grid_x / width_f;
             uvs.push([u, v]);
         }
 

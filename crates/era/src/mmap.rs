@@ -65,7 +65,8 @@ impl MmapEraArchive {
         // The chunk headers start at ecf_header.header_size (accounts for signature/padding)
         let chunk_headers_start = ecf_header.header_size as usize;
         let chunk_header_size = 24 + ecf_header.chunk_extra_data_size as usize; // EcfChunkHeader + extra
-        let total_header_size = chunk_headers_start + chunk_header_size * ecf_header.num_chunks as usize;
+        let total_header_size =
+            chunk_headers_start + chunk_header_size * ecf_header.num_chunks as usize;
 
         // Decrypt full header area
         let full_header_blocks = (total_header_size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE;
