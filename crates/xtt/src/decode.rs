@@ -306,11 +306,18 @@ fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
 /// The alpha data is stored in Xbox 360 tiled format and needs deswizzling.
 /// Each 16-bit pixel contains 4 layers of 4-bit alpha packed together.
 ///
-/// Channel extraction order (from game's untile function at 0x1407E34E0):
-/// - Channel 0: bits 0-3
-/// - Channel 1: bits 12-15
-/// - Channel 2: bits 8-11
-/// - Channel 3: bits 4-7
+/// Channel extraction order matching GPU A4R4G4B4 texture sampling.
+///
+/// The original game's GPU compositor (gpuTerrainComposite.fx) samples the alpha
+/// texture as A4R4G4B4 and indexes channels with `tex3D(...)[channel]`:
+///   [0] = .r = R = bits 8-11
+///   [1] = .g = G = bits 4-7
+///   [2] = .b = B = bits 0-3
+///   [3] = .a = A = bits 12-15
+///
+/// The layer-to-channel mapping in the compositor vertex shader is:
+///   alphaChannel = layerIndex % 4
+/// So layer 0 → channel 0 (R), layer 1 → channel 1 (G), etc.
 fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Result<Vec<u8>> {
     // layer_idx comes in 1-based (layer 1 = first overlay)
     // Slice/channel calculation: layer 1 → slice 0, channel 1; layer 4 → slice 1, channel 0
@@ -336,13 +343,16 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
             // This gives the same 16-bit value as game's "swap then read LE"
             let pixel = u16::from_be_bytes([data[byte_offset], data[byte_offset + 1]]);
 
-            // Extract using game's channel order (from IDA at 0x1407E34E0):
-            // Channel 0: bits 0-3, Channel 1: bits 12-15, Channel 2: bits 8-11, Channel 3: bits 4-7
+            // Extract using GPU A4R4G4B4 sampling order:
+            // Channel 0 (.r) = R = bits 8-11
+            // Channel 1 (.g) = G = bits 4-7
+            // Channel 2 (.b) = B = bits 0-3
+            // Channel 3 (.a) = A = bits 12-15
             let alpha_4bit = match channel_idx {
-                0 => (pixel & 0x000F) as u8,       // bits 0-3
-                1 => ((pixel >> 12) & 0x0F) as u8, // bits 12-15
-                2 => ((pixel >> 8) & 0x0F) as u8,  // bits 8-11
-                3 => ((pixel >> 4) & 0x0F) as u8,  // bits 4-7
+                0 => ((pixel >> 8) & 0x0F) as u8,  // R = bits 8-11
+                1 => ((pixel >> 4) & 0x0F) as u8,  // G = bits 4-7
+                2 => (pixel & 0x000F) as u8,       // B = bits 0-3
+                3 => ((pixel >> 12) & 0x0F) as u8, // A = bits 12-15
                 _ => unreachable!(),
             };
 
