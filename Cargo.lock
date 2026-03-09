@@ -1464,6 +1464,7 @@ dependencies = [
  "byteorder",
  "ecf",
  "era",
+ "half",
  "texture2ddecoder",
  "thiserror",
 ]

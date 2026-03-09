@@ -387,3 +387,99 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
 
     Ok(alpha_map)
 }
+
+// ============================================================================
+// Road Data Decoding
+// ============================================================================
+
+use crate::types::{RoadData, RoadQNChunk, RoadVertex};
+use half::f16;
+
+/// Decode road data from the raw XTT road chunk (0x8888).
+///
+/// Binary format (big-endian / Xbox 360):
+/// - `char[32]`: texture filename (null-terminated)
+/// - `i32`: number of QN chunks
+/// - For each QN chunk:
+///   - `i32`: owner QN index
+///   - `i32`: number of triangles
+///   - `i32`: memory size in bytes
+///   - Vertex data: `numTris * 3` vertices, each = 6 × float16:
+///     `[posX, posY, posZ, pad, uvX, uvY]`
+pub fn decode_road_data(data: &[u8]) -> Result<RoadData> {
+    if data.is_empty() {
+        return Err(Error::InvalidChunkData("Empty road data".into()));
+    }
+
+    let mut cursor = Cursor::new(data);
+
+    // Read texture filename (32 bytes, null-terminated)
+    let mut name_bytes = [0u8; 32];
+    std::io::Read::read_exact(&mut cursor, &mut name_bytes)
+        .map_err(|e| Error::InvalidChunkData(format!("Failed to read road texture name: {}", e)))?;
+    let texture_name = String::from_utf8_lossy(&name_bytes)
+        .trim_end_matches('\0')
+        .to_string();
+
+    // Read number of QN chunks
+    let num_qn_chunks = cursor
+        .read_i32::<BigEndian>()
+        .map_err(|e| Error::InvalidChunkData(format!("Failed to read QN count: {}", e)))?;
+
+    let mut qn_chunks = Vec::with_capacity(num_qn_chunks as usize);
+
+    for _ in 0..num_qn_chunks {
+        let qn_index = cursor
+            .read_i32::<BigEndian>()
+            .map_err(|e| Error::InvalidChunkData(format!("Failed to read QN index: {}", e)))?;
+        let num_tris = cursor
+            .read_i32::<BigEndian>()
+            .map_err(|e| Error::InvalidChunkData(format!("Failed to read tri count: {}", e)))?;
+        let _mem_size = cursor
+            .read_i32::<BigEndian>()
+            .map_err(|e| Error::InvalidChunkData(format!("Failed to read mem size: {}", e)))?;
+
+        let num_verts = (num_tris * 3) as usize;
+        let mut vertices = Vec::with_capacity(num_verts);
+
+        for _ in 0..num_verts {
+            // Each vertex: 6 × float16 (big-endian)
+            // [posX, posY, posZ, pad, uvX, uvY]
+            let px = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
+                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
+            })?)
+            .to_f32();
+            let py = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
+                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
+            })?)
+            .to_f32();
+            let pz = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
+                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
+            })?)
+            .to_f32();
+            let _pad = cursor.read_u16::<BigEndian>().map_err(|e| {
+                Error::InvalidChunkData(format!("Failed to read road vertex pad: {}", e))
+            })?;
+            let u = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
+                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
+            })?)
+            .to_f32();
+            let v = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
+                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
+            })?)
+            .to_f32();
+
+            vertices.push(RoadVertex {
+                position: [px, py, pz],
+                uv: [u, v],
+            });
+        }
+
+        qn_chunks.push(RoadQNChunk { qn_index, vertices });
+    }
+
+    Ok(RoadData {
+        texture_name,
+        qn_chunks,
+    })
+}

@@ -25,7 +25,9 @@ mod writer;
 pub use writer::XttWriter;
 
 mod decode;
-pub use decode::{AlbedoAtlas, AlbedoHeader, DecalAlphaData, SplatAlphaData, ALPHA_TEXTURE_SIZE};
+pub use decode::{
+    decode_road_data, AlbedoAtlas, AlbedoHeader, DecalAlphaData, SplatAlphaData, ALPHA_TEXTURE_SIZE,
+};
 
 // ============================================================================
 // XTT Constants

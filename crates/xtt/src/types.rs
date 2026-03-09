@@ -260,3 +260,34 @@ impl Default for XttFile {
         }
     }
 }
+
+// ============================================================================
+// Road Data Types
+// ============================================================================
+
+/// A single road vertex with position and UV.
+#[derive(Clone, Debug)]
+pub struct RoadVertex {
+    /// World position (X, Y, Z).
+    pub position: [f32; 3],
+    /// Texture UV coordinates.
+    pub uv: [f32; 2],
+}
+
+/// Road triangles assigned to a specific quad-node (terrain chunk).
+#[derive(Clone, Debug)]
+pub struct RoadQNChunk {
+    /// Owner quad-node index (qnX * numQNs + qnZ).
+    pub qn_index: i32,
+    /// Triangle vertices (every 3 vertices = 1 triangle).
+    pub vertices: Vec<RoadVertex>,
+}
+
+/// Decoded road data from XTT chunk 0x8888.
+#[derive(Clone, Debug)]
+pub struct RoadData {
+    /// Road texture name (e.g., "roads\\road_01").
+    pub texture_name: String,
+    /// Per-chunk road geometry.
+    pub qn_chunks: Vec<RoadQNChunk>,
+}
