@@ -17,3 +17,4 @@ zerocopy.workspace = true
 
 [dev-dependencies]
 era = { workspace = true }
+image = { workspace = true }
