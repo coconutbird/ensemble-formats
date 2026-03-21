@@ -2,7 +2,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use crate::crypto::{tea_decrypt_block64, TeaKeys, TEA_BLOCK_SIZE};
+use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64};
 
 /// A reader that decrypts TEA-encrypted data on the fly
 pub struct DecryptReader<R> {

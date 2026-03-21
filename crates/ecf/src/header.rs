@@ -3,7 +3,7 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Write};
 
-use crate::{CompressionMethod, Error, Result, ECF_HEADER_MAGIC, ECF_INVERTED_HEADER_MAGIC};
+use crate::{CompressionMethod, ECF_HEADER_MAGIC, ECF_INVERTED_HEADER_MAGIC, Error, Result};
 
 /// ECF file header.
 #[derive(Debug, Clone, Default)]

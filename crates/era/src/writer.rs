@@ -5,8 +5,8 @@ use std::io::{Seek, Write};
 use std::path::Path;
 
 use byteorder::{BigEndian, WriteBytesExt};
-use flate2::write::DeflateEncoder;
 use flate2::Compression;
+use flate2::write::DeflateEncoder;
 use rayon::prelude::*;
 use tiger::{Digest, Tiger};
 
@@ -397,10 +397,10 @@ fn write_chunk_data_all<W: Write + Seek>(
     // Write filename table (first chunk)
     write_padded(writer, chunks[0].offset as usize, &filename_table.data)?;
     bytes_written += filename_table.data.len() as u64;
-    if let Some(ref mut cb) = progress {
-        if !cb(bytes_written, total_bytes) {
-            return Err(crate::error::Error::Cancelled);
-        }
+    if let Some(cb) = &mut *progress
+        && !cb(bytes_written, total_bytes)
+    {
+        return Err(crate::error::Error::Cancelled);
     }
 
     // Write regular compressed file data
@@ -408,10 +408,10 @@ fn write_chunk_data_all<W: Write + Seek>(
     for (chunk, file) in chunks[1..=regular_count].iter().zip(compressed_files) {
         write_padded(writer, chunk.offset as usize, &file.data)?;
         bytes_written += file.data.len() as u64;
-        if let Some(ref mut cb) = progress {
-            if !cb(bytes_written, total_bytes) {
-                return Err(crate::error::Error::Cancelled);
-            }
+        if let Some(cb) = &mut *progress
+            && !cb(bytes_written, total_bytes)
+        {
+            return Err(crate::error::Error::Cancelled);
         }
     }
 
@@ -419,10 +419,10 @@ fn write_chunk_data_all<W: Write + Seek>(
     for (chunk, file) in chunks[regular_count + 1..].iter().zip(precompressed_files) {
         write_padded(writer, chunk.offset as usize, &file.compressed_data)?;
         bytes_written += file.compressed_data.len() as u64;
-        if let Some(ref mut cb) = progress {
-            if !cb(bytes_written, total_bytes) {
-                return Err(crate::error::Error::Cancelled);
-            }
+        if let Some(cb) = &mut *progress
+            && !cb(bytes_written, total_bytes)
+        {
+            return Err(crate::error::Error::Cancelled);
         }
     }
 

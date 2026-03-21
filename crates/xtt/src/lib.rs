@@ -26,7 +26,7 @@ pub use writer::XttWriter;
 
 mod decode;
 pub use decode::{
-    decode_road_data, AlbedoAtlas, AlbedoHeader, DecalAlphaData, SplatAlphaData, ALPHA_TEXTURE_SIZE,
+    ALPHA_TEXTURE_SIZE, AlbedoAtlas, AlbedoHeader, DecalAlphaData, SplatAlphaData, decode_road_data,
 };
 
 // ============================================================================
@@ -104,21 +104,21 @@ mod tests {
 
         // Print first 64 bytes of both for comparison
         println!("\nOriginal header (first 64 bytes):");
-        for i in 0..64 {
+        for (i, &byte) in original.iter().enumerate().take(64) {
             if i % 16 == 0 {
                 print!("  {:04X}: ", i);
             }
-            print!("{:02X} ", original[i]);
+            print!("{:02X} ", byte);
             if i % 16 == 15 {
                 println!();
             }
         }
         println!("\nRewritten header (first 64 bytes):");
-        for i in 0..64 {
+        for (i, &byte) in rewritten.iter().enumerate().take(64) {
             if i % 16 == 0 {
                 print!("  {:04X}: ", i);
             }
-            print!("{:02X} ", rewritten[i]);
+            print!("{:02X} ", byte);
             if i % 16 == 15 {
                 println!();
             }
@@ -129,7 +129,7 @@ mod tests {
         let min_len = original.len().min(rewritten.len());
         for i in 0..min_len {
             // Skip adler32 field (offset 8-11)
-            if i >= 8 && i <= 11 {
+            if (8..=11).contains(&i) {
                 continue;
             }
 

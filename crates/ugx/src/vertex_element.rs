@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn test_float3_roundtrip() {
-        let v = [1.0, -2.5, 3.14, 1.0];
+        let v = [1.0, -2.5, 3.125, 1.0];
         let r = roundtrip_pack_unpack(VertexElementType::Float3, v);
         assert_eq!(r[0], v[0]);
         assert_eq!(r[1], v[1]);
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_float4_roundtrip() {
-        let v = [1.0, -2.5, 3.14, 0.5];
+        let v = [1.0, -2.5, 3.125, 0.5];
         let r = roundtrip_pack_unpack(VertexElementType::Float4, v);
         assert_eq!(r, v);
     }

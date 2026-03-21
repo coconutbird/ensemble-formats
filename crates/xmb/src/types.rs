@@ -165,10 +165,10 @@ impl XmbData {
                 }
                 Ok(Event::CData(ref e)) => {
                     let text = String::from_utf8_lossy(e.as_ref()).to_string();
-                    if !text.is_empty() {
-                        if let Some(node) = stack.last_mut() {
-                            node.text = Variant::String(text);
-                        }
+                    if !text.is_empty()
+                        && let Some(node) = stack.last_mut()
+                    {
+                        node.text = Variant::String(text);
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -271,10 +271,10 @@ fn parse_text_value(s: &str) -> Variant {
         }
     }
 
-    if let Some(hex_str) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        if let Ok(v) = u32::from_str_radix(hex_str, 16) {
-            return Variant::UInt(v);
-        }
+    if let Some(hex_str) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
+        && let Ok(v) = u32::from_str_radix(hex_str, 16)
+    {
+        return Variant::UInt(v);
     }
 
     if let Ok(v) = s.parse::<i32>() {

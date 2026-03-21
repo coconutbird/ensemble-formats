@@ -6,8 +6,8 @@ use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
 use ugx::{
-    export_to_gltf_with_buffer_name, import_from_gltf, write_ugx, GltfExportOptions,
-    GltfImportOptions, UgxGeom,
+    GltfExportOptions, GltfImportOptions, UgxGeom, export_to_gltf_with_buffer_name,
+    import_from_gltf, write_ugx,
 };
 
 #[derive(Parser)]
@@ -193,15 +193,27 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         );
 
         // Print first 3 unpacked vertices for debugging
-        if section.num_verts > 0 && !section.base_vert_packer.pack_order.is_empty() {
-            if let Ok(verts) = geom.unpack_section_vertices(i) {
-                println!("       First 3 vertices:");
-                for (vi, v) in verts.iter().take(3).enumerate() {
-                    println!("         [{}] pos=[{:.3}, {:.3}, {:.3}] bones=[{},{},{},{}] weights=[{:.3},{:.3},{:.3},{:.3}]",
-                        vi, v.position[0], v.position[1], v.position[2],
-                        v.bone_indices[0], v.bone_indices[1], v.bone_indices[2], v.bone_indices[3],
-                        v.bone_weights[0], v.bone_weights[1], v.bone_weights[2], v.bone_weights[3]);
-                }
+        if section.num_verts > 0
+            && !section.base_vert_packer.pack_order.is_empty()
+            && let Ok(verts) = geom.unpack_section_vertices(i)
+        {
+            println!("       First 3 vertices:");
+            for (vi, v) in verts.iter().take(3).enumerate() {
+                println!(
+                    "         [{}] pos=[{:.3}, {:.3}, {:.3}] bones=[{},{},{},{}] weights=[{:.3},{:.3},{:.3},{:.3}]",
+                    vi,
+                    v.position[0],
+                    v.position[1],
+                    v.position[2],
+                    v.bone_indices[0],
+                    v.bone_indices[1],
+                    v.bone_indices[2],
+                    v.bone_indices[3],
+                    v.bone_weights[0],
+                    v.bone_weights[1],
+                    v.bone_weights[2],
+                    v.bone_weights[3]
+                );
             }
         }
     }

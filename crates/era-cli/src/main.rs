@@ -482,20 +482,20 @@ fn extract_archive(
         let file_path = outdir.join(filename.replace('\\', "/"));
 
         // Create parent directories
-        if let Some(parent) = file_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
-                if json {
-                    files.push(ExtractedFile {
-                        filename,
-                        success: false,
-                        error: Some(format!("Directory creation error: {}", e)),
-                    });
-                } else if !quiet {
-                    eprintln!("  Error creating directory for {}: {}", filename, e);
-                }
-                errors += 1;
-                continue;
+        if let Some(parent) = file_path.parent()
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            if json {
+                files.push(ExtractedFile {
+                    filename,
+                    success: false,
+                    error: Some(format!("Directory creation error: {}", e)),
+                });
+            } else if !quiet {
+                eprintln!("  Error creating directory for {}: {}", filename, e);
             }
+            errors += 1;
+            continue;
         }
 
         // Write file

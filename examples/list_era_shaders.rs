@@ -1,4 +1,4 @@
-use ensemble_rs::EraArchive;
+use era::EraArchive;
 use std::env;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

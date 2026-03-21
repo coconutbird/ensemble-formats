@@ -8,7 +8,7 @@
 //! - `0x1111` - XTDHeader: Main header with terrain dimensions
 //! - `0x2222` - TerrainChunk: Per-chunk visual headers (196 chunks typical)
 //! - `0x8888` - AtlasChunk: Terrain atlas texture data
-//! - `0xAAAA` - TessChunk: Tessellation data  
+//! - `0xAAAA` - TessChunk: Tessellation data
 //! - `0xBBBB` - LightingChunk: Lighting data
 //! - `0xCCCC` - AOChunk: Ambient occlusion data
 //! - `0xDDDD` - AlphaChunk: Alpha/transparency data
@@ -27,8 +27,8 @@ pub use writer::XtdWriter;
 
 mod decode;
 pub use decode::{
-    unpack_normal, unpack_position, AlphaData, AmbientOcclusionData, AtlasHeader, RawTerrainData,
-    TerrainVertices, TessellatedMesh,
+    AlphaData, AmbientOcclusionData, AtlasHeader, RawTerrainData, TerrainVertices, TessellatedMesh,
+    unpack_normal, unpack_position,
 };
 
 // ============================================================================
@@ -109,21 +109,21 @@ mod tests {
 
         // Print first 64 bytes of both for comparison
         println!("\nOriginal header (first 64 bytes):");
-        for i in 0..64 {
+        for (i, &byte) in original.iter().enumerate().take(64) {
             if i % 16 == 0 {
                 print!("  {:04X}: ", i);
             }
-            print!("{:02X} ", original[i]);
+            print!("{:02X} ", byte);
             if i % 16 == 15 {
                 println!();
             }
         }
         println!("\nRewritten header (first 64 bytes):");
-        for i in 0..64 {
+        for (i, &byte) in rewritten.iter().enumerate().take(64) {
             if i % 16 == 0 {
                 print!("  {:04X}: ", i);
             }
-            print!("{:02X} ", rewritten[i]);
+            print!("{:02X} ", byte);
             if i % 16 == 15 {
                 println!();
             }
@@ -134,7 +134,7 @@ mod tests {
         let min_len = original.len().min(rewritten.len());
         for i in 0..min_len {
             // Skip adler32 field (offset 8-11)
-            if i >= 8 && i <= 11 {
+            if (8..=11).contains(&i) {
                 continue;
             }
 

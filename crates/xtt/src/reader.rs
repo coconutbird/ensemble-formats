@@ -1,9 +1,9 @@
 //! XTT reader implementation.
 
 use crate::{
-    ActiveDecalInfo, ActiveDecalInstance, ActiveTextureInfo, ChunkMeta, Error, FoliageQNChunk,
-    FoliageSetInfo, Result, XttFile, XttHeader, XttLinker, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
-    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, XTT_VERSION,
+    ActiveDecalInfo, ActiveDecalInstance, ActiveTextureInfo, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
+    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, ChunkMeta, Error,
+    FoliageQNChunk, FoliageSetInfo, Result, XTT_VERSION, XttFile, XttHeader, XttLinker,
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;

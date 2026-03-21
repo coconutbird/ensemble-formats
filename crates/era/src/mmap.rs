@@ -11,8 +11,8 @@ use std::sync::Arc;
 use memmap2::Mmap;
 use rayon::prelude::*;
 
-use crate::crypto::{tea_decrypt_data, TeaKeys, TEA_BLOCK_SIZE};
-use crate::era::{parse_chunk_headers, resolve_filename, EraArchiveHeader, EraEntry};
+use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_data};
+use crate::era::{EraArchiveHeader, EraEntry, parse_chunk_headers, resolve_filename};
 use crate::error::{Error, Result};
 use ecf::EcfHeader;
 
@@ -44,10 +44,10 @@ impl MmapEraArchive {
     fn from_mmap(mmap: Mmap, keys: TeaKeys) -> Result<Self> {
         // Decrypt and parse headers
         // Headers are at the start of the file, we need to decrypt them first
-        let base_header_size = 32 + 16; // EcfHeader + EraArchiveHeader minimum
+        let base_header_size: usize = 32 + 16; // EcfHeader + EraArchiveHeader minimum
 
         // Read and decrypt header area (at least first block)
-        let header_blocks = (base_header_size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE;
+        let header_blocks = base_header_size.div_ceil(TEA_BLOCK_SIZE);
         let header_bytes = header_blocks * TEA_BLOCK_SIZE;
 
         let mut decrypted_header = mmap[..header_bytes.min(mmap.len())].to_vec();
@@ -69,7 +69,7 @@ impl MmapEraArchive {
             chunk_headers_start + chunk_header_size * ecf_header.num_chunks as usize;
 
         // Decrypt full header area
-        let full_header_blocks = (total_header_size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE;
+        let full_header_blocks = total_header_size.div_ceil(TEA_BLOCK_SIZE);
         let full_header_bytes = full_header_blocks * TEA_BLOCK_SIZE;
 
         let mut full_header = mmap[..full_header_bytes.min(mmap.len())].to_vec();
@@ -112,7 +112,7 @@ impl MmapEraArchive {
 
         // Align to block boundaries for decryption
         let block_start = (offset / TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
-        let block_end = ((offset + size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
+        let block_end = (offset + size).div_ceil(TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
 
         let mut data = mmap[block_start..block_end.min(mmap.len())].to_vec();
         data.resize(block_end - block_start, 0);
@@ -170,7 +170,7 @@ impl MmapEraArchive {
 
         // Align to block boundaries
         let block_start = (offset / TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
-        let block_end = ((offset + size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
+        let block_end = (offset + size).div_ceil(TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
 
         let mut data = self.mmap[block_start..block_end.min(self.mmap.len())].to_vec();
         data.resize(block_end - block_start, 0);
@@ -183,7 +183,7 @@ impl MmapEraArchive {
     }
 
     /// Read compressed data without decompressing (thread-safe)
-    pub fn read_entry_compressed(&self, index: usize) -> Result<(Vec<u8>, u32, [u8; 16])> {
+    pub fn read_entry_compressed(&self, index: usize) -> Result<crate::CompressedEntryData> {
         let entry = self
             .entries
             .get(index)
@@ -196,7 +196,7 @@ impl MmapEraArchive {
         let size = entry.chunk.size as usize;
 
         let block_start = (offset / TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
-        let block_end = ((offset + size + TEA_BLOCK_SIZE - 1) / TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
+        let block_end = (offset + size).div_ceil(TEA_BLOCK_SIZE) * TEA_BLOCK_SIZE;
 
         let mut data = self.mmap[block_start..block_end.min(self.mmap.len())].to_vec();
         data.resize(block_end - block_start, 0);
@@ -233,7 +233,7 @@ impl MmapEraArchive {
     pub fn read_entries_compressed_parallel(
         &self,
         indices: &[usize],
-    ) -> Result<Vec<(Vec<u8>, u32, [u8; 16])>> {
+    ) -> Result<Vec<crate::CompressedEntryData>> {
         indices
             .par_iter()
             .map(|&idx| self.read_entry_compressed(idx))

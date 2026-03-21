@@ -382,7 +382,7 @@ impl<R: Read + Seek> EraArchive<R> {
     /// with metadata needed to write to another archive.
     ///
     /// Returns: (compressed_data, decompressed_size, tiger128_hash)
-    pub fn read_entry_compressed(&mut self, index: usize) -> Result<(Vec<u8>, u32, [u8; 16])> {
+    pub fn read_entry_compressed(&mut self, index: usize) -> Result<crate::CompressedEntryData> {
         let entry = self
             .entries
             .get(index)
@@ -419,7 +419,7 @@ impl<R: Read + Seek> EraArchive<R> {
     pub fn read_entries_compressed(
         &mut self,
         indices: &[usize],
-    ) -> Result<Vec<(Vec<u8>, u32, [u8; 16])>> {
+    ) -> Result<Vec<crate::CompressedEntryData>> {
         indices
             .iter()
             .map(|&idx| self.read_entry_compressed(idx))

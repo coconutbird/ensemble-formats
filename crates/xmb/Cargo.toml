@@ -10,3 +10,4 @@ ecf.workspace = true
 byteorder.workspace = true
 thiserror.workspace = true
 quick-xml.workspace = true
+zerocopy.workspace = true

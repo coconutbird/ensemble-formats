@@ -13,7 +13,7 @@ byteorder = { workspace = true }
 thiserror = { workspace = true }
 texture2ddecoder = { workspace = true }
 half.workspace = true
+zerocopy.workspace = true
 
 [dev-dependencies]
 era = { workspace = true }
-

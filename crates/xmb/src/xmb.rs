@@ -169,7 +169,7 @@ impl XmbWriter {
             let mut data = Vec::new();
             data.write_u32::<LittleEndian>(XMB_SIGNATURE)?;
             data.write_u32::<LittleEndian>(0)?; // padding
-                                                // Nodes BPackedArray (empty)
+            // Nodes BPackedArray (empty)
             data.write_u32::<LittleEndian>(0xFFFFFFFF)?;
             data.write_u32::<LittleEndian>(0)?;
             data.write_u64::<LittleEndian>(0)?;

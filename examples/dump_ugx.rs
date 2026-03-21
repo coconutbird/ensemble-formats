@@ -22,8 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Chunks ===");
     for (i, chunk) in ecf.chunks().iter().enumerate() {
-        println!("Chunk {}: ID=0x{:08X} offset=0x{:X} size=0x{:X} flags=0x{:02X} resource_flags=0x{:04X}",
-            i, chunk.id, chunk.offset, chunk.size, chunk.flags, chunk.resource_flags);
+        println!(
+            "Chunk {}: ID=0x{:08X} offset=0x{:X} size=0x{:X} flags=0x{:02X} resource_flags=0x{:04X}",
+            i, chunk.id, chunk.offset, chunk.size, chunk.flags, chunk.resource_flags
+        );
     }
 
     // Read and dump cached data chunk

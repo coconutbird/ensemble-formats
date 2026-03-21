@@ -1,8 +1,8 @@
 //! XTD reader implementation.
 
 use crate::{
-    ChunkMeta, Error, Result, XtdFile, XtdHeader, XtdVisualChunk, CHUNK_ALPHA, CHUNK_AO,
-    CHUNK_ATLAS, CHUNK_LIGHTING, CHUNK_TERRAIN, CHUNK_TESS, CHUNK_XTD_HEADER, XTD_VERSION,
+    CHUNK_ALPHA, CHUNK_AO, CHUNK_ATLAS, CHUNK_LIGHTING, CHUNK_TERRAIN, CHUNK_TESS,
+    CHUNK_XTD_HEADER, ChunkMeta, Error, Result, XTD_VERSION, XtdFile, XtdHeader, XtdVisualChunk,
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;

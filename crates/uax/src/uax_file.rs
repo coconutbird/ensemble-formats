@@ -3,7 +3,7 @@
 //! This module provides a container that preserves the raw Granny data
 //! while exposing parsed animation metadata for inspection and modification.
 
-use crate::types::{self, animation, file_info, GRANNY_HEADER_SIZE};
+use crate::types::{self, GRANNY_HEADER_SIZE, animation, file_info};
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use ecf::{EcfChunkHeader, EcfHeader, EcfReader};

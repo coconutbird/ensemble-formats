@@ -2,7 +2,7 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use crate::crypto::{tea_decrypt_block64, tea_encrypt_block64, TeaKeys, TEA_BLOCK_SIZE};
+use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64, tea_encrypt_block64};
 
 /// A writer that encrypts data using TEA cipher before writing
 pub struct EncryptWriter<W> {

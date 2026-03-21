@@ -18,7 +18,7 @@ use std::io::Cursor;
 use crate::error::{Error, Result};
 use crate::types::{Attribute, Node};
 use crate::variant::{
-    unpack_float24, unpack_fract24, unpack_int24, Variant, OFFSET_FLAG, UNSIGNED_FLAG,
+    OFFSET_FLAG, UNSIGNED_FLAG, Variant, unpack_float24, unpack_fract24, unpack_int24,
 };
 
 /// BPackedHeader signature for little-endian data.

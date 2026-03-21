@@ -36,11 +36,11 @@ pub use ugx::{GrannyBone, GrannyMesh, UgxGeom};
 
 mod gltf_export;
 pub use gltf_export::{
-    export_to_gltf, export_to_gltf_with_buffer_name, GltfExport, GltfExportOptions,
+    GltfExport, GltfExportOptions, export_to_gltf, export_to_gltf_with_buffer_name,
 };
 
 mod gltf_import;
-pub use gltf_import::{import_from_gltf, GltfImportOptions};
+pub use gltf_import::{GltfImportOptions, import_from_gltf};
 
 mod ugx_writer;
 pub use ugx_writer::write_ugx;

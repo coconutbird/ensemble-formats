@@ -32,7 +32,7 @@ mod xmb;
 pub use error::{Error, Result};
 pub use types::{Attribute, Node, XmbData, XmbFormat};
 pub use variant::Variant;
-pub use xmb::{XmbReader, XmbWriter, XMB_ECF_FILE_ID, XMB_SIGNATURE, XMX_PACKED_DATA_CHUNK_ID};
+pub use xmb::{XMB_ECF_FILE_ID, XMB_SIGNATURE, XMX_PACKED_DATA_CHUNK_ID, XmbReader, XmbWriter};
 
 #[cfg(test)]
 mod tests {

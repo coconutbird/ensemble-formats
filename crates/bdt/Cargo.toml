@@ -10,3 +10,4 @@ authors.workspace = true
 [dependencies]
 byteorder.workspace = true
 thiserror.workspace = true
+zerocopy.workspace = true

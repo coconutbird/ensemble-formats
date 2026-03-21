@@ -3,7 +3,7 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::{
-    chunk_resource_flags, decompress_bdeflate_stream, EcfChunkHeader, EcfHeader, Error, Result,
+    EcfChunkHeader, EcfHeader, Error, Result, chunk_resource_flags, decompress_bdeflate_stream,
 };
 
 /// ECF file reader.

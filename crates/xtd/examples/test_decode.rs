@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("File size: {} bytes", data.len());
 
     // Debug: print first 64 bytes of atlas data in hex
-    let atlas_offset = 0x8888; // Approximate - we'll get exact from the file
+    let _atlas_offset = 0x8888; // Approximate - we'll get exact from the file
 
     let file = XtdReader::read(&data)?;
     println!("\n=== XTD Header ===");
@@ -40,8 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n  Raw atlas data (first 64 bytes after header):");
     let atlas_data = &file.atlas_data;
     print!("    Header bytes: ");
-    for i in 0..32.min(atlas_data.len()) {
-        print!("{:02x} ", atlas_data[i]);
+    for byte in atlas_data.iter().take(32) {
+        print!("{:02x} ", byte);
     }
     println!();
 

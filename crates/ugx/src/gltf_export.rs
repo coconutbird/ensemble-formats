@@ -13,7 +13,7 @@
 //! Key insight: column-major storage of `M_gl` = row-major storage of `M_dx`,
 //! because `M_gl = M_dx^T`. So we just write DX matrix rows flat for glTF.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use gltf_json as json;
 use json::validation::Checked::Valid;
 
@@ -1939,7 +1939,7 @@ mod tests {
     #[test]
     fn test_material_names_and_textures_exported() {
         use crate::types::*;
-        use crate::univert_packer::{UnivertPacker, MAX_UV};
+        use crate::univert_packer::{MAX_UV, UnivertPacker};
         use crate::vertex_element::VertexElementType;
 
         // Build a minimal geometry with materials
@@ -2092,18 +2092,22 @@ mod tests {
         assert!(image_uris.contains(&"art/glass_emit.ddx"));
 
         // Verify first material has diffuse and normal textures
-        assert!(root.materials[0]
-            .pbr_metallic_roughness
-            .base_color_texture
-            .is_some());
+        assert!(
+            root.materials[0]
+                .pbr_metallic_roughness
+                .base_color_texture
+                .is_some()
+        );
         assert!(root.materials[0].normal_texture.is_some());
         assert!(root.materials[0].emissive_texture.is_none());
 
         // Verify second material has diffuse and emissive textures
-        assert!(root.materials[1]
-            .pbr_metallic_roughness
-            .base_color_texture
-            .is_some());
+        assert!(
+            root.materials[1]
+                .pbr_metallic_roughness
+                .base_color_texture
+                .is_some()
+        );
         assert!(root.materials[1].normal_texture.is_none());
         assert!(root.materials[1].emissive_texture.is_some());
 

@@ -33,7 +33,7 @@ impl DdxTexture {
         match self.info.data_format {
             DataFormat::Dxt1 => {
                 // DXT1/BC1: 4x4 blocks, 8 bytes per block
-                let expected_size = ((width + 3) / 4) * ((height + 3) / 4) * 8;
+                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 8;
                 if self.data.len() < expected_size {
                     return Err(Error::DecompressionError(format!(
                         "DXT1 data too small: expected {} bytes, have {}",
@@ -51,7 +51,7 @@ impl DdxTexture {
             }
             DataFormat::Dxt3 => {
                 // DXT3/BC2: 4x4 blocks, 16 bytes per block
-                let expected_size = ((width + 3) / 4) * ((height + 3) / 4) * 16;
+                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 16;
                 if self.data.len() < expected_size {
                     return Err(Error::DecompressionError(format!(
                         "DXT3 data too small: expected {} bytes, have {}",
@@ -69,7 +69,7 @@ impl DdxTexture {
             }
             DataFormat::Dxt5 | DataFormat::Dxt5N | DataFormat::Dxt5Y | DataFormat::Dxt5H => {
                 // DXT5/BC3: 4x4 blocks, 16 bytes per block
-                let expected_size = ((width + 3) / 4) * ((height + 3) / 4) * 16;
+                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 16;
                 if self.data.len() < expected_size {
                     return Err(Error::DecompressionError(format!(
                         "DXT5 data too small: expected {} bytes, have {}",
@@ -87,7 +87,7 @@ impl DdxTexture {
             }
             DataFormat::Dxn => {
                 // DXN/BC5: 4x4 blocks, 16 bytes per block (two-channel normal maps)
-                let expected_size = ((width + 3) / 4) * ((height + 3) / 4) * 16;
+                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 16;
                 if self.data.len() < expected_size {
                     return Err(Error::DecompressionError(format!(
                         "DXN data too small: expected {} bytes, have {}",

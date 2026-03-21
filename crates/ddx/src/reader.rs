@@ -6,8 +6,8 @@
 
 use crate::format::DataFormat;
 use crate::header::{
-    DdxHeader, Platform, ResourceType, DDX_ECF_FILE_ID, DDX_HEADER_CHUNK_ID, DDX_MIP0_CHUNK_ID,
-    DDX_MIPCHAIN_CHUNK_ID,
+    DDX_ECF_FILE_ID, DDX_HEADER_CHUNK_ID, DDX_MIP0_CHUNK_ID, DDX_MIPCHAIN_CHUNK_ID, DdxHeader,
+    Platform, ResourceType,
 };
 use crate::{Error, Result};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
@@ -281,13 +281,13 @@ fn decompress_texture(
     }
 
     // Decompress mip chain if present and requested
-    if let Some(mipchain) = mipchain_data {
-        if header.mip_chain_size > 0 {
-            let mut mipchain_cursor = mipchain;
-            for _face in 0..header.num_faces() {
-                for _mip in 0..header.mip_chain_size {
-                    decompress_mip_data(&mut mipchain_cursor, &mut output)?;
-                }
+    if let Some(mipchain) = mipchain_data
+        && header.mip_chain_size > 0
+    {
+        let mut mipchain_cursor = mipchain;
+        for _face in 0..header.num_faces() {
+            for _mip in 0..header.mip_chain_size {
+                decompress_mip_data(&mut mipchain_cursor, &mut output)?;
             }
         }
     }

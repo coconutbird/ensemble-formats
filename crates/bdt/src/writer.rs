@@ -8,8 +8,8 @@ use byteorder::{BigEndian, LittleEndian, WriteBytesExt};
 use crate::error::Result;
 use crate::types::Node;
 use crate::variant::{
-    pack_float24, pack_int24, pack_uint24, unpack_float24, Variant, VariantType, OFFSET_FLAG,
-    UNSIGNED_FLAG,
+    OFFSET_FLAG, UNSIGNED_FLAG, Variant, VariantType, pack_float24, pack_int24, pack_uint24,
+    unpack_float24,
 };
 
 /// Packed document writer for BBinaryDataTree format.

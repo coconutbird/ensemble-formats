@@ -2,9 +2,9 @@
 //!
 //! Writes textures in standard DDS format (Definitive Edition compatible).
 
+use crate::Result;
 use crate::format::DataFormat;
 use crate::reader::{DdxTexture, TextureInfo};
-use crate::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::Write;
 

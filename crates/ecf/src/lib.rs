@@ -24,8 +24,8 @@ pub use header::{EcfChunkHeader, EcfHeader};
 
 mod deflate_stream;
 pub use deflate_stream::{
-    compress_bdeflate_stream, decompress_bdeflate_stream, END_MAGIC, HEADER_SIZE, SIGNATURE,
-    SIGNATURE_INVERTED,
+    END_MAGIC, HEADER_SIZE, SIGNATURE, SIGNATURE_INVERTED, compress_bdeflate_stream,
+    decompress_bdeflate_stream,
 };
 
 mod reader;

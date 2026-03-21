@@ -3,8 +3,8 @@
 use std::io::{Seek, Write};
 
 use crate::{
-    adler32, align_up, chunk_resource_flags, compress_bdeflate_stream, EcfChunkHeader, EcfHeader,
-    Result, ECF_HEADER_MAGIC,
+    ECF_HEADER_MAGIC, EcfChunkHeader, EcfHeader, Result, adler32, align_up, chunk_resource_flags,
+    compress_bdeflate_stream,
 };
 
 /// Default alignment for chunks (16-byte, log2 = 4).

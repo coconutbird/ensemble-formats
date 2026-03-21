@@ -35,17 +35,20 @@ mod writer;
 
 pub use buffer_pool::{BufferPool, PooledBuffer};
 pub use crypto::{
-    tea_decrypt_data_parallel, tea_encrypt_data_parallel, TeaKeys, ARCHIVE_PASSWORD, TEA_BLOCK_SIZE,
+    ARCHIVE_PASSWORD, TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_data_parallel, tea_encrypt_data_parallel,
 };
 pub use decrypt_reader::DecryptReader;
 pub use encrypt_writer::EncryptWriter;
 pub use era::*;
 pub use error::*;
 pub use mmap::MmapEraArchive;
-pub use writer::{compress_file_data, CompressedData, EraWriter};
+pub use writer::{CompressedData, EraWriter, compress_file_data};
 
 // Re-export ECF types that are used in the public API
 pub use ecf::{CompressionMethod, EcfChunkHeader, EcfHeader};
+
+/// Compressed entry data: (compressed_bytes, decompressed_size, tiger128_hash)
+pub type CompressedEntryData = (Vec<u8>, u32, [u8; 16]);
 
 #[cfg(test)]
 mod tests {
@@ -377,20 +380,20 @@ mod tests {
             let term_lower = term.to_lowercase();
             let mut count = 0;
             for (i, entry) in archive.iter().enumerate() {
-                if let Some(ref name) = entry.filename {
-                    if name.to_lowercase().contains(&term_lower) {
-                        println!(
-                            "  {}: {} ({} bytes -> {} bytes)",
-                            i,
-                            name,
-                            entry.compressed_size(),
-                            entry.decompressed_size()
-                        );
-                        count += 1;
-                        if count > 20 {
-                            println!("  ... and more");
-                            break;
-                        }
+                if let Some(ref name) = entry.filename
+                    && name.to_lowercase().contains(&term_lower)
+                {
+                    println!(
+                        "  {}: {} ({} bytes -> {} bytes)",
+                        i,
+                        name,
+                        entry.compressed_size(),
+                        entry.decompressed_size()
+                    );
+                    count += 1;
+                    if count > 20 {
+                        println!("  ... and more");
+                        break;
                     }
                 }
             }

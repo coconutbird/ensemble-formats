@@ -40,9 +40,9 @@ pub use decode::DecodedTexture;
 pub use error::{Error, Result};
 pub use format::DataFormat;
 pub use header::{
-    flags, DdxHeader, Platform, ResourceType, DDX_CURRENT_VERSION, DDX_ECF_FILE_ID,
-    DDX_HEADER_CHUNK_ID, DDX_HEADER_MAGIC, DDX_MIN_REQUIRED_VERSION, DDX_MIP0_CHUNK_ID,
-    DDX_MIPCHAIN_CHUNK_ID,
+    DDX_CURRENT_VERSION, DDX_ECF_FILE_ID, DDX_HEADER_CHUNK_ID, DDX_HEADER_MAGIC,
+    DDX_MIN_REQUIRED_VERSION, DDX_MIP0_CHUNK_ID, DDX_MIPCHAIN_CHUNK_ID, DdxHeader, Platform,
+    ResourceType, flags,
 };
 pub use reader::{DdxTexture, TextureInfo};
 

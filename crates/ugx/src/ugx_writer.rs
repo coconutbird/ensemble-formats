@@ -295,9 +295,11 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
                     if section.rigid_bone_index >= 0
                         && (section.rigid_bone_index as usize) < bone_count
                     {
-                        vec![geom.granny_bones[section.rigid_bone_index as usize]
-                            .name
-                            .clone()]
+                        vec![
+                            geom.granny_bones[section.rigid_bone_index as usize]
+                                .name
+                                .clone(),
+                        ]
                     } else {
                         vec![]
                     }
@@ -878,7 +880,7 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
             string_offsets.insert(fixup.string.clone(), offset);
             cursor.write_all(fixup.string.as_bytes())?;
             cursor.write_u8(0)?; // null terminator
-                                 // Pad to 2-byte alignment for the next string
+            // Pad to 2-byte alignment for the next string
             pad_to_alignment(&mut cursor, 2)?;
         }
     }
@@ -955,7 +957,7 @@ fn fixup_packed_array_header(
     cursor.seek(std::io::SeekFrom::Start(header_pos as u64))?;
     cursor.write_u32::<LittleEndian>(count)?;
     cursor.write_u32::<LittleEndian>(0)?; // pad
-                                          // Use 0xFFFFFFFF as NULL marker for empty arrays (verified from IDA)
+    // Use 0xFFFFFFFF as NULL marker for empty arrays (verified from IDA)
     let final_offset = if count == 0 { 0xFFFFFFFF } else { offset };
     cursor.write_u64::<LittleEndian>(final_offset)?;
     Ok(())
@@ -1065,7 +1067,7 @@ mod tests {
     use super::*;
     use crate::types::*;
     use crate::ugx::GrannyBone;
-    use crate::univert_packer::{UnivertPacker, UnpackedVertex, MAX_UV};
+    use crate::univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
     use crate::vertex_element::VertexElementType;
 
     /// Create a minimal test UgxGeom with one section and two bones.
@@ -1457,16 +1459,15 @@ mod tests {
             [0.0, -1.0, 0.0, 0.0],
             [0.5, -2.0, 1.5, 1.0],
         ];
-        for row in 0..4 {
-            for col in 0..4 {
+        for (row, expected_row) in expected_rows.iter().enumerate() {
+            for (col, expected_val) in expected_row.iter().enumerate() {
                 assert!(
-                    (gb1.inverse_world_matrix.rows[row][col] - expected_rows[row][col]).abs()
-                        < 1e-6,
+                    (gb1.inverse_world_matrix.rows[row][col] - expected_val).abs() < 1e-6,
                     "gb1 matrix[{}][{}] = {}, expected {}",
                     row,
                     col,
                     gb1.inverse_world_matrix.rows[row][col],
-                    expected_rows[row][col]
+                    expected_val
                 );
             }
         }

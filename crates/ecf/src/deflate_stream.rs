@@ -21,9 +21,9 @@
 //! - end magic (4 bytes)
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
+use flate2::Compression;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
-use flate2::Compression;
 use std::io::{Cursor, Read, Write};
 
 use crate::checksum::adler32;

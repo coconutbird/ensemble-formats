@@ -86,8 +86,8 @@ const R8_TILE_SIZE: usize = 8;
 fn untile_r8_texture(tiled: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut linear = vec![0u8; width * height];
 
-    let tiles_x = (width + R8_TILE_SIZE - 1) / R8_TILE_SIZE;
-    let tiles_y = (height + R8_TILE_SIZE - 1) / R8_TILE_SIZE;
+    let tiles_x = width.div_ceil(R8_TILE_SIZE);
+    let tiles_y = height.div_ceil(R8_TILE_SIZE);
 
     for tile_y in 0..tiles_y {
         for tile_x in 0..tiles_x {

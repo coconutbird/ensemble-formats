@@ -7,12 +7,12 @@
 //! Our glTF export writes DX row-major matrices as flat rows into glTF's column-major
 //! storage. On import we reverse this: read 16 floats from glTF as DX row-major directly.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 
 use crate::error::{Error, Result};
 use crate::types::*;
 use crate::ugx::{GrannyBone, GrannyMesh, UgxGeom};
-use crate::univert_packer::{UnivertPacker, UnpackedVertex, MAX_UV};
+use crate::univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
 use crate::vertex_element::VertexElementType;
 
 /// Import options for glTF → UGX conversion.
@@ -436,15 +436,14 @@ fn resolve_buffer(root: &gltf_json::Root, external_data: Option<&[u8]>) -> Resul
     }
 
     // Try to decode from the first buffer's URI (base64 embedded)
-    if let Some(buffer) = root.buffers.first() {
-        if let Some(ref uri) = buffer.uri {
-            if let Some(base64_data) = uri.strip_prefix("data:application/octet-stream;base64,") {
-                let decoded = STANDARD.decode(base64_data).map_err(|e| {
-                    Error::UnsupportedFormat(format!("Invalid base64 buffer: {}", e))
-                })?;
-                return Ok(decoded);
-            }
-        }
+    if let Some(buffer) = root.buffers.first()
+        && let Some(ref uri) = buffer.uri
+        && let Some(base64_data) = uri.strip_prefix("data:application/octet-stream;base64,")
+    {
+        let decoded = STANDARD
+            .decode(base64_data)
+            .map_err(|e| Error::UnsupportedFormat(format!("Invalid base64 buffer: {}", e)))?;
+        return Ok(decoded);
     }
 
     // No buffer data available — might be a mesh with no buffer
@@ -656,7 +655,7 @@ fn import_primitive(
         }
 
         // Joints and weights
-        if let (Some(ref j), Some(ref w)) = (&joints, &weights) {
+        if let (Some(j), Some(w)) = (&joints, &weights) {
             let mut bone_indices = [0u16; 4];
             let mut bone_weights = [0.0f32; 4];
 
@@ -764,11 +763,11 @@ fn import_skeleton(
                 continue;
             }
             let other_node = &root.nodes[other_node_idx.value()];
-            if let Some(ref children) = other_node.children {
-                if children.iter().any(|c| c.value() == joint_node_idx.value()) {
-                    parent_index = other_idx as i32;
-                    break;
-                }
+            if let Some(ref children) = other_node.children
+                && children.iter().any(|c| c.value() == joint_node_idx.value())
+            {
+                parent_index = other_idx as i32;
+                break;
             }
         }
 
@@ -942,12 +941,12 @@ fn read_material_extras(
             if i >= MapType::NUM_TYPES {
                 break;
             }
-            if let serde_json::Value::Array(v) = val {
-                if v.len() >= 3 {
-                    uvw_velocity[i][0] = v[0].as_f64().unwrap_or(0.0) as f32;
-                    uvw_velocity[i][1] = v[1].as_f64().unwrap_or(0.0) as f32;
-                    uvw_velocity[i][2] = v[2].as_f64().unwrap_or(0.0) as f32;
-                }
+            if let serde_json::Value::Array(v) = val
+                && v.len() >= 3
+            {
+                uvw_velocity[i][0] = v[0].as_f64().unwrap_or(0.0) as f32;
+                uvw_velocity[i][1] = v[1].as_f64().unwrap_or(0.0) as f32;
+                uvw_velocity[i][2] = v[2].as_f64().unwrap_or(0.0) as f32;
             }
         }
     }
@@ -1026,7 +1025,7 @@ fn compute_bounds(vertices: &[UnpackedVertex]) -> (AABB, Sphere) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gltf_export::{export_to_gltf, GltfExportOptions};
+    use crate::gltf_export::{GltfExportOptions, export_to_gltf};
 
     /// Create a test UgxGeom with vertices, bones, and skin data.
     fn make_test_geom() -> UgxGeom {
@@ -1473,7 +1472,9 @@ mod tests {
                     assert!(
                         fin.bone_indices[i] > 0,
                         "vertex {} bone_indices[{}] should be valid (>0) for game compatibility, got {}",
-                        vi, i, fin.bone_indices[i]
+                        vi,
+                        i,
+                        fin.bone_indices[i]
                     );
                 }
             }
@@ -2129,7 +2130,7 @@ mod tests {
 
     #[test]
     fn test_material_texture_roundtrip() {
-        use crate::gltf_export::{export_to_gltf, GltfExportOptions};
+        use crate::gltf_export::{GltfExportOptions, export_to_gltf};
 
         // Build a UGX with materials that have texture maps
         let mut geom = make_test_geom();
