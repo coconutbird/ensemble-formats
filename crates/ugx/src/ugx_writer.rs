@@ -802,8 +802,11 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- Bone remap data ----
-    // Write bone remap arrays for sections that have them, and fix up offsets
+    // Write bone remap arrays for sections that have them, and fix up offsets.
+    // Game's per-section rebase (sub_1406DA1B0) checks bone remap offset is 4-byte aligned.
     for &(header_pos, section_idx) in &bone_remap_fixups {
+        // Pad to 4-byte alignment before each bone remap block
+        pad_to_alignment(&mut cursor, 4)?;
         let remap_offset = cursor.stream_position()?;
         cursor.write_all(&geom.sections[section_idx].bone_remap)?;
         // Fix up the offset in the packed array header (at header_pos + 8 for the u64 offset)
@@ -814,6 +817,8 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- Bone data ----
+    // Game's bones unpacker (sub_1406D8730) checks offset is 8-byte aligned.
+    pad_to_alignment(&mut cursor, 8)?;
     let bones_offset = cursor.stream_position()?;
     let num_bones = geom.bones.len() as u32;
 
@@ -840,6 +845,8 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- Bone bounds data ----
+    // Game's bounds unpacker (sub_1406D8610) checks offset is 4-byte aligned.
+    pad_to_alignment(&mut cursor, 4)?;
     let bounds_low_offset = cursor.stream_position()?;
     let num_bone_bounds = geom.bone_bounds.len() as u32;
     for bb in &geom.bone_bounds {
@@ -848,6 +855,7 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         }
     }
 
+    pad_to_alignment(&mut cursor, 4)?;
     let bounds_high_offset = cursor.stream_position()?;
     for bb in &geom.bone_bounds {
         for &v in &bb.max {
@@ -856,7 +864,12 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     }
 
     // ---- String table ----
-    // Deduplicate strings and assign offsets
+    // Deduplicate strings and assign offsets.
+    // Game's rebase functions check string offsets for 2-byte alignment:
+    // - sub_1406DA1B0: pack_order (section+0x38) and decl_order (section+0x40) checked with (& 1)
+    // - sub_1406D8730: bone name (bone+0x00) checked with (& 1)
+    // Each string entry must be padded to 2-byte alignment.
+    pad_to_alignment(&mut cursor, 2)?;
     let mut string_offsets: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
     for fixup in &string_fixups {
@@ -865,6 +878,8 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
             string_offsets.insert(fixup.string.clone(), offset);
             cursor.write_all(fixup.string.as_bytes())?;
             cursor.write_u8(0)?; // null terminator
+                                 // Pad to 2-byte alignment for the next string
+            pad_to_alignment(&mut cursor, 2)?;
         }
     }
 
@@ -899,6 +914,26 @@ fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     )?;
 
     Ok(buf)
+}
+
+/// Pad the cursor position to the given byte alignment.
+///
+/// The game's rebase functions enforce strict alignment on offsets within the
+/// cached data chunk. Misaligned offsets cause the rebase to silently fail,
+/// resulting in invisible models. Required alignments (from IDA):
+/// - Packed array offsets (sections, bones): 8-byte
+/// - Bone remap data, bone bounds: 4-byte
+/// - String offsets (bone names, pack_order, decl_order): 2-byte
+fn pad_to_alignment<W: Write + Seek>(writer: &mut W, alignment: u64) -> Result<()> {
+    let pos = writer.stream_position()?;
+    let remainder = pos % alignment;
+    if remainder != 0 {
+        let padding = alignment - remainder;
+        for _ in 0..padding {
+            writer.write_u8(0)?;
+        }
+    }
+    Ok(())
 }
 
 /// Write a placeholder packed array header (16 bytes: u32 count, u32 pad, u64 offset).

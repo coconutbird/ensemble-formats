@@ -16,7 +16,7 @@ use crate::era::{EraArchiveHeader, EraChunkExtra};
 use crate::error::Result;
 
 /// ERA file ID constant
-const ERA_FILE_ID: u32 = 0x0076C900;
+const ERA_FILE_ID: u32 = 0x17FDBA9C;
 
 /// ERA chunk ID (used for both filename table and file entries)
 const ERA_CHUNK_ID: u64 = 0x8DAFB100;

@@ -182,7 +182,12 @@ impl XttLinker {
             )));
         }
 
-        // Decode each layer's alpha (starting from layer 1, layer 0 has no alpha)
+        // Decode each overlay layer's alpha (layer 0 is the base, no alpha needed).
+        // The alpha data packs 4 channels per slice. The base layer reserves
+        // channel 0 (unused), so the first overlay uses channel 1:
+        //   channel = layer_idx % 4,  slice = layer_idx / 4
+        // This is confirmed by the num_slices formula which allocates a slot
+        // for the base: ((num_splat_layers - 1) >> 2) + 1
         let mut alpha_maps = Vec::with_capacity(num_layers - 1);
 
         for layer_idx in 1..num_layers {
@@ -343,8 +348,10 @@ fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
 /// 3. Both buffers are passed to `processLinkerData` (0x14066D890), which stores
 ///    them using X-major chunk indexing: `gridZ + numXChunks * gridX`.
 fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Result<Vec<u8>> {
-    // layer_idx comes in 1-based (layer 1 = first overlay)
-    // Slice/channel calculation: layer 1 → slice 0, channel 1; layer 4 → slice 1, channel 0
+    // layer_idx is a 0-based index into the alpha texture channels.
+    // For splat overlays: caller passes (layer_idx - 1) so first overlay = 0.
+    // For decals: caller passes layer_idx directly (already 0-based).
+    // Slice/channel calculation: idx 0 → slice 0, channel 0; idx 4 → slice 1, channel 0
     let slice_idx = layer_idx / 4;
     let channel_idx = layer_idx % 4;
 
