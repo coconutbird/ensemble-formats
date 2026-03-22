@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 
 use tiger::{Digest, Tiger};
 
-use crate::era::{EraArchiveHeader, EraChunkExtra};
 use crate::error::Result;
+use crate::header::{EraArchiveHeader, EraChunkExtra};
 
 /// ERA file ID constant.
 const ERA_FILE_ID: u32 = 0x17FDBA9C;

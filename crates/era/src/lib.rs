@@ -25,8 +25,9 @@ extern crate alloc;
 
 pub mod buffer_pool;
 pub mod crypto;
-mod era;
 mod error;
+mod header;
+mod reader;
 mod writer;
 
 #[cfg(feature = "std")]
@@ -42,8 +43,9 @@ pub use crypto::{tea_decrypt_data_parallel, tea_encrypt_data_parallel};
 pub use decrypt_reader::DecryptReader;
 #[cfg(feature = "std")]
 pub use encrypt_writer::EncryptWriter;
-pub use era::*;
 pub use error::*;
+pub use header::*;
+pub use reader::*;
 pub use writer::{CompressedData, Writer, compress_file_data};
 
 #[cfg(test)]
