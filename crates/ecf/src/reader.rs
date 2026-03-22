@@ -16,9 +16,7 @@
 
 use alloc::vec::Vec;
 
-use crate::{
-    EcfChunkHeader, EcfHeader, Error, Result, chunk_resource_flags, decompress_bdeflate_stream,
-};
+use crate::{EcfChunkHeader, EcfHeader, Error, Result, decompress, resource_flags};
 
 /// Zero-copy ECF reader backed by a byte slice.
 pub struct EcfReader<'a> {
@@ -86,8 +84,8 @@ impl<'a> EcfReader<'a> {
         let raw = self.raw_chunk_data(index)?;
         let chunk = &self.chunks[index];
 
-        if (chunk.resource_flags & chunk_resource_flags::IS_DEFLATE_STREAM) != 0 {
-            decompress_bdeflate_stream(raw)
+        if (chunk.resource_flags & resource_flags::IS_DEFLATE_STREAM) != 0 {
+            decompress(raw)
         } else {
             Ok(raw.to_vec())
         }

@@ -180,9 +180,7 @@ impl EraEntry {
                     .map_err(|e| Error::DecompressionError(format!("deflate raw: {}", e)))?;
                 Ok(decompressed)
             }
-            CompressionMethod::DeflateStream => {
-                ecf::decompress_bdeflate_stream(compressed).map_err(Error::from)
-            }
+            CompressionMethod::DeflateStream => ecf::decompress(compressed).map_err(Error::from),
             CompressionMethod::Unknown(n) => Err(Error::DecompressionError(format!(
                 "unknown compression method: {}",
                 n

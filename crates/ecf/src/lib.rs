@@ -63,7 +63,7 @@ pub use header::{EcfChunkHeader, EcfChunkHeaderRaw, EcfHeader, EcfHeaderRaw};
 
 /// BDeflateStream compression/decompression.
 pub mod deflate_stream;
-pub use deflate_stream::{compress_bdeflate_stream, decompress_bdeflate_stream};
+pub use deflate_stream::{compress, decompress};
 
 mod reader;
 pub use reader::EcfReader;
@@ -77,16 +77,16 @@ pub use checksum::adler32;
 /// ECF header magic number (`0xDABA7737`).
 ///
 /// All ECF files begin with this 4-byte big-endian value.
-pub const ECF_HEADER_MAGIC: u32 = 0xDABA7737;
+pub const HEADER_MAGIC: u32 = 0xDABA7737;
 
 /// Byte-swapped header magic (`0x3777BADA`).
 ///
 /// Encountering this value at offset 0 indicates the file was written in
 /// little-endian byte order (not standard, but handled for robustness).
-pub const ECF_INVERTED_HEADER_MAGIC: u32 = 0x3777BADA;
+pub const HEADER_MAGIC_INVERTED: u32 = 0x3777BADA;
 
 /// Per-chunk resource flags stored in [`EcfChunkHeader::resource_flags`].
-pub mod chunk_resource_flags {
+pub mod resource_flags {
     /// Bit 0 — memory region is contiguous.
     pub const CONTIGUOUS: u16 = 1 << 0;
     /// Bit 1 — memory region is write-combined.
@@ -190,15 +190,15 @@ mod tests {
     #[test]
     fn test_bdeflate_stream_roundtrip_le() {
         let original = b"Test data for BDeflateStream compression - little endian".to_vec();
-        let compressed = compress_bdeflate_stream(&original, false).unwrap();
-        assert_eq!(decompress_bdeflate_stream(&compressed).unwrap(), original);
+        let compressed = compress(&original, false).unwrap();
+        assert_eq!(decompress(&compressed).unwrap(), original);
     }
 
     #[test]
     fn test_bdeflate_stream_roundtrip_be() {
         let original = b"Test data for BDeflateStream compression - big endian".to_vec();
-        let compressed = compress_bdeflate_stream(&original, true).unwrap();
-        assert_eq!(decompress_bdeflate_stream(&compressed).unwrap(), original);
+        let compressed = compress(&original, true).unwrap();
+        assert_eq!(decompress(&compressed).unwrap(), original);
     }
 
     #[test]

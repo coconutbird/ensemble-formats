@@ -36,7 +36,7 @@
 
 use zerocopy::{FromBytes, Immutable, KnownLayout, Ref};
 
-use crate::{CompressionMethod, ECF_HEADER_MAGIC, ECF_INVERTED_HEADER_MAGIC, Error, Result};
+use crate::{CompressionMethod, Error, HEADER_MAGIC, HEADER_MAGIC_INVERTED, Result};
 
 /// Raw on-disk ECF file header (32 bytes, big-endian).
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
@@ -70,7 +70,7 @@ pub struct EcfChunkHeaderRaw {
 /// Parsed ECF file header.
 #[derive(Debug, Clone, Default)]
 pub struct EcfHeader {
-    /// Header magic number (should be ECF_HEADER_MAGIC).
+    /// Header magic number (should be [`HEADER_MAGIC`](crate::HEADER_MAGIC)).
     pub magic: u32,
     /// Total header size including extra data.
     pub header_size: u32,
@@ -98,9 +98,9 @@ impl EcfHeader {
             Ref::from_prefix(data).map_err(|_| Error::UnexpectedEof)?;
 
         let magic = u32::from_be_bytes(raw.magic);
-        if magic != ECF_HEADER_MAGIC && magic != ECF_INVERTED_HEADER_MAGIC {
+        if magic != HEADER_MAGIC && magic != HEADER_MAGIC_INVERTED {
             return Err(Error::InvalidMagic {
-                expected: ECF_HEADER_MAGIC,
+                expected: HEADER_MAGIC,
                 found: magic,
             });
         }

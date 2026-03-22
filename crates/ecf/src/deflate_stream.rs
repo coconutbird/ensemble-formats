@@ -51,7 +51,7 @@ fn read_u64(data: &[u8], offset: usize, big_endian: bool) -> u64 {
 /// Decompress BDeflateStream format data.
 ///
 /// Automatically detects endianness from the signature.
-pub fn decompress_bdeflate_stream(data: &[u8]) -> Result<Vec<u8>> {
+pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < HEADER_SIZE {
         return Err(Error::DecompressionError(
             "BDeflateStream data too short".into(),
@@ -103,7 +103,7 @@ pub fn decompress_bdeflate_stream(data: &[u8]) -> Result<Vec<u8>> {
 /// # Arguments
 /// * `data` — Uncompressed data to compress
 /// * `big_endian` — If true, use big-endian format (Xbox 360); if false, little-endian (PC)
-pub fn compress_bdeflate_stream(data: &[u8], big_endian: bool) -> Result<Vec<u8>> {
+pub fn compress(data: &[u8], big_endian: bool) -> Result<Vec<u8>> {
     let src_bytes = data.len() as u64;
     let src_adler32 = adler32(data);
 

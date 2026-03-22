@@ -15,8 +15,7 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    ECF_HEADER_MAGIC, EcfChunkHeader, EcfHeader, Result, adler32, align_up, chunk_resource_flags,
-    compress_bdeflate_stream,
+    EcfChunkHeader, EcfHeader, HEADER_MAGIC, Result, adler32, align_up, compress, resource_flags,
 };
 
 /// Default alignment for chunks (16-byte, log2 = 4).
@@ -39,7 +38,7 @@ impl EcfWriter {
     pub fn with_alignment(file_id: u32, alignment_log2: u8) -> Self {
         Self {
             header: EcfHeader {
-                magic: ECF_HEADER_MAGIC,
+                magic: HEADER_MAGIC,
                 header_size: EcfHeader::SIZE as u32,
                 adler32: 0,
                 file_size: 0,
@@ -90,7 +89,7 @@ impl EcfWriter {
         big_endian: bool,
         alignment_log2: u8,
     ) -> Result<()> {
-        let wrapped = compress_bdeflate_stream(&data, big_endian)?;
+        let wrapped = compress(&data, big_endian)?;
         let chunk = EcfChunkHeader {
             id,
             offset: 0,
@@ -98,7 +97,7 @@ impl EcfWriter {
             adler32: adler32(&wrapped),
             flags: 0,
             alignment_log2,
-            resource_flags: chunk_resource_flags::IS_DEFLATE_STREAM,
+            resource_flags: resource_flags::IS_DEFLATE_STREAM,
         };
         self.chunks.push((chunk, wrapped));
         Ok(())
