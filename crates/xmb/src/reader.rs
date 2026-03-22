@@ -2,7 +2,7 @@
 //!
 //! The reader unwraps the ECF container, locates the packed data chunk,
 //! detects endianness from the 4-byte XMB signature, and delegates to
-//! [`bdt::PackedReader`] for the tree structure.
+//! [`bdt::Reader`] for the tree structure.
 //!
 //! # Example
 //!
@@ -17,7 +17,6 @@
 use crate::document::{Document, Format};
 use crate::error::{Error, Result};
 use crate::{ECF_FILE_ID, PACKED_DATA_CHUNK_ID, SIGNATURE};
-use bdt::PackedReader;
 
 /// XMB file reader.
 pub struct Reader;
@@ -76,14 +75,14 @@ impl Reader {
         // The packed document header starts after the 4-byte signature.
         // All internal pointers are absolute from data[0] (including the sig).
         if is_big_endian {
-            let root = PackedReader::read_be_at(data, 4)?;
+            let root = bdt::Reader::read_be_at(data, 4)?;
             Ok(Document {
                 root,
                 format: Format::Xbox360,
                 source_file: None,
             })
         } else {
-            let root = PackedReader::read_le_at(data, 4)?;
+            let root = bdt::Reader::read_le_at(data, 4)?;
             Ok(Document {
                 root,
                 format: Format::PC,

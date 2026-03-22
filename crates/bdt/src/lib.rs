@@ -12,10 +12,10 @@
 //! ## Example
 //!
 //! ```ignore
-//! use bdt::{PackedReader, Node};
+//! use bdt::{Reader, Node};
 //!
 //! // Read a packed document from raw bytes (e.g., from an ECF chunk)
-//! let node = PackedReader::read_le(&data)?;
+//! let node = Reader::read_le(&data)?;
 //! if let Some(root) = node {
 //!     for child in &root.children {
 //!         println!("{}: {:?}", child.name, child.get_attribute("Name"));
@@ -44,5 +44,9 @@ pub mod raw;
 
 mod compact;
 mod util;
-mod xmx;
-pub use xmx::{PackedReader, PackedWriter};
+
+mod reader;
+pub use reader::Reader;
+
+mod writer;
+pub use writer::Writer;

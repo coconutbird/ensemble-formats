@@ -17,7 +17,6 @@
 use crate::document::{Document, Format};
 use crate::error::Result;
 use crate::{ECF_FILE_ID, PACKED_DATA_CHUNK_ID, SIGNATURE};
-use bdt::PackedWriter;
 
 /// XMB file writer.
 pub struct Writer;
@@ -65,7 +64,7 @@ impl Writer {
     /// Layout: `[signature LE (4)] [bdt packed data with base offset 4]`
     fn build_packed_data_le(doc: &Document) -> Result<Vec<u8>> {
         if let Some(root) = &doc.root {
-            let bdt_data = PackedWriter::write_le_with_base(root, 4)?;
+            let bdt_data = bdt::Writer::write_le_with_base(root, 4)?;
 
             let mut data = Vec::with_capacity(4 + bdt_data.len());
             data.extend_from_slice(&SIGNATURE.to_le_bytes());
@@ -92,7 +91,7 @@ impl Writer {
     /// Layout: `[signature BE (4)] [bdt packed data with base offset 4]`
     fn build_packed_data_be(doc: &Document) -> Result<Vec<u8>> {
         if let Some(root) = &doc.root {
-            let bdt_data = PackedWriter::write_be_with_base(root, 4)?;
+            let bdt_data = bdt::Writer::write_be_with_base(root, 4)?;
 
             let mut data = Vec::with_capacity(4 + bdt_data.len());
             data.extend_from_slice(&SIGNATURE.to_be_bytes());
