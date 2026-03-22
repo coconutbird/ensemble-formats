@@ -36,8 +36,11 @@
 //! uax.set_duration(new_duration).unwrap();
 //!
 //! // Write back to file
-//! std::fs::write("modified.uax", uax.to_bytes().unwrap()).unwrap();
+//! std::fs::write("modified.uax", uax.to_bytes()).unwrap();
 //! ```
+
+#![no_std]
+extern crate alloc;
 
 mod error;
 pub use error::{Error, Result};

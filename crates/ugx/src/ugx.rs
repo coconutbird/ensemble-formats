@@ -98,13 +98,77 @@
 //! +0x48: end (total 84 bytes, differs from x64 in-memory which is 104 bytes)
 //! ```
 
-use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::Cursor;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use zerocopy::Ref;
 
 use crate::error::{Error, Result};
 use crate::types::*;
 use crate::univert_packer::{UnivertPacker, UnpackedVertex};
 use crate::vertex_element::VertexElementType;
+
+// ============================================================================
+// Slice-based read helpers (little-endian)
+// ============================================================================
+
+#[inline]
+fn read_u16_le(data: &[u8], pos: &mut usize) -> Result<u16> {
+    let end = *pos + 2;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("u16"),
+        });
+    }
+    let v = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
+    *pos = end;
+    Ok(v)
+}
+
+#[inline]
+fn read_u32_le(data: &[u8], pos: &mut usize) -> Result<u32> {
+    let end = *pos + 4;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("u32"),
+        });
+    }
+    let v = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
+    *pos = end;
+    Ok(v)
+}
+
+#[inline]
+fn read_i32_le(data: &[u8], pos: &mut usize) -> Result<i32> {
+    Ok(read_u32_le(data, pos)? as i32)
+}
+
+#[inline]
+fn read_u64_le(data: &[u8], pos: &mut usize) -> Result<u64> {
+    let end = *pos + 8;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("u64"),
+        });
+    }
+    let v = u64::from_le_bytes([
+        data[*pos],
+        data[*pos + 1],
+        data[*pos + 2],
+        data[*pos + 3],
+        data[*pos + 4],
+        data[*pos + 5],
+        data[*pos + 6],
+        data[*pos + 7],
+    ]);
+    *pos = end;
+    Ok(v)
+}
+
+#[inline]
+fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32> {
+    Ok(f32::from_bits(read_u32_le(data, pos)?))
+}
 
 // ============================================================================
 // ECF Chunk IDs for UGX Files
@@ -227,11 +291,11 @@ impl UgxGeom {
         let material_data = ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).ok();
 
         // Convert index buffer from bytes to u16
-        let mut ib_cursor = Cursor::new(&ib_data);
         let num_indices = ib_data.len() / 2;
         let mut index_buffer = Vec::with_capacity(num_indices);
+        let mut ib_pos = 0usize;
         for _ in 0..num_indices {
-            index_buffer.push(ib_cursor.read_u16::<LittleEndian>()?);
+            index_buffer.push(read_u16_le(&ib_data, &mut ib_pos)?);
         }
 
         // Parse cached data (pass the full slice for offset resolution)
@@ -270,14 +334,15 @@ impl UgxGeom {
         vertex_buffer: Vec<u8>,
         index_buffer: Vec<u16>,
     ) -> Result<Self> {
-        let mut cursor = Cursor::new(data);
+        // ====================================================================
+        // BHeader (64 bytes) - parsed via GeomHeaderRaw zerocopy overlay
+        // ====================================================================
+        let (hdr, rest): (Ref<_, GeomHeaderRaw>, _) =
+            Ref::from_prefix(data).map_err(|_| Error::UnexpectedEof {
+                context: String::from("GeomHeaderRaw"),
+            })?;
 
-        // ====================================================================
-        // BHeader (60 bytes) - corresponds to BUGXGeom::BHeader
-        // ====================================================================
-        //
-        // Read and verify header signature
-        let signature = cursor.read_u32::<LittleEndian>()?;
+        let signature = u32::from_le_bytes(hdr.signature);
         if signature != GEOM_HEADER_SIGNATURE {
             return Err(Error::InvalidSignature {
                 expected: GEOM_HEADER_SIGNATURE,
@@ -285,92 +350,62 @@ impl UgxGeom {
             });
         }
 
-        // Header fields (matches BHeader layout - 60 bytes total)
-        let rigid_bone_index = cursor.read_i32::<LittleEndian>()?;
+        let rigid_bone_index = i32::from_le_bytes(hdr.rigid_bone_index);
 
-        // Bounding sphere center (3 floats) + radius
         let bounding_sphere = Sphere {
             center: [
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
+                f32::from_le_bytes(hdr.sphere_center[0]),
+                f32::from_le_bytes(hdr.sphere_center[1]),
+                f32::from_le_bytes(hdr.sphere_center[2]),
             ],
-            radius: cursor.read_f32::<LittleEndian>()?,
+            radius: f32::from_le_bytes(hdr.sphere_radius),
         };
 
-        // AABB bounds (2 Vec3)
         let bounds = AABB {
             min: [
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
+                f32::from_le_bytes(hdr.aabb_min[0]),
+                f32::from_le_bytes(hdr.aabb_min[1]),
+                f32::from_le_bytes(hdr.aabb_min[2]),
             ],
             max: [
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
-                cursor.read_f32::<LittleEndian>()?,
+                f32::from_le_bytes(hdr.aabb_max[0]),
+                f32::from_le_bytes(hdr.aabb_max[1]),
+                f32::from_le_bytes(hdr.aabb_max[2]),
             ],
         };
 
-        // Instance data
-        let _max_instances = cursor.read_i16::<LittleEndian>()?;
-        let _instance_index_multiplier = cursor.read_i16::<LittleEndian>()?;
-        let _large_geom_bone_index = cursor.read_i16::<LittleEndian>()?;
+        let all_sections_rigid = hdr.all_sections_rigid != 0;
+        let global_bones = hdr.global_bones != 0;
+        let all_sections_skinned = hdr.all_sections_skinned != 0;
+        let rigid_only = hdr.rigid_only != 0;
 
-        // Flags (4 bools, 1 byte each)
-        let all_sections_rigid = cursor.read_u8()? != 0;
-        let global_bones = cursor.read_u8()? != 0;
-        let all_sections_skinned = cursor.read_u8()? != 0;
-        let rigid_only = cursor.read_u8()? != 0;
+        // Advance pos past the header for subsequent reads
+        let pos = &mut (data.len() - rest.len());
 
-        // Padding to align to 8 bytes for 64-bit pointers
-        // Header is 58 bytes (0x3A), need 6 bytes padding to reach 0x40
-        let _padding = cursor.read_u16::<LittleEndian>()?; // 0x3A-0x3B
-        let _padding2 = cursor.read_u32::<LittleEndian>()?; // 0x3C-0x3F
+        // Packed arrays
+        let sections = Self::read_packed_sections(data, pos)?;
+        let bones = Self::read_packed_bones(data, pos)?;
 
-        // Now read packed arrays
-        // Format for 64-bit: uint32 size, uint32 padding, uint64 offset
-
-        // Sections array
-        let sections = Self::read_packed_sections(data, &mut cursor)?;
-
-        // Bones array (from cached data)
-        let bones = Self::read_packed_bones(data, &mut cursor)?;
-
-        // Parse granny bones if available (these have the correct inverse world matrices)
         let granny_bones = if let Some(ref granny) = granny_data {
             Self::parse_granny_bones(granny)?
         } else {
             Vec::new()
         };
 
-        // Parse granny meshes if available (mesh names and bone bindings for skinning)
         let granny_meshes = if let Some(ref granny) = granny_data {
             Self::parse_granny_meshes(granny)?
         } else {
             Vec::new()
         };
 
-        // TODO: Accessories — the packed array format is known (u32 count, u32 pad,
-        // u64 offset) but the per-accessory struct layout is unknown. Need to examine
-        // binary data from real UGX files that have accessories_count > 0 to
-        // reverse-engineer the struct fields. Once known, add an Accessory struct to
-        // types.rs, parse here, store in UgxGeom, and write back in ugx_writer.rs.
-        // The valid_accessories array likely mirrors the same struct or is a subset.
-        let accessories_count = cursor.read_u32::<LittleEndian>()?;
-        let _accessories_pad = cursor.read_u32::<LittleEndian>()?;
-        let _accessories_offset = cursor.read_u64::<LittleEndian>()?;
-        if accessories_count > 0 {
-            // Skip accessories - struct layout unknown
-        }
+        // Accessories (skip — struct layout unknown), read via PackedArrayRaw
+        let packed_arr_size = core::mem::size_of::<PackedArrayRaw>();
+        // accessories
+        *pos += packed_arr_size;
+        // validAccessories
+        *pos += packed_arr_size;
 
-        // Valid accessories array (skip — same unknown struct)
-        let _valid_accessories_count = cursor.read_u32::<LittleEndian>()?;
-        let _valid_accessories_pad = cursor.read_u32::<LittleEndian>()?;
-        let _valid_accessories_offset = cursor.read_u64::<LittleEndian>()?;
-
-        // Bone bounds low array
-        let bone_bounds = Self::read_bone_bounds(data, &mut cursor)?;
+        let bone_bounds = Self::read_bone_bounds(data, pos)?;
 
         // Read materials from BBinaryDataTree packed document (chunk 0x704)
         // Gracefully handle parse failures - some UGX files may have invalid/empty material chunks
@@ -416,24 +451,25 @@ impl UgxGeom {
     /// ```
     ///
     /// Each section is 152 bytes (stride), located contiguously at `offset`.
-    fn read_packed_sections(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Vec<Section>> {
-        // Read BPackedArray header (16 bytes)
-        let count = cursor.read_u32::<LittleEndian>()? as usize;
-        let _padding = cursor.read_u32::<LittleEndian>()?;
-        let offset = cursor.read_u64::<LittleEndian>()? as usize;
+    fn read_packed_sections(data: &[u8], pos: &mut usize) -> Result<Vec<Section>> {
+        // Read BPackedArray header (16 bytes) via zerocopy overlay
+        let (arr, _): (Ref<_, PackedArrayRaw>, _) =
+            Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+                context: String::from("PackedArrayRaw sections"),
+            })?;
+        let count = u32::from_le_bytes(arr.count) as usize;
+        let offset = u64::from_le_bytes(arr.offset) as usize;
+        *pos += core::mem::size_of::<PackedArrayRaw>();
 
         if count == 0 {
             return Ok(Vec::new());
         }
 
-        // Create a new cursor starting at the section data offset.
-        // This offset is relative to the BCachedData chunk start.
-        let mut section_cursor = Cursor::new(&data[offset..]);
+        let mut sec_pos = offset;
         let mut sections = Vec::with_capacity(count);
 
         for _ in 0..count {
-            // Each section is 152 bytes (0x98), read sequentially
-            sections.push(Self::read_packed_section(data, &mut section_cursor)?);
+            sections.push(Self::read_packed_section(data, &mut sec_pos)?);
         }
 
         Ok(sections)
@@ -457,40 +493,33 @@ impl UgxGeom {
     /// - +0x8C: mRigidOnly (i32)
     /// - +0x90: mGlobalBones (i32) - DE-specific, not in 2008 source
     /// - +0x94: mPadding (i32)
-    fn read_packed_section(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Section> {
-        // +0x00: mMaterialIndex
-        let material_index = cursor.read_i32::<LittleEndian>()?;
-        // +0x04: mAccessoryIndex
-        let accessory_index = cursor.read_i32::<LittleEndian>()?;
-        // +0x08: mMaxBones (always present in DE format)
-        let max_bones = cursor.read_i32::<LittleEndian>()?;
-        // +0x0C: mRigidBoneIndex
-        let rigid_bone_index = cursor.read_i32::<LittleEndian>()?;
-        // +0x10: mIBOfs (in indices, not bytes!)
-        let ib_offset = cursor.read_i32::<LittleEndian>()?;
-        // +0x14: mNumTris
-        let num_tris = cursor.read_i32::<LittleEndian>()?;
-        // +0x18: mVBOfs
-        let vb_offset = cursor.read_i32::<LittleEndian>()?;
-        // +0x1C: mVBBytes
-        let vb_bytes = cursor.read_i32::<LittleEndian>()?;
-        // +0x20: mVertSize
-        let vert_size = cursor.read_i32::<LittleEndian>()?;
-        // +0x24: mNumVerts
-        let num_verts = cursor.read_i32::<LittleEndian>()?;
+    fn read_packed_section(data: &[u8], pos: &mut usize) -> Result<Section> {
+        // First 40 bytes via zerocopy overlay
+        let (fixed, _): (Ref<_, PackedSectionFixedRaw>, _) = Ref::from_prefix(&data[*pos..])
+            .map_err(|_| Error::UnexpectedEof {
+                context: String::from("PackedSectionFixedRaw"),
+            })?;
+        let material_index = i32::from_le_bytes(fixed.material_index);
+        let accessory_index = i32::from_le_bytes(fixed.accessory_index);
+        let max_bones = i32::from_le_bytes(fixed.max_bones);
+        let rigid_bone_index = i32::from_le_bytes(fixed.rigid_bone_index);
+        let ib_offset = i32::from_le_bytes(fixed.ib_offset);
+        let num_tris = i32::from_le_bytes(fixed.num_tris);
+        let vb_offset = i32::from_le_bytes(fixed.vb_offset);
+        let vb_bytes = i32::from_le_bytes(fixed.vb_bytes);
+        let vert_size = i32::from_le_bytes(fixed.vert_size);
+        let num_verts = i32::from_le_bytes(fixed.num_verts);
+        *pos += core::mem::size_of::<PackedSectionFixedRaw>();
 
-        // +0x28: LocalToGlobalBoneRemap packed array (16 bytes)
-        let bone_remap_count = cursor.read_u32::<LittleEndian>()? as usize;
-        let _bone_remap_pad = cursor.read_u32::<LittleEndian>()?;
-        let bone_remap_offset = cursor.read_u64::<LittleEndian>()? as usize;
+        // +0x28: LocalToGlobalBoneRemap packed array (16 bytes) via zerocopy
+        let (remap_arr, _): (Ref<_, PackedArrayRaw>, _) =
+            Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+                context: String::from("PackedArrayRaw bone_remap"),
+            })?;
+        let bone_remap_count = u32::from_le_bytes(remap_arr.count) as usize;
+        let bone_remap_offset = u64::from_le_bytes(remap_arr.offset) as usize;
+        *pos += core::mem::size_of::<PackedArrayRaw>();
 
-        // TODO: Bone remap entry size is assumed to be 1 byte (u8) because vertex
-        // bone indices are stored as UByte4 (0-255 range). If a UGX file has a
-        // skeleton with >256 bones, the remap entries may be u16 or u32 instead.
-        // Need to verify with a real file that has bone remaps (check if
-        // bone_remap_count * 1 matches the data region size, or compare against
-        // max_bones). Also: the remap is currently stored but NOT applied during
-        // glTF export — see the TODO in gltf_export.rs for JOINTS_0 writing.
         let bone_remap = if bone_remap_count > 0
             && bone_remap_offset != 0xFFFFFFFFFFFFFFFF
             && bone_remap_offset + bone_remap_count <= data.len()
@@ -501,16 +530,11 @@ impl UgxGeom {
         };
 
         // +0x38: UnivertPacker (84 bytes)
-        let base_vert_packer = Self::read_packed_univert_packer(data, cursor)?;
+        let base_vert_packer = Self::read_packed_univert_packer(data, pos)?;
 
-        // +0x8C: mRigidOnly (i32)
-        let rigid_only = cursor.read_i32::<LittleEndian>()? != 0;
-
-        // +0x90: mGlobalBones (i32) - DE-specific field
-        let global_bones = cursor.read_i32::<LittleEndian>()? != 0;
-
-        // +0x94: mPadding (i32)
-        let _padding = cursor.read_i32::<LittleEndian>()?;
+        let rigid_only = read_i32_le(data, pos)? != 0;
+        let global_bones = read_i32_le(data, pos)? != 0;
+        let _padding = read_i32_le(data, pos)?;
 
         Ok(Section {
             material_index,
@@ -561,16 +585,10 @@ impl UgxGeom {
     ///        [5-12]=uv[0-7], [13]=indices, [14]=weights (wait that's 15!)
     ///        Actually: [5]=indices, [6]=weights, [7]=diffuse, [8]=index? TBD
     /// ```
-    fn read_packed_univert_packer(
-        data: &[u8],
-        cursor: &mut Cursor<&[u8]>,
-    ) -> Result<UnivertPacker> {
-        // +0x00: Packed string offset for pack_order
-        // +0x08: Packed string offset for decl_order
-        let pack_order_offset = cursor.read_u64::<LittleEndian>()? as usize;
-        let decl_order_offset = cursor.read_u64::<LittleEndian>()? as usize;
+    fn read_packed_univert_packer(data: &[u8], pos: &mut usize) -> Result<UnivertPacker> {
+        let pack_order_offset = read_u64_le(data, pos)? as usize;
+        let decl_order_offset = read_u64_le(data, pos)? as usize;
 
-        // Read the pack order string
         let pack_order =
             if pack_order_offset == 0xFFFFFFFFFFFFFFFF || pack_order_offset >= data.len() {
                 String::new()
@@ -585,23 +603,21 @@ impl UgxGeom {
                 Self::read_null_terminated_string(&data[decl_order_offset..])?
             };
 
-        // Vertex element types (each is uint32 for VertexElement::EType enum)
-        let pos_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
-        let basis_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
-        let basis_scale_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
-        let tangent_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
-        let normal_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
+        let pos_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        let basis_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        let basis_scale_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        let tangent_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        let normal_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
 
-        // UV array (8 elements)
         let mut uv_types = [VertexElementType::Ignore; 8];
         for uv_type in &mut uv_types {
-            *uv_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
+            *uv_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
         }
 
-        let indices_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
-        let weights_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
-        let diffuse_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
-        let index_type = VertexElementType::from_u32(cursor.read_u32::<LittleEndian>()?);
+        let indices_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        let weights_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        let diffuse_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        let index_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
 
         Ok(UnivertPacker {
             pack_order,
@@ -637,22 +653,24 @@ impl UgxGeom {
     /// - Bone names (the Granny chunk doesn't store names)
     /// - Parent indices (hierarchy)
     /// - Non-skinned/rigid meshes
-    fn read_packed_bones(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Vec<Bone>> {
-        // Read BPackedArray header (16 bytes)
-        let count = cursor.read_u32::<LittleEndian>()? as usize;
-        let _padding = cursor.read_u32::<LittleEndian>()?;
-        let offset = cursor.read_u64::<LittleEndian>()? as usize;
+    fn read_packed_bones(data: &[u8], pos: &mut usize) -> Result<Vec<Bone>> {
+        let (arr, _): (Ref<_, PackedArrayRaw>, _) =
+            Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+                context: String::from("PackedArrayRaw bones"),
+            })?;
+        let count = u32::from_le_bytes(arr.count) as usize;
+        let offset = u64::from_le_bytes(arr.offset) as usize;
+        *pos += core::mem::size_of::<PackedArrayRaw>();
 
         if count == 0 {
             return Ok(Vec::new());
         }
 
-        // Each bone is 80 bytes (0x50), read sequentially from offset
-        let mut bone_cursor = Cursor::new(&data[offset..]);
+        let mut bone_pos = offset;
         let mut bones = Vec::with_capacity(count);
 
         for _ in 0..count {
-            bones.push(Self::read_packed_bone(data, &mut bone_cursor)?);
+            bones.push(Self::read_packed_bone(data, &mut bone_pos)?);
         }
 
         Ok(bones)
@@ -665,29 +683,29 @@ impl UgxGeom {
     /// - +0x08: mModelToBone (4x4 matrix = 64 bytes)
     /// - +0x48: mParentIndex (int32)
     /// - +0x4C: padding (4 bytes)
-    fn read_packed_bone(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Bone> {
-        // +0x00: Packed string for name (uint64 offset)
-        let name_offset = cursor.read_u64::<LittleEndian>()? as usize;
+    fn read_packed_bone(data: &[u8], pos: &mut usize) -> Result<Bone> {
+        let (raw, _): (Ref<_, PackedBoneRaw>, _) =
+            Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+                context: String::from("PackedBoneRaw"),
+            })?;
+        *pos += core::mem::size_of::<PackedBoneRaw>();
+
+        let name_offset = u64::from_le_bytes(raw.name_offset) as usize;
         let name = if name_offset == 0xFFFFFFFFFFFFFFFF || name_offset >= data.len() {
             String::new()
         } else {
             Self::read_null_terminated_string(&data[name_offset..])?
         };
 
-        // +0x08: Transform matrix (4x4 floats = 64 bytes)
         let mut rows = [[0.0f32; 4]; 4];
-        for row in &mut rows {
-            for col in row {
-                *col = cursor.read_f32::<LittleEndian>()?;
+        for (i, row) in rows.iter_mut().enumerate() {
+            for (j, col) in row.iter_mut().enumerate() {
+                *col = f32::from_le_bytes(raw.model_to_bone[i * 4 + j]);
             }
         }
         let model_to_bone = Matrix4x4 { rows };
 
-        // +0x48: Parent index (int32)
-        let parent_index = cursor.read_i32::<LittleEndian>()?;
-
-        // +0x4C: Padding (4 bytes)
-        let _padding = cursor.read_u32::<LittleEndian>()?;
+        let parent_index = i32::from_le_bytes(raw.parent_index);
 
         Ok(Bone {
             name,
@@ -697,16 +715,24 @@ impl UgxGeom {
     }
 
     /// Read bone bounds (low and high arrays).
-    fn read_bone_bounds(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<Vec<AABB>> {
-        // Bone bounds low array
-        let low_count = cursor.read_u32::<LittleEndian>()? as usize;
-        let _low_pad = cursor.read_u32::<LittleEndian>()?;
-        let low_offset = cursor.read_u64::<LittleEndian>()? as usize;
+    fn read_bone_bounds(data: &[u8], pos: &mut usize) -> Result<Vec<AABB>> {
+        let packed_arr_size = core::mem::size_of::<PackedArrayRaw>();
 
-        // Bone bounds high array
-        let high_count = cursor.read_u32::<LittleEndian>()? as usize;
-        let _high_pad = cursor.read_u32::<LittleEndian>()?;
-        let high_offset = cursor.read_u64::<LittleEndian>()? as usize;
+        let (low_arr, _): (Ref<_, PackedArrayRaw>, _) =
+            Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+                context: String::from("PackedArrayRaw boneBoundsLow"),
+            })?;
+        let low_count = u32::from_le_bytes(low_arr.count) as usize;
+        let low_offset = u64::from_le_bytes(low_arr.offset) as usize;
+        *pos += packed_arr_size;
+
+        let (high_arr, _): (Ref<_, PackedArrayRaw>, _) =
+            Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+                context: String::from("PackedArrayRaw boneBoundsHigh"),
+            })?;
+        let high_count = u32::from_le_bytes(high_arr.count) as usize;
+        let high_offset = u64::from_le_bytes(high_arr.offset) as usize;
+        *pos += packed_arr_size;
 
         if low_count == 0 || low_count != high_count {
             return Ok(Vec::new());
@@ -715,26 +741,23 @@ impl UgxGeom {
         let mut bounds = Vec::with_capacity(low_count);
 
         for i in 0..low_count {
-            let low_idx = low_offset + i * 12;
-            let high_idx = high_offset + i * 12;
+            let mut low_pos = low_offset + i * 12;
+            let mut high_pos = high_offset + i * 12;
 
-            if low_idx + 12 > data.len() || high_idx + 12 > data.len() {
+            if low_pos + 12 > data.len() || high_pos + 12 > data.len() {
                 break;
             }
 
-            let mut low_cursor = Cursor::new(&data[low_idx..]);
-            let mut high_cursor = Cursor::new(&data[high_idx..]);
-
             bounds.push(AABB {
                 min: [
-                    low_cursor.read_f32::<LittleEndian>()?,
-                    low_cursor.read_f32::<LittleEndian>()?,
-                    low_cursor.read_f32::<LittleEndian>()?,
+                    read_f32_le(data, &mut low_pos)?,
+                    read_f32_le(data, &mut low_pos)?,
+                    read_f32_le(data, &mut low_pos)?,
                 ],
                 max: [
-                    high_cursor.read_f32::<LittleEndian>()?,
-                    high_cursor.read_f32::<LittleEndian>()?,
-                    high_cursor.read_f32::<LittleEndian>()?,
+                    read_f32_le(data, &mut high_pos)?,
+                    read_f32_le(data, &mut high_pos)?,
+                    read_f32_le(data, &mut high_pos)?,
                 ],
             });
         }
@@ -751,11 +774,11 @@ impl UgxGeom {
         let vb_end = vb_start + section.vb_bytes as usize;
         let vb_slice = &self.vertex_buffer[vb_start..vb_end];
 
-        let mut cursor = Cursor::new(vb_slice);
+        let mut vb_pos = 0usize;
         let mut vertices = Vec::with_capacity(section.num_verts as usize);
 
         for _ in 0..section.num_verts {
-            vertices.push(packer.unpack_vertex(&mut cursor)?);
+            vertices.push(packer.unpack_vertex(vb_slice, &mut vb_pos)?);
         }
 
         Ok(vertices)
@@ -903,33 +926,26 @@ impl UgxGeom {
             return Ok(Vec::new());
         }
 
-        // Read SkeletonCount from file_info+0x30
-        let mut cursor = Cursor::new(&granny[0x30..0x34]);
-        let skeleton_count = cursor.read_u32::<LittleEndian>()? as usize;
+        let mut p = 0x30usize;
+        let skeleton_count = read_u32_le(granny, &mut p)? as usize;
         if skeleton_count == 0 {
             return Ok(Vec::new());
         }
 
-        // Read Skeletons pointer (to skeleton pointer array) from file_info+0x34
-        let mut cursor = Cursor::new(&granny[0x34..0x3C]);
-        let skeleton_ptr_array_offs = cursor.read_u64::<LittleEndian>()? as usize;
-
+        let skeleton_ptr_array_offs = read_u64_le(granny, &mut p)? as usize;
         if skeleton_ptr_array_offs + 8 > granny.len() {
             return Ok(Vec::new());
         }
 
-        // Read first skeleton pointer from the array
-        let mut cursor = Cursor::new(&granny[skeleton_ptr_array_offs..skeleton_ptr_array_offs + 8]);
-        let skeleton_offs = cursor.read_u64::<LittleEndian>()? as usize;
-
+        let mut p = skeleton_ptr_array_offs;
+        let skeleton_offs = read_u64_le(granny, &mut p)? as usize;
         if skeleton_offs + 0x14 > granny.len() {
             return Ok(Vec::new());
         }
 
-        // Read BoneCount from skeleton+0x08 and Bones from skeleton+0x0C
-        let mut cursor = Cursor::new(&granny[skeleton_offs + 0x08..skeleton_offs + 0x14]);
-        let bones_len = cursor.read_u32::<LittleEndian>()? as usize;
-        let bones_offs = cursor.read_u64::<LittleEndian>()? as usize;
+        let mut p = skeleton_offs + 0x08;
+        let bones_len = read_u32_le(granny, &mut p)? as usize;
+        let bones_offs = read_u64_le(granny, &mut p)? as usize;
 
         if bones_len == 0 {
             return Ok(Vec::new());
@@ -944,31 +960,25 @@ impl UgxGeom {
                 break;
             }
 
-            // +0x00: nameOffs (uint64)
-            let mut cursor = Cursor::new(&granny[bone_start..bone_start + 12]);
-            let name_offs = cursor.read_u64::<LittleEndian>()? as usize;
-            // +0x08: parent (int32)
-            let parent_index = cursor.read_i32::<LittleEndian>()?;
+            let mut p = bone_start;
+            let name_offs = read_u64_le(granny, &mut p)? as usize;
+            let parent_index = read_i32_le(granny, &mut p)?;
 
-            // Read name from offset
             let name = if name_offs < granny.len() {
                 Self::read_null_terminated_string(&granny[name_offs..])?
             } else {
                 String::new()
             };
 
-            // +0x50 (80): InverseWorld4x4 matrix (16 floats)
-            let matrix_start = bone_start + 80;
-            if matrix_start + 64 > granny.len() {
+            let mut p = bone_start + 80;
+            if p + 64 > granny.len() {
                 break;
             }
-            let mut cursor = Cursor::new(&granny[matrix_start..matrix_start + 64]);
 
-            // Read 16 floats as row-major matrix (matches Python: matUnpack[0:4], [4:8], [8:12], [12:16])
             let mut rows = [[0.0f32; 4]; 4];
             for row in &mut rows {
                 for col in row {
-                    *col = cursor.read_f32::<LittleEndian>()?;
+                    *col = read_f32_le(granny, &mut p)?;
                 }
             }
             let inverse_world_matrix = Matrix4x4 { rows };
@@ -1007,31 +1017,26 @@ impl UgxGeom {
             return Ok(Vec::new());
         }
 
-        // Read ModelCount from file_info+0x60
-        let mut cursor = Cursor::new(&granny[0x60..0x64]);
-        let model_count = cursor.read_u32::<LittleEndian>()? as usize;
+        let mut p = 0x60usize;
+        let model_count = read_u32_le(granny, &mut p)? as usize;
         if model_count == 0 {
             return Ok(Vec::new());
         }
 
-        // Read Models pointer from file_info+0x64
-        let mut cursor = Cursor::new(&granny[0x64..0x6C]);
-        let models_ptr_offs = cursor.read_u64::<LittleEndian>()? as usize;
+        let models_ptr_offs = read_u64_le(granny, &mut p)? as usize;
         if models_ptr_offs + 8 > granny.len() {
             return Ok(Vec::new());
         }
 
-        // Read first model pointer
-        let mut cursor = Cursor::new(&granny[models_ptr_offs..models_ptr_offs + 8]);
-        let model_offs = cursor.read_u64::<LittleEndian>()? as usize;
+        let mut p = models_ptr_offs;
+        let model_offs = read_u64_le(granny, &mut p)? as usize;
         if model_offs + 0x60 > granny.len() {
             return Ok(Vec::new());
         }
 
-        // Read MeshBindingCount from Model+0x54 and MeshBindings from Model+0x58
-        let mut cursor = Cursor::new(&granny[model_offs + 0x54..model_offs + 0x60]);
-        let mesh_binding_count = cursor.read_u32::<LittleEndian>()? as usize;
-        let mesh_bindings_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+        let mut p = model_offs + 0x54;
+        let mesh_binding_count = read_u32_le(granny, &mut p)? as usize;
+        let mesh_bindings_ptr = read_u64_le(granny, &mut p)? as usize;
 
         if mesh_binding_count == 0 {
             return Ok(Vec::new());
@@ -1040,45 +1045,38 @@ impl UgxGeom {
         let mut meshes = Vec::with_capacity(mesh_binding_count);
 
         for i in 0..mesh_binding_count {
-            // Each mesh binding is a pointer to a mesh struct (8 bytes each)
-            let binding_ptr_pos = mesh_bindings_ptr + i * 8;
-            if binding_ptr_pos + 8 > granny.len() {
+            let mut bp = mesh_bindings_ptr + i * 8;
+            if bp + 8 > granny.len() {
                 break;
             }
 
-            let mut cursor = Cursor::new(&granny[binding_ptr_pos..binding_ptr_pos + 8]);
-            let mesh_offs = cursor.read_u64::<LittleEndian>()? as usize;
-
+            let mesh_offs = read_u64_le(granny, &mut bp)? as usize;
             if mesh_offs + 0x3C > granny.len() {
                 continue;
             }
 
-            // Read mesh name from Mesh+0x00
-            let mut cursor = Cursor::new(&granny[mesh_offs..mesh_offs + 8]);
-            let name_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+            let mut np = mesh_offs;
+            let name_ptr = read_u64_le(granny, &mut np)? as usize;
             let name = if name_ptr < granny.len() {
                 Self::read_null_terminated_string(&granny[name_ptr..])?
             } else {
                 format!("mesh_{}", i)
             };
 
-            // Read BoneBindingCount from Mesh+0x30 and BoneBindings from Mesh+0x34
-            let mut cursor = Cursor::new(&granny[mesh_offs + 0x30..mesh_offs + 0x3C]);
-            let bone_binding_count = cursor.read_u32::<LittleEndian>()? as usize;
-            let bone_bindings_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+            let mut bbp = mesh_offs + 0x30;
+            let bone_binding_count = read_u32_le(granny, &mut bbp)? as usize;
+            let bone_bindings_ptr = read_u64_le(granny, &mut bbp)? as usize;
 
             let mut bone_bindings = Vec::with_capacity(bone_binding_count);
 
-            // Each bone_binding is 44 bytes (0x2C), with BoneName ptr at +0x00
             const BONE_BINDING_SIZE: usize = 0x2C;
             for j in 0..bone_binding_count {
-                let bb_offs = bone_bindings_ptr + j * BONE_BINDING_SIZE;
-                if bb_offs + 8 > granny.len() {
+                let mut bb_p = bone_bindings_ptr + j * BONE_BINDING_SIZE;
+                if bb_p + 8 > granny.len() {
                     break;
                 }
 
-                let mut cursor = Cursor::new(&granny[bb_offs..bb_offs + 8]);
-                let bone_name_ptr = cursor.read_u64::<LittleEndian>()? as usize;
+                let bone_name_ptr = read_u64_le(granny, &mut bb_p)? as usize;
                 let bone_name = if bone_name_ptr < granny.len() {
                     Self::read_null_terminated_string(&granny[bone_name_ptr..])?
                 } else {
@@ -1141,6 +1139,7 @@ fn variant_to_u8(v: &bdt::Variant) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::eprintln;
 
     fn f16_to_f32(bits: u16) -> f32 {
         half::f16::from_bits(bits).to_f32()

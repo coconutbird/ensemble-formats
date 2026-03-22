@@ -4,6 +4,11 @@
 //! Writes chunks 0x700 (cached data), 0x701 (index buffer), 0x702 (vertex buffer),
 //! 0x703 (granny bones), and 0x704 (materials).
 
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{Cursor, Seek, Write};
 
@@ -1066,6 +1071,8 @@ mod tests {
     use crate::ugx::GrannyBone;
     use crate::univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
     use crate::vertex_element::VertexElementType;
+    use alloc::string::ToString;
+    use alloc::vec;
 
     /// Create a minimal test UgxGeom with one section and two bones.
     fn make_test_geom() -> UgxGeom {
@@ -1127,7 +1134,7 @@ mod tests {
 
         let mut vertex_buffer = Vec::new();
         for v in &vertices {
-            packer.pack_vertex(&mut vertex_buffer, v).unwrap();
+            packer.pack_vertex(&mut vertex_buffer, v);
         }
 
         let vert_size = packer.vertex_size() as i32;

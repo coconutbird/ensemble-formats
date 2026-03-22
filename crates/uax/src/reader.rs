@@ -1,9 +1,11 @@
 //! UAX reader implementation.
 
+use alloc::string::String;
+use zerocopy::Ref;
+
+use crate::types::AnimationRaw;
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
-use byteorder::{LittleEndian, ReadBytesExt};
-use ecf::Reader;
-use std::io::Cursor;
+use ecf::Reader as EcfReader;
 
 /// Parsed UAX animation data.
 #[derive(Debug, Clone)]
@@ -25,7 +27,7 @@ pub struct UaxAnimation {
 impl UaxAnimation {
     /// Parse a UAX animation from a byte slice.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let ecf = Reader::new(data)?;
+        let ecf = EcfReader::new(data)?;
 
         // Validate file ID
         let file_id = ecf.header().id;
@@ -70,22 +72,18 @@ impl UaxAnimation {
             return Err(Error::ChunkTooSmall(data.len(), MIN_SIZE));
         }
 
-        let mut cursor = Cursor::new(data);
-
         // file_info uses 32-bit layout with pointer rebasing offset of 0x10
         // AnimationCount is at chunk offset 0x58 (file_info + 0x4C)
         // Animations pointer is at chunk offset 0x5C (file_info + 0x50)
 
-        cursor.set_position(0x58);
-        let animation_count = cursor.read_i32::<LittleEndian>()?;
+        let animation_count = read_i32_le(data, 0x58)?;
 
         if animation_count < 1 {
             return Err(Error::NoAnimations);
         }
 
         // Read Animations pointer (32-bit, needs rebasing)
-        cursor.set_position(0x5C);
-        let animations_stored = cursor.read_u32::<LittleEndian>()? as u64;
+        let animations_stored = read_u32_le(data, 0x5C)? as u64;
         let animations_offset = rebase_pointer(animations_stored);
 
         if animations_offset == 0 || animations_offset as usize >= data.len() {
@@ -94,11 +92,9 @@ impl UaxAnimation {
 
         // TrackGroupCount is at chunk offset 0x50 (file_info + 0x44)
         // TrackGroups pointer is at chunk offset 0x54 (file_info + 0x48)
-        cursor.set_position(0x50);
-        let file_track_group_count = cursor.read_i32::<LittleEndian>()?;
+        let file_track_group_count = read_i32_le(data, 0x50)?;
 
-        cursor.set_position(0x54);
-        let track_groups_stored = cursor.read_u32::<LittleEndian>()? as u64;
+        let track_groups_stored = read_u32_le(data, 0x54)? as u64;
         let track_groups_offset = rebase_pointer(track_groups_stored);
 
         // Get motion extraction flags from first track group if available
@@ -166,21 +162,29 @@ fn rebase_pointer(stored: u64) -> u64 {
     stored.saturating_sub(0x10)
 }
 
-/// Read a u32 at the given offset.
-fn read_u32_at(data: &[u8], offset: u64) -> Result<u32> {
-    let offset = offset as usize;
+/// Read a little-endian u32 at the given offset.
+fn read_u32_le(data: &[u8], offset: usize) -> Result<u32> {
     if offset + 4 > data.len() {
         return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
     }
-    let mut cursor = Cursor::new(&data[offset..]);
-    Ok(cursor.read_u32::<LittleEndian>()?)
+    Ok(u32::from_le_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ]))
+}
+
+/// Read a little-endian i32 at the given offset.
+fn read_i32_le(data: &[u8], offset: usize) -> Result<i32> {
+    Ok(read_u32_le(data, offset)? as i32)
 }
 
 /// Read track group flags from the first track group.
 /// track_groups_offset points to track_group* (array of 32-bit pointers to track groups)
 fn read_track_group_flags(data: &[u8], track_groups_offset: u64) -> Result<u32> {
     // Read first track_group pointer (32-bit, needs rebasing)
-    let tg_ptr_stored = read_u32_at(data, track_groups_offset)? as u64;
+    let tg_ptr_stored = read_u32_le(data, track_groups_offset as usize)? as u64;
     let tg_offset = rebase_pointer(tg_ptr_stored);
     if tg_offset == 0 || tg_offset as usize >= data.len() {
         return Ok(0);
@@ -193,32 +197,24 @@ fn read_track_group_flags(data: &[u8], track_groups_offset: u64) -> Result<u32> 
         return Ok(0);
     }
 
-    let mut cursor = Cursor::new(&data[flags_offset..]);
-    Ok(cursor.read_u32::<LittleEndian>()?)
+    read_u32_le(data, flags_offset)
 }
 
-/// Parse animation structure.
+/// Parse animation structure using zerocopy overlay.
 fn parse_animation(data: &[u8], offset: u64, motion_flags: u32) -> Result<UaxAnimation> {
     let offset = offset as usize;
-    // animation structure (x64):
-    // char const* Name;         // 0x00, 8 bytes
-    // real32 Duration;          // 0x08, 4 bytes
-    // real32 TimeStep;          // 0x0C, 4 bytes
-    // real32 Oversampling;      // 0x10, 4 bytes
-    // int32 TrackGroupCount;    // 0x14, 4 bytes
-    // track_group** TrackGroups;// 0x18, 8 bytes
-
-    if offset + 0x20 > data.len() {
+    if offset >= data.len() {
         return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
     }
 
-    let mut cursor = Cursor::new(&data[offset..]);
+    let (raw, _): (Ref<_, AnimationRaw>, _) = Ref::from_prefix(&data[offset..])
+        .map_err(|_| Error::InvalidPointerOffset(offset as u64, data.len()))?;
 
-    let name_offset = cursor.read_u64::<LittleEndian>()?;
-    let duration = cursor.read_f32::<LittleEndian>()?;
-    let time_step = cursor.read_f32::<LittleEndian>()?;
-    let oversampling = cursor.read_f32::<LittleEndian>()?;
-    let track_group_count = cursor.read_i32::<LittleEndian>()?;
+    let name_offset = u64::from_le_bytes(raw.name_ptr);
+    let duration = f32::from_le_bytes(raw.duration);
+    let time_step = f32::from_le_bytes(raw.time_step);
+    let oversampling = f32::from_le_bytes(raw.oversampling);
+    let track_group_count = i32::from_le_bytes(raw.track_group_count);
 
     let name = if name_offset != 0 {
         Some(read_cstring(data, name_offset)?)
@@ -238,6 +234,9 @@ fn parse_animation(data: &[u8], offset: u64, motion_flags: u32) -> Result<UaxAni
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+    use std::{eprintln, println};
+
     use super::*;
 
     #[test]

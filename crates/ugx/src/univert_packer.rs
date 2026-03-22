@@ -38,10 +38,10 @@
 //!
 //! See `ugx.rs` for the detailed byte layout.
 
-use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{Read, Write};
+use alloc::string::String;
+use alloc::vec::Vec;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::vertex_element::VertexElementType;
 
 /// Vertex element specifiers used in pack order strings.
@@ -143,22 +143,33 @@ impl Default for UnivertPacker {
 }
 
 impl UnivertPacker {
-    /// Read a UnivertPacker from a stream (legacy unpacked format).
+    /// Read a UnivertPacker from raw bytes (legacy unpacked format).
     /// Note: The packed format is read differently in ugx.rs.
     #[allow(dead_code)]
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
-        let pos_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let basis_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let basis_scale_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let normal_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let uv_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let indices_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let weights_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let diffuse_type = VertexElementType::try_from(reader.read_u8()?)?;
-        let index_type = VertexElementType::try_from(reader.read_u8()?)?;
+    pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
+        fn read_u8(data: &[u8], pos: &mut usize) -> Result<u8> {
+            if *pos >= data.len() {
+                return Err(Error::UnexpectedEof {
+                    context: String::from("u8"),
+                });
+            }
+            let v = data[*pos];
+            *pos += 1;
+            Ok(v)
+        }
 
-        let pack_order = read_big_string(reader)?;
-        let decl_order = read_big_string(reader)?;
+        let pos_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let basis_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let basis_scale_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let normal_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let uv_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let indices_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let weights_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let diffuse_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+        let index_type = VertexElementType::try_from(read_u8(data, pos)?)?;
+
+        let pack_order = read_big_string(data, pos)?;
+        let decl_order = read_big_string(data, pos)?;
 
         Ok(Self {
             pos_type,
@@ -220,48 +231,39 @@ impl UnivertPacker {
     }
 
     /// Unpack a single vertex from raw bytes.
-    pub fn unpack_vertex<R: Read>(&self, reader: &mut R) -> Result<UnpackedVertex> {
+    pub fn unpack_vertex(&self, data: &[u8], pos: &mut usize) -> Result<UnpackedVertex> {
         let mut vertex = UnpackedVertex::default();
         let mut chars = self.pack_order.chars().peekable();
 
         while let Some(c) = chars.next() {
             match c.to_ascii_uppercase() {
                 'P' => {
-                    let v = self.pos_type.unpack(reader)?;
+                    let v = self.pos_type.unpack(data, pos)?;
                     vertex.position = [v[0], v[1], v[2]];
                 }
                 'B' => {
-                    // Get basis set index
                     let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
-                    // Read tangent and binormal
-                    let tangent = self.basis_type.unpack(reader)?;
-                    let binormal = self.basis_type.unpack(reader)?;
-                    vertex.tangent = tangent;
-                    vertex.binormal = binormal;
+                    vertex.tangent = self.basis_type.unpack(data, pos)?;
+                    vertex.binormal = self.basis_type.unpack(data, pos)?;
                 }
                 'A' => {
-                    // Get tangent set index
                     let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
-                    // Read tangent only (A is tangent-only, unlike B which has tangent+binormal)
-                    let tangent = self.tangent_type.unpack(reader)?;
-                    vertex.tangent = tangent;
+                    vertex.tangent = self.tangent_type.unpack(data, pos)?;
                 }
                 'X' => {
-                    // Basis scale
                     let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
-                    let scale = self.basis_scale_type.unpack(reader)?;
-                    // Apply scales to tangent/binormal w components
+                    let scale = self.basis_scale_type.unpack(data, pos)?;
                     vertex.tangent[3] = scale[0];
                     vertex.binormal[3] = scale[1];
                 }
                 'N' => {
-                    let v = self.normal_type.unpack(reader)?;
+                    let v = self.normal_type.unpack(data, pos)?;
                     vertex.normal = [v[0], v[1], v[2]];
                 }
                 'T' => {
                     let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
                     if idx < MAX_UV {
-                        let v = self.uv_types[idx].unpack(reader)?;
+                        let v = self.uv_types[idx].unpack(data, pos)?;
                         vertex.texcoords[idx] = [v[0], v[1]];
                         if idx >= vertex.num_texcoords {
                             vertex.num_texcoords = idx + 1;
@@ -269,17 +271,14 @@ impl UnivertPacker {
                     }
                 }
                 'S' => {
-                    // Bone indices (raw integers, no normalization)
-                    vertex.bone_indices = self.indices_type.unpack_as_indices(reader)?;
-                    // Bone weights
-                    let weights = self.weights_type.unpack(reader)?;
-                    vertex.bone_weights = weights;
+                    vertex.bone_indices = self.indices_type.unpack_as_indices(data, pos)?;
+                    vertex.bone_weights = self.weights_type.unpack(data, pos)?;
                 }
                 'D' => {
-                    vertex.diffuse = self.diffuse_type.unpack(reader)?;
+                    vertex.diffuse = self.diffuse_type.unpack(data, pos)?;
                 }
                 'I' => {
-                    let v = self.index_type.unpack(reader)?;
+                    let v = self.index_type.unpack(data, pos)?;
                     vertex.index = v[0] as i16;
                 }
                 _ => {}
@@ -290,7 +289,7 @@ impl UnivertPacker {
     }
 
     /// Pack a single vertex into raw bytes (inverse of `unpack_vertex()`).
-    pub fn pack_vertex<W: Write>(&self, writer: &mut W, vertex: &UnpackedVertex) -> Result<()> {
+    pub fn pack_vertex(&self, out: &mut Vec<u8>, vertex: &UnpackedVertex) {
         let mut chars = self.pack_order.chars().peekable();
 
         while let Some(c) = chars.next() {
@@ -302,50 +301,47 @@ impl UnivertPacker {
                         vertex.position[2],
                         1.0,
                     ];
-                    self.pos_type.pack(writer, v)?;
+                    self.pos_type.pack(out, v);
                 }
                 'B' => {
                     let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
-                    self.basis_type.pack(writer, vertex.tangent)?;
-                    self.basis_type.pack(writer, vertex.binormal)?;
+                    self.basis_type.pack(out, vertex.tangent);
+                    self.basis_type.pack(out, vertex.binormal);
                 }
                 'A' => {
                     let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
-                    self.tangent_type.pack(writer, vertex.tangent)?;
+                    self.tangent_type.pack(out, vertex.tangent);
                 }
                 'X' => {
                     let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
                     let scale = [vertex.tangent[3], vertex.binormal[3], 0.0, 1.0];
-                    self.basis_scale_type.pack(writer, scale)?;
+                    self.basis_scale_type.pack(out, scale);
                 }
                 'N' => {
                     let v = [vertex.normal[0], vertex.normal[1], vertex.normal[2], 1.0];
-                    self.normal_type.pack(writer, v)?;
+                    self.normal_type.pack(out, v);
                 }
                 'T' => {
                     let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
                     if idx < MAX_UV {
                         let v = [vertex.texcoords[idx][0], vertex.texcoords[idx][1], 0.0, 1.0];
-                        self.uv_types[idx].pack(writer, v)?;
+                        self.uv_types[idx].pack(out, v);
                     }
                 }
                 'S' => {
-                    self.indices_type
-                        .pack_as_indices(writer, vertex.bone_indices)?;
-                    self.weights_type.pack(writer, vertex.bone_weights)?;
+                    self.indices_type.pack_as_indices(out, vertex.bone_indices);
+                    self.weights_type.pack(out, vertex.bone_weights);
                 }
                 'D' => {
-                    self.diffuse_type.pack(writer, vertex.diffuse)?;
+                    self.diffuse_type.pack(out, vertex.diffuse);
                 }
                 'I' => {
                     let v = [vertex.index as f32, 0.0, 0.0, 1.0];
-                    self.index_type.pack(writer, v)?;
+                    self.index_type.pack(out, v);
                 }
                 _ => {}
             }
         }
-
-        Ok(())
     }
 
     /// Check if this packer is empty (no pack order).
@@ -355,14 +351,29 @@ impl UnivertPacker {
 }
 
 /// Read a "BigString" - length-prefixed string used in UGX.
-fn read_big_string<R: Read>(reader: &mut R) -> Result<String> {
-    let len = reader.read_u32::<LittleEndian>()? as usize;
+fn read_big_string(data: &[u8], pos: &mut usize) -> Result<String> {
+    let end = *pos + 4;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("big_string length"),
+        });
+    }
+    let len =
+        u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]) as usize;
+    *pos = end;
+
     if len == 0 {
         return Ok(String::new());
     }
 
-    let mut bytes = vec![0u8; len];
-    reader.read_exact(&mut bytes)?;
+    let str_end = *pos + len;
+    if str_end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("big_string data"),
+        });
+    }
+    let mut bytes = data[*pos..str_end].to_vec();
+    *pos = str_end;
 
     // Remove null terminator if present
     if bytes.last() == Some(&0) {
@@ -375,6 +386,7 @@ fn read_big_string<R: Read>(reader: &mut R) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn test_vertex_size_calculation() {
@@ -408,8 +420,6 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_vertex_roundtrip() {
-        use std::io::Cursor;
-
         let packer = UnivertPacker {
             pack_order: "PNT0".to_string(),
             pos_type: VertexElementType::Float3,
@@ -431,11 +441,11 @@ mod tests {
         };
 
         let mut buf = Vec::new();
-        packer.pack_vertex(&mut buf, &original).unwrap();
+        packer.pack_vertex(&mut buf, &original);
         assert_eq!(buf.len(), packer.vertex_size());
 
-        let mut cursor = Cursor::new(&buf);
-        let unpacked = packer.unpack_vertex(&mut cursor).unwrap();
+        let mut pos = 0;
+        let unpacked = packer.unpack_vertex(&buf, &mut pos).unwrap();
 
         assert_eq!(unpacked.position, original.position);
         assert_eq!(unpacked.normal, original.normal);
@@ -444,8 +454,6 @@ mod tests {
 
     #[test]
     fn test_pack_unpack_vertex_with_skin_roundtrip() {
-        use std::io::Cursor;
-
         let packer = UnivertPacker {
             pack_order: "PNT0S".to_string(),
             pos_type: VertexElementType::Float3,
@@ -471,11 +479,11 @@ mod tests {
         };
 
         let mut buf = Vec::new();
-        packer.pack_vertex(&mut buf, &original).unwrap();
+        packer.pack_vertex(&mut buf, &original);
         assert_eq!(buf.len(), packer.vertex_size());
 
-        let mut cursor = Cursor::new(&buf);
-        let unpacked = packer.unpack_vertex(&mut cursor).unwrap();
+        let mut pos = 0;
+        let unpacked = packer.unpack_vertex(&buf, &mut pos).unwrap();
 
         assert_eq!(unpacked.position, original.position);
         assert_eq!(unpacked.normal, original.normal);

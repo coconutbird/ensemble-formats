@@ -7,16 +7,22 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = ["std"]
+std = ["dep:byteorder", "dep:gltf-json", "dep:gltf", "dep:serde_json", "dep:base64"]
+
 [dependencies]
 bdt = { workspace = true }
 ecf = { workspace = true }
-byteorder = { workspace = true }
 thiserror = { workspace = true }
 half = { workspace = true }
-gltf-json = { version = "1.4", features = ["names", "extras"] }
-gltf = "1.4"
-serde_json = "1.0"
-base64 = "0.22"
 zerocopy.workspace = true
+
+# std-only deps (gltf export/import, writer)
+byteorder = { workspace = true, optional = true }
+gltf-json = { version = "1.4", features = ["names", "extras"], optional = true }
+gltf = { version = "1.4", optional = true }
+serde_json = { version = "1.0", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]

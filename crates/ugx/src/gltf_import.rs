@@ -7,6 +7,10 @@
 //! Our glTF export writes DX row-major matrices as flat rows into glTF's column-major
 //! storage. On import we reverse this: read 16 floats from glTF as DX row-major directly.
 
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 use crate::error::{Error, Result};
@@ -265,7 +269,7 @@ pub fn import_from_gltf(
             // Pack vertices into binary buffer
             let vb_offset = all_vertex_buffer.len() as i32;
             for v in &final_vertices {
-                final_packer.pack_vertex(&mut all_vertex_buffer, v)?;
+                final_packer.pack_vertex(&mut all_vertex_buffer, v);
             }
             let vb_bytes = (all_vertex_buffer.len() as i32) - vb_offset;
             let vert_size = final_packer.vertex_size() as i32;
@@ -1026,6 +1030,9 @@ fn compute_bounds(vertices: &[UnpackedVertex]) -> (AABB, Sphere) {
 mod tests {
     use super::*;
     use crate::gltf_export::{GltfExportOptions, export_to_gltf};
+    use alloc::string::ToString;
+    use alloc::vec;
+    use std::eprintln;
 
     /// Create a test UgxGeom with vertices, bones, and skin data.
     fn make_test_geom() -> UgxGeom {
@@ -1094,7 +1101,7 @@ mod tests {
 
         let mut vertex_buffer = Vec::new();
         for v in &vertices {
-            packer.pack_vertex(&mut vertex_buffer, v).unwrap();
+            packer.pack_vertex(&mut vertex_buffer, v);
         }
 
         let vert_size = packer.vertex_size() as i32;
@@ -2367,7 +2374,7 @@ mod tests {
 
         let mut vertex_buffer = Vec::new();
         for v in &vertices {
-            packer.pack_vertex(&mut vertex_buffer, v).unwrap();
+            packer.pack_vertex(&mut vertex_buffer, v);
         }
 
         let vert_size = packer.vertex_size() as i32;

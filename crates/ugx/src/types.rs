@@ -19,11 +19,133 @@
 //! Note: The DE (Definitive Edition) format differs from the original Xbox 360
 //! source due to x64 pointer sizes and some additional fields.
 
-use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::Read;
+use alloc::string::String;
+use alloc::vec::Vec;
+use zerocopy::{FromBytes, Immutable, KnownLayout};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::univert_packer::UnivertPacker;
+
+// ============================================================================
+// Zerocopy raw overlays
+// ============================================================================
+
+/// Raw on-disk BHeader (64 bytes, little-endian).
+///
+/// ```text
+/// +0x00: uint32 signature          (0xC2340004)
+/// +0x04: int32  rigid_bone_index
+/// +0x08: float[3] sphere_center    (12 bytes)
+/// +0x14: float  sphere_radius
+/// +0x18: float[3] aabb_min         (12 bytes)
+/// +0x24: float[3] aabb_max         (12 bytes)
+/// +0x30: int16  max_instances
+/// +0x32: int16  instance_index_multiplier
+/// +0x34: int16  large_geom_bone_index
+/// +0x36: uint8  all_sections_rigid
+/// +0x37: uint8  global_bones
+/// +0x38: uint8  all_sections_skinned
+/// +0x39: uint8  rigid_only
+/// +0x3A: uint16 padding
+/// +0x3C: uint32 padding2
+/// ```
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct GeomHeaderRaw {
+    pub signature: [u8; 4],
+    pub rigid_bone_index: [u8; 4],
+    pub sphere_center: [[u8; 4]; 3],
+    pub sphere_radius: [u8; 4],
+    pub aabb_min: [[u8; 4]; 3],
+    pub aabb_max: [[u8; 4]; 3],
+    pub max_instances: [u8; 2],
+    pub instance_index_multiplier: [u8; 2],
+    pub large_geom_bone_index: [u8; 2],
+    pub all_sections_rigid: u8,
+    pub global_bones: u8,
+    pub all_sections_skinned: u8,
+    pub rigid_only: u8,
+    pub _padding: [u8; 2],
+    pub _padding2: [u8; 4],
+}
+
+/// Raw on-disk BPackedArray header (16 bytes, little-endian).
+///
+/// ```text
+/// +0x00: uint32 count
+/// +0x04: uint32 padding
+/// +0x08: uint64 offset   (0xFFFFFFFFFFFFFFFF = NULL)
+/// ```
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct PackedArrayRaw {
+    pub count: [u8; 4],
+    pub _padding: [u8; 4],
+    pub offset: [u8; 8],
+}
+
+/// Raw on-disk BBone (80 bytes, little-endian).
+///
+/// ```text
+/// +0x00: uint64 name_offset       - Offset to null-terminated name
+/// +0x08: float[4][4] model_to_bone - 4x4 row-major matrix (64 bytes)
+/// +0x48: int32  parent_index
+/// +0x4C: uint32 padding
+/// ```
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct PackedBoneRaw {
+    pub name_offset: [u8; 8],
+    pub model_to_bone: [[u8; 4]; 16],
+    pub parent_index: [u8; 4],
+    pub _padding: [u8; 4],
+}
+
+/// Raw on-disk BSection fixed fields (40 bytes, little-endian).
+///
+/// The first 10 × i32 fields of a packed section, before the nested
+/// bone-remap packed array and UnivertPacker.
+///
+/// ```text
+/// +0x00: int32 material_index
+/// +0x04: int32 accessory_index
+/// +0x08: int32 max_bones
+/// +0x0C: int32 rigid_bone_index
+/// +0x10: int32 ib_offset
+/// +0x14: int32 num_tris
+/// +0x18: int32 vb_offset
+/// +0x1C: int32 vb_bytes
+/// +0x20: int32 vert_size
+/// +0x24: int32 num_verts
+/// ```
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct PackedSectionFixedRaw {
+    pub material_index: [u8; 4],
+    pub accessory_index: [u8; 4],
+    pub max_bones: [u8; 4],
+    pub rigid_bone_index: [u8; 4],
+    pub ib_offset: [u8; 4],
+    pub num_tris: [u8; 4],
+    pub vb_offset: [u8; 4],
+    pub vb_bytes: [u8; 4],
+    pub vert_size: [u8; 4],
+    pub num_verts: [u8; 4],
+}
+
+/// Read a little-endian f32 from `data` at `*pos`, advancing `*pos` by 4.
+#[inline]
+fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32> {
+    let end = *pos + 4;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("f32"),
+        });
+    }
+    let v = f32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
+    *pos = end;
+    Ok(v)
+}
 
 /// UGX file version magic.
 pub const UGX_VERSION: u32 = 0xECDA1015;
@@ -363,17 +485,17 @@ impl Matrix4x4 {
 }
 
 impl QForm {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
+    pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let rotation = [
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
         ];
         let translation = [
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
         ];
         Ok(Self {
             rotation,
@@ -403,16 +525,16 @@ pub struct AABB {
 }
 
 impl AABB {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
+    pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let min = [
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
         ];
         let max = [
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
         ];
         Ok(Self { min, max })
     }
@@ -428,13 +550,13 @@ pub struct Sphere {
 }
 
 impl Sphere {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
+    pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let center = [
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
-            reader.read_f32::<LittleEndian>()?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
+            read_f32_le(data, pos)?,
         ];
-        let radius = reader.read_f32::<LittleEndian>()?;
+        let radius = read_f32_le(data, pos)?;
         Ok(Self { center, radius })
     }
 }
@@ -504,11 +626,25 @@ pub struct Keyframe {
 }
 
 impl Keyframe {
-    pub fn read<R: Read>(reader: &mut R) -> Result<Self> {
-        let time = reader.read_f32::<LittleEndian>()?;
-        let len = reader.read_u32::<LittleEndian>()? as usize;
-        let mut verts = vec![0u8; len];
-        reader.read_exact(&mut verts)?;
+    pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
+        let time = read_f32_le(data, pos)?;
+        let end4 = *pos + 4;
+        if end4 > data.len() {
+            return Err(Error::UnexpectedEof {
+                context: String::from("keyframe length"),
+            });
+        }
+        let len = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]])
+            as usize;
+        *pos = end4;
+        let verts_end = *pos + len;
+        if verts_end > data.len() {
+            return Err(Error::UnexpectedEof {
+                context: String::from("keyframe verts"),
+            });
+        }
+        let verts = data[*pos..verts_end].to_vec();
+        *pos = verts_end;
         Ok(Self { time, verts })
     }
 }

@@ -26,11 +26,51 @@
 //! - Unsigned normalized: `value / max_value` (e.g., 255 → 1.0)
 //! - Signed normalized: `value / max_value` (e.g., 32767 → 1.0, -32768 → -1.0)
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use alloc::string::String;
+use alloc::vec::Vec;
 use half::f16;
-use std::io::{Read, Write};
 
 use crate::error::{Error, Result};
+
+/// Read a little-endian u16 from `data` at `*pos`, advancing `*pos` by 2.
+#[inline]
+fn read_u16_le(data: &[u8], pos: &mut usize) -> Result<u16> {
+    let end = *pos + 2;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("u16"),
+        });
+    }
+    let v = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
+    *pos = end;
+    Ok(v)
+}
+
+/// Read a little-endian i16 from `data` at `*pos`, advancing `*pos` by 2.
+#[inline]
+fn read_i16_le(data: &[u8], pos: &mut usize) -> Result<i16> {
+    Ok(read_u16_le(data, pos)? as i16)
+}
+
+/// Read a little-endian u32 from `data` at `*pos`, advancing `*pos` by 4.
+#[inline]
+fn read_u32_le(data: &[u8], pos: &mut usize) -> Result<u32> {
+    let end = *pos + 4;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("u32"),
+        });
+    }
+    let v = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
+    *pos = end;
+    Ok(v)
+}
+
+/// Read a little-endian f32 from `data` at `*pos`, advancing `*pos` by 4.
+#[inline]
+fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32> {
+    Ok(f32::from_bits(read_u32_le(data, pos)?))
+}
 
 /// Vertex element data types (matches C++ `VertexElement::EType` enum).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -148,156 +188,134 @@ impl VertexElementType {
     }
 
     /// Unpack this element type from raw bytes into a Vec4 [x, y, z, w].
-    pub fn unpack<R: Read>(self, reader: &mut R) -> Result<[f32; 4]> {
+    pub fn unpack(self, data: &[u8], pos: &mut usize) -> Result<[f32; 4]> {
         match self {
             Self::Ignore => Ok([0.0, 0.0, 0.0, 1.0]),
-
-            Self::Float1 => {
-                let x = reader.read_f32::<LittleEndian>()?;
-                Ok([x, 0.0, 0.0, 1.0])
-            }
-
+            Self::Float1 => Ok([read_f32_le(data, pos)?, 0.0, 0.0, 1.0]),
             Self::Float2 => {
-                let x = reader.read_f32::<LittleEndian>()?;
-                let y = reader.read_f32::<LittleEndian>()?;
+                let x = read_f32_le(data, pos)?;
+                let y = read_f32_le(data, pos)?;
                 Ok([x, y, 0.0, 1.0])
             }
-
             Self::Float3 => {
-                let x = reader.read_f32::<LittleEndian>()?;
-                let y = reader.read_f32::<LittleEndian>()?;
-                let z = reader.read_f32::<LittleEndian>()?;
+                let x = read_f32_le(data, pos)?;
+                let y = read_f32_le(data, pos)?;
+                let z = read_f32_le(data, pos)?;
                 Ok([x, y, z, 1.0])
             }
-
             Self::Float4 => {
-                let x = reader.read_f32::<LittleEndian>()?;
-                let y = reader.read_f32::<LittleEndian>()?;
-                let z = reader.read_f32::<LittleEndian>()?;
-                let w = reader.read_f32::<LittleEndian>()?;
+                let x = read_f32_le(data, pos)?;
+                let y = read_f32_le(data, pos)?;
+                let z = read_f32_le(data, pos)?;
+                let w = read_f32_le(data, pos)?;
                 Ok([x, y, z, w])
             }
-
             Self::D3DColor => {
-                // ARGB packed as u32, expand to RGBA floats
-                let packed = reader.read_u32::<LittleEndian>()?;
+                let packed = read_u32_le(data, pos)?;
                 let a = ((packed >> 24) & 0xFF) as f32 / 255.0;
                 let r = ((packed >> 16) & 0xFF) as f32 / 255.0;
                 let g = ((packed >> 8) & 0xFF) as f32 / 255.0;
                 let b = (packed & 0xFF) as f32 / 255.0;
                 Ok([r, g, b, a])
             }
-
             Self::UByte4 => {
-                let packed = reader.read_u32::<LittleEndian>()?;
-                let x = (packed & 0xFF) as f32;
-                let y = ((packed >> 8) & 0xFF) as f32;
-                let z = ((packed >> 16) & 0xFF) as f32;
-                let w = ((packed >> 24) & 0xFF) as f32;
-                Ok([x, y, z, w])
+                let packed = read_u32_le(data, pos)?;
+                Ok([
+                    (packed & 0xFF) as f32,
+                    ((packed >> 8) & 0xFF) as f32,
+                    ((packed >> 16) & 0xFF) as f32,
+                    ((packed >> 24) & 0xFF) as f32,
+                ])
             }
-
             Self::Short2 => {
-                let x = reader.read_i16::<LittleEndian>()? as f32;
-                let y = reader.read_i16::<LittleEndian>()? as f32;
+                let x = read_i16_le(data, pos)? as f32;
+                let y = read_i16_le(data, pos)? as f32;
                 Ok([x, y, 0.0, 1.0])
             }
-
             Self::Short4 => {
-                let x = reader.read_i16::<LittleEndian>()? as f32;
-                let y = reader.read_i16::<LittleEndian>()? as f32;
-                let z = reader.read_i16::<LittleEndian>()? as f32;
-                let w = reader.read_i16::<LittleEndian>()? as f32;
+                let x = read_i16_le(data, pos)? as f32;
+                let y = read_i16_le(data, pos)? as f32;
+                let z = read_i16_le(data, pos)? as f32;
+                let w = read_i16_le(data, pos)? as f32;
                 Ok([x, y, z, w])
             }
-
             Self::UByte4N => {
-                let packed = reader.read_u32::<LittleEndian>()?;
-                let x = (packed & 0xFF) as f32 / 255.0;
-                let y = ((packed >> 8) & 0xFF) as f32 / 255.0;
-                let z = ((packed >> 16) & 0xFF) as f32 / 255.0;
-                let w = ((packed >> 24) & 0xFF) as f32 / 255.0;
-                Ok([x, y, z, w])
+                let packed = read_u32_le(data, pos)?;
+                Ok([
+                    (packed & 0xFF) as f32 / 255.0,
+                    ((packed >> 8) & 0xFF) as f32 / 255.0,
+                    ((packed >> 16) & 0xFF) as f32 / 255.0,
+                    ((packed >> 24) & 0xFF) as f32 / 255.0,
+                ])
             }
-
             Self::Short2N => {
-                let x = reader.read_i16::<LittleEndian>()? as f32 / 32767.0;
-                let y = reader.read_i16::<LittleEndian>()? as f32 / 32767.0;
+                let x = read_i16_le(data, pos)? as f32 / 32767.0;
+                let y = read_i16_le(data, pos)? as f32 / 32767.0;
                 Ok([x, y, 0.0, 1.0])
             }
-
             Self::Short4N => {
-                let x = reader.read_i16::<LittleEndian>()? as f32 / 32767.0;
-                let y = reader.read_i16::<LittleEndian>()? as f32 / 32767.0;
-                let z = reader.read_i16::<LittleEndian>()? as f32 / 32767.0;
-                let w = reader.read_i16::<LittleEndian>()? as f32 / 32767.0;
+                let x = read_i16_le(data, pos)? as f32 / 32767.0;
+                let y = read_i16_le(data, pos)? as f32 / 32767.0;
+                let z = read_i16_le(data, pos)? as f32 / 32767.0;
+                let w = read_i16_le(data, pos)? as f32 / 32767.0;
                 Ok([x, y, z, w])
             }
-
             Self::UShort2N => {
-                let x = reader.read_u16::<LittleEndian>()? as f32 / 65535.0;
-                let y = reader.read_u16::<LittleEndian>()? as f32 / 65535.0;
+                let x = read_u16_le(data, pos)? as f32 / 65535.0;
+                let y = read_u16_le(data, pos)? as f32 / 65535.0;
                 Ok([x, y, 0.0, 1.0])
             }
-
             Self::UShort4N => {
-                let x = reader.read_u16::<LittleEndian>()? as f32 / 65535.0;
-                let y = reader.read_u16::<LittleEndian>()? as f32 / 65535.0;
-                let z = reader.read_u16::<LittleEndian>()? as f32 / 65535.0;
-                let w = reader.read_u16::<LittleEndian>()? as f32 / 65535.0;
+                let x = read_u16_le(data, pos)? as f32 / 65535.0;
+                let y = read_u16_le(data, pos)? as f32 / 65535.0;
+                let z = read_u16_le(data, pos)? as f32 / 65535.0;
+                let w = read_u16_le(data, pos)? as f32 / 65535.0;
                 Ok([x, y, z, w])
             }
-
             Self::UDec3 => {
-                // 10-10-10-2 unsigned format
-                let packed = reader.read_u32::<LittleEndian>()?;
-                let x = (packed & 0x3FF) as f32;
-                let y = ((packed >> 10) & 0x3FF) as f32;
-                let z = ((packed >> 20) & 0x3FF) as f32;
-                Ok([x, y, z, 1.0])
+                let packed = read_u32_le(data, pos)?;
+                Ok([
+                    (packed & 0x3FF) as f32,
+                    ((packed >> 10) & 0x3FF) as f32,
+                    ((packed >> 20) & 0x3FF) as f32,
+                    1.0,
+                ])
             }
-
             Self::Dec3N => {
-                // 10-10-10-2 signed normalized format
-                let packed = reader.read_u32::<LittleEndian>()?;
-                let x = sign_extend_10bit((packed & 0x3FF) as i32) as f32 / 511.0;
-                let y = sign_extend_10bit(((packed >> 10) & 0x3FF) as i32) as f32 / 511.0;
-                let z = sign_extend_10bit(((packed >> 20) & 0x3FF) as i32) as f32 / 511.0;
-                Ok([x, y, z, 1.0])
+                let packed = read_u32_le(data, pos)?;
+                Ok([
+                    sign_extend_10bit((packed & 0x3FF) as i32) as f32 / 511.0,
+                    sign_extend_10bit(((packed >> 10) & 0x3FF) as i32) as f32 / 511.0,
+                    sign_extend_10bit(((packed >> 20) & 0x3FF) as i32) as f32 / 511.0,
+                    1.0,
+                ])
             }
-
             Self::HalfFloat2 => {
-                let x = f16::from_bits(reader.read_u16::<LittleEndian>()?).to_f32();
-                let y = f16::from_bits(reader.read_u16::<LittleEndian>()?).to_f32();
+                let x = f16::from_bits(read_u16_le(data, pos)?).to_f32();
+                let y = f16::from_bits(read_u16_le(data, pos)?).to_f32();
                 Ok([x, y, 0.0, 1.0])
             }
-
             Self::HalfFloat4 => {
-                let x = f16::from_bits(reader.read_u16::<LittleEndian>()?).to_f32();
-                let y = f16::from_bits(reader.read_u16::<LittleEndian>()?).to_f32();
-                let z = f16::from_bits(reader.read_u16::<LittleEndian>()?).to_f32();
-                let w = f16::from_bits(reader.read_u16::<LittleEndian>()?).to_f32();
+                let x = f16::from_bits(read_u16_le(data, pos)?).to_f32();
+                let y = f16::from_bits(read_u16_le(data, pos)?).to_f32();
+                let z = f16::from_bits(read_u16_le(data, pos)?).to_f32();
+                let w = f16::from_bits(read_u16_le(data, pos)?).to_f32();
                 Ok([x, y, z, w])
             }
-
             Self::HalfFloat1 => {
-                let x = f16::from_bits(reader.read_u16::<LittleEndian>()?).to_f32();
+                let x = f16::from_bits(read_u16_le(data, pos)?).to_f32();
                 Ok([x, 0.0, 0.0, 1.0])
             }
-
             Self::UDec3N => {
-                // 10-10-10-2 unsigned normalized format
-                let packed = reader.read_u32::<LittleEndian>()?;
-                let x = (packed & 0x3FF) as f32 / 1023.0;
-                let y = ((packed >> 10) & 0x3FF) as f32 / 1023.0;
-                let z = ((packed >> 20) & 0x3FF) as f32 / 1023.0;
-                Ok([x, y, z, 1.0])
+                let packed = read_u32_le(data, pos)?;
+                Ok([
+                    (packed & 0x3FF) as f32 / 1023.0,
+                    ((packed >> 10) & 0x3FF) as f32 / 1023.0,
+                    ((packed >> 20) & 0x3FF) as f32 / 1023.0,
+                    1.0,
+                ])
             }
-
-            Self::Invalid => {
-                // Invalid type - return zeros
-                Ok([0.0, 0.0, 0.0, 0.0])
-            }
+            Self::Invalid => Ok([0.0, 0.0, 0.0, 0.0]),
         }
     }
 
@@ -306,10 +324,10 @@ impl VertexElementType {
     /// Unlike `unpack()`, this always returns the raw integer values even for
     /// normalized types like UByte4N or UShort4N. Use this for bone indices
     /// where you need the actual index values, not normalized floats.
-    pub fn unpack_as_indices<R: Read>(self, reader: &mut R) -> Result<[u16; 4]> {
+    pub fn unpack_as_indices(self, data: &[u8], pos: &mut usize) -> Result<[u16; 4]> {
         match self {
             Self::UByte4 | Self::UByte4N => {
-                let packed = reader.read_u32::<LittleEndian>()?;
+                let packed = read_u32_le(data, pos)?;
                 Ok([
                     (packed & 0xFF) as u16,
                     ((packed >> 8) & 0xFF) as u16,
@@ -318,165 +336,113 @@ impl VertexElementType {
                 ])
             }
             Self::Short4 | Self::Short4N => {
-                let x = reader.read_i16::<LittleEndian>()?.max(0) as u16;
-                let y = reader.read_i16::<LittleEndian>()?.max(0) as u16;
-                let z = reader.read_i16::<LittleEndian>()?.max(0) as u16;
-                let w = reader.read_i16::<LittleEndian>()?.max(0) as u16;
+                let x = read_i16_le(data, pos)?.max(0) as u16;
+                let y = read_i16_le(data, pos)?.max(0) as u16;
+                let z = read_i16_le(data, pos)?.max(0) as u16;
+                let w = read_i16_le(data, pos)?.max(0) as u16;
                 Ok([x, y, z, w])
             }
             Self::UShort4N => {
-                let x = reader.read_u16::<LittleEndian>()?;
-                let y = reader.read_u16::<LittleEndian>()?;
-                let z = reader.read_u16::<LittleEndian>()?;
-                let w = reader.read_u16::<LittleEndian>()?;
+                let x = read_u16_le(data, pos)?;
+                let y = read_u16_le(data, pos)?;
+                let z = read_u16_le(data, pos)?;
+                let w = read_u16_le(data, pos)?;
                 Ok([x, y, z, w])
             }
-            // Fall back to unpack() and truncate for other types
             other => {
-                let v = other.unpack(reader)?;
+                let v = other.unpack(data, pos)?;
                 Ok([v[0] as u16, v[1] as u16, v[2] as u16, v[3] as u16])
             }
         }
     }
 
     /// Pack a Vec4 [x, y, z, w] into raw bytes (inverse of `unpack()`).
-    pub fn pack<W: Write>(self, writer: &mut W, value: [f32; 4]) -> Result<()> {
+    pub fn pack(self, out: &mut Vec<u8>, value: [f32; 4]) {
         match self {
-            Self::Ignore | Self::Invalid => Ok(()),
-
-            Self::Float1 => {
-                writer.write_f32::<LittleEndian>(value[0])?;
-                Ok(())
-            }
-
+            Self::Ignore | Self::Invalid => {}
+            Self::Float1 => out.extend_from_slice(&value[0].to_le_bytes()),
             Self::Float2 => {
-                writer.write_f32::<LittleEndian>(value[0])?;
-                writer.write_f32::<LittleEndian>(value[1])?;
-                Ok(())
+                out.extend_from_slice(&value[0].to_le_bytes());
+                out.extend_from_slice(&value[1].to_le_bytes());
             }
-
             Self::Float3 => {
-                writer.write_f32::<LittleEndian>(value[0])?;
-                writer.write_f32::<LittleEndian>(value[1])?;
-                writer.write_f32::<LittleEndian>(value[2])?;
-                Ok(())
+                out.extend_from_slice(&value[0].to_le_bytes());
+                out.extend_from_slice(&value[1].to_le_bytes());
+                out.extend_from_slice(&value[2].to_le_bytes());
             }
-
             Self::Float4 => {
-                writer.write_f32::<LittleEndian>(value[0])?;
-                writer.write_f32::<LittleEndian>(value[1])?;
-                writer.write_f32::<LittleEndian>(value[2])?;
-                writer.write_f32::<LittleEndian>(value[3])?;
-                Ok(())
+                out.extend_from_slice(&value[0].to_le_bytes());
+                out.extend_from_slice(&value[1].to_le_bytes());
+                out.extend_from_slice(&value[2].to_le_bytes());
+                out.extend_from_slice(&value[3].to_le_bytes());
             }
-
             Self::D3DColor => {
-                // RGBA floats → ARGB packed u32
                 let r = (value[0].clamp(0.0, 1.0) * 255.0).round() as u32;
                 let g = (value[1].clamp(0.0, 1.0) * 255.0).round() as u32;
                 let b = (value[2].clamp(0.0, 1.0) * 255.0).round() as u32;
                 let a = (value[3].clamp(0.0, 1.0) * 255.0).round() as u32;
-                let packed = (a << 24) | (r << 16) | (g << 8) | b;
-                writer.write_u32::<LittleEndian>(packed)?;
-                Ok(())
+                out.extend_from_slice(&((a << 24) | (r << 16) | (g << 8) | b).to_le_bytes());
             }
-
             Self::UByte4 => {
-                let x = value[0] as u8;
-                let y = value[1] as u8;
-                let z = value[2] as u8;
-                let w = value[3] as u8;
-                let packed =
-                    (x as u32) | ((y as u32) << 8) | ((z as u32) << 16) | ((w as u32) << 24);
-                writer.write_u32::<LittleEndian>(packed)?;
-                Ok(())
+                let packed = (value[0] as u32)
+                    | ((value[1] as u32) << 8)
+                    | ((value[2] as u32) << 16)
+                    | ((value[3] as u32) << 24);
+                out.extend_from_slice(&packed.to_le_bytes());
             }
-
             Self::Short2 => {
-                writer.write_i16::<LittleEndian>(value[0] as i16)?;
-                writer.write_i16::<LittleEndian>(value[1] as i16)?;
-                Ok(())
+                out.extend_from_slice(&(value[0] as i16).to_le_bytes());
+                out.extend_from_slice(&(value[1] as i16).to_le_bytes());
             }
-
             Self::Short4 => {
-                writer.write_i16::<LittleEndian>(value[0] as i16)?;
-                writer.write_i16::<LittleEndian>(value[1] as i16)?;
-                writer.write_i16::<LittleEndian>(value[2] as i16)?;
-                writer.write_i16::<LittleEndian>(value[3] as i16)?;
-                Ok(())
+                out.extend_from_slice(&(value[0] as i16).to_le_bytes());
+                out.extend_from_slice(&(value[1] as i16).to_le_bytes());
+                out.extend_from_slice(&(value[2] as i16).to_le_bytes());
+                out.extend_from_slice(&(value[3] as i16).to_le_bytes());
             }
-
             Self::UByte4N => {
                 let x = (value[0].clamp(0.0, 1.0) * 255.0).round() as u32;
                 let y = (value[1].clamp(0.0, 1.0) * 255.0).round() as u32;
                 let z = (value[2].clamp(0.0, 1.0) * 255.0).round() as u32;
                 let w = (value[3].clamp(0.0, 1.0) * 255.0).round() as u32;
-                let packed = x | (y << 8) | (z << 16) | (w << 24);
-                writer.write_u32::<LittleEndian>(packed)?;
-                Ok(())
+                out.extend_from_slice(&(x | (y << 8) | (z << 16) | (w << 24)).to_le_bytes());
             }
-
             Self::Short2N => {
-                writer.write_i16::<LittleEndian>(
-                    (value[0].clamp(-1.0, 1.0) * 32767.0).round() as i16
-                )?;
-                writer.write_i16::<LittleEndian>(
-                    (value[1].clamp(-1.0, 1.0) * 32767.0).round() as i16
-                )?;
-                Ok(())
+                out.extend_from_slice(
+                    &((value[0].clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes(),
+                );
+                out.extend_from_slice(
+                    &((value[1].clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes(),
+                );
             }
-
             Self::Short4N => {
-                writer.write_i16::<LittleEndian>(
-                    (value[0].clamp(-1.0, 1.0) * 32767.0).round() as i16
-                )?;
-                writer.write_i16::<LittleEndian>(
-                    (value[1].clamp(-1.0, 1.0) * 32767.0).round() as i16
-                )?;
-                writer.write_i16::<LittleEndian>(
-                    (value[2].clamp(-1.0, 1.0) * 32767.0).round() as i16
-                )?;
-                writer.write_i16::<LittleEndian>(
-                    (value[3].clamp(-1.0, 1.0) * 32767.0).round() as i16
-                )?;
-                Ok(())
+                for v in &value {
+                    out.extend_from_slice(
+                        &((v.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes(),
+                    );
+                }
             }
-
             Self::UShort2N => {
-                writer.write_u16::<LittleEndian>(
-                    (value[0].clamp(0.0, 1.0) * 65535.0).round() as u16
-                )?;
-                writer.write_u16::<LittleEndian>(
-                    (value[1].clamp(0.0, 1.0) * 65535.0).round() as u16
-                )?;
-                Ok(())
+                out.extend_from_slice(
+                    &((value[0].clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes(),
+                );
+                out.extend_from_slice(
+                    &((value[1].clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes(),
+                );
             }
-
             Self::UShort4N => {
-                writer.write_u16::<LittleEndian>(
-                    (value[0].clamp(0.0, 1.0) * 65535.0).round() as u16
-                )?;
-                writer.write_u16::<LittleEndian>(
-                    (value[1].clamp(0.0, 1.0) * 65535.0).round() as u16
-                )?;
-                writer.write_u16::<LittleEndian>(
-                    (value[2].clamp(0.0, 1.0) * 65535.0).round() as u16
-                )?;
-                writer.write_u16::<LittleEndian>(
-                    (value[3].clamp(0.0, 1.0) * 65535.0).round() as u16
-                )?;
-                Ok(())
+                for v in &value {
+                    out.extend_from_slice(
+                        &((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes(),
+                    );
+                }
             }
-
             Self::UDec3 => {
-                let x = (value[0] as u32) & 0x3FF;
-                let y = (value[1] as u32) & 0x3FF;
-                let z = (value[2] as u32) & 0x3FF;
-                let packed = x | (y << 10) | (z << 20);
-                writer.write_u32::<LittleEndian>(packed)?;
-                Ok(())
+                let packed = ((value[0] as u32) & 0x3FF)
+                    | (((value[1] as u32) & 0x3FF) << 10)
+                    | (((value[2] as u32) & 0x3FF) << 20);
+                out.extend_from_slice(&packed.to_le_bytes());
             }
-
             Self::Dec3N => {
                 let x = (value[0].clamp(-1.0, 1.0) * 511.0).round() as i32;
                 let y = (value[1].clamp(-1.0, 1.0) * 511.0).round() as i32;
@@ -484,64 +450,48 @@ impl VertexElementType {
                 let packed = ((x as u32) & 0x3FF)
                     | (((y as u32) & 0x3FF) << 10)
                     | (((z as u32) & 0x3FF) << 20);
-                writer.write_u32::<LittleEndian>(packed)?;
-                Ok(())
+                out.extend_from_slice(&packed.to_le_bytes());
             }
-
             Self::HalfFloat2 => {
-                writer.write_u16::<LittleEndian>(f16::from_f32(value[0]).to_bits())?;
-                writer.write_u16::<LittleEndian>(f16::from_f32(value[1]).to_bits())?;
-                Ok(())
+                out.extend_from_slice(&f16::from_f32(value[0]).to_bits().to_le_bytes());
+                out.extend_from_slice(&f16::from_f32(value[1]).to_bits().to_le_bytes());
             }
-
             Self::HalfFloat4 => {
-                writer.write_u16::<LittleEndian>(f16::from_f32(value[0]).to_bits())?;
-                writer.write_u16::<LittleEndian>(f16::from_f32(value[1]).to_bits())?;
-                writer.write_u16::<LittleEndian>(f16::from_f32(value[2]).to_bits())?;
-                writer.write_u16::<LittleEndian>(f16::from_f32(value[3]).to_bits())?;
-                Ok(())
+                for v in &value {
+                    out.extend_from_slice(&f16::from_f32(*v).to_bits().to_le_bytes());
+                }
             }
-
             Self::HalfFloat1 => {
-                writer.write_u16::<LittleEndian>(f16::from_f32(value[0]).to_bits())?;
-                Ok(())
+                out.extend_from_slice(&f16::from_f32(value[0]).to_bits().to_le_bytes());
             }
-
             Self::UDec3N => {
                 let x = (value[0].clamp(0.0, 1.0) * 1023.0).round() as u32;
                 let y = (value[1].clamp(0.0, 1.0) * 1023.0).round() as u32;
                 let z = (value[2].clamp(0.0, 1.0) * 1023.0).round() as u32;
-                let packed = x | (y << 10) | (z << 20);
-                writer.write_u32::<LittleEndian>(packed)?;
-                Ok(())
+                out.extend_from_slice(&(x | (y << 10) | (z << 20)).to_le_bytes());
             }
         }
     }
 
     /// Pack raw integer indices into bytes (inverse of `unpack_as_indices()`).
-    pub fn pack_as_indices<W: Write>(self, writer: &mut W, indices: [u16; 4]) -> Result<()> {
+    pub fn pack_as_indices(self, out: &mut Vec<u8>, indices: [u16; 4]) {
         match self {
             Self::UByte4 | Self::UByte4N => {
                 let packed = (indices[0] as u32)
                     | ((indices[1] as u32) << 8)
                     | ((indices[2] as u32) << 16)
                     | ((indices[3] as u32) << 24);
-                writer.write_u32::<LittleEndian>(packed)?;
-                Ok(())
+                out.extend_from_slice(&packed.to_le_bytes());
             }
             Self::Short4 | Self::Short4N => {
-                writer.write_i16::<LittleEndian>(indices[0] as i16)?;
-                writer.write_i16::<LittleEndian>(indices[1] as i16)?;
-                writer.write_i16::<LittleEndian>(indices[2] as i16)?;
-                writer.write_i16::<LittleEndian>(indices[3] as i16)?;
-                Ok(())
+                for &idx in &indices {
+                    out.extend_from_slice(&(idx as i16).to_le_bytes());
+                }
             }
             Self::UShort4N => {
-                writer.write_u16::<LittleEndian>(indices[0])?;
-                writer.write_u16::<LittleEndian>(indices[1])?;
-                writer.write_u16::<LittleEndian>(indices[2])?;
-                writer.write_u16::<LittleEndian>(indices[3])?;
-                Ok(())
+                for &idx in &indices {
+                    out.extend_from_slice(&idx.to_le_bytes());
+                }
             }
             other => {
                 let v = [
@@ -550,7 +500,7 @@ impl VertexElementType {
                     indices[2] as f32,
                     indices[3] as f32,
                 ];
-                other.pack(writer, v)
+                other.pack(out, v);
             }
         }
     }
@@ -568,7 +518,6 @@ fn sign_extend_10bit(value: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
     #[test]
     fn test_float3_unpack() {
@@ -577,16 +526,16 @@ mod tests {
             0x00, 0x00, 0x00, 0x40, // 2.0f
             0x00, 0x00, 0x40, 0x40, // 3.0f
         ];
-        let mut cursor = Cursor::new(&data);
-        let result = VertexElementType::Float3.unpack(&mut cursor).unwrap();
+        let mut pos = 0;
+        let result = VertexElementType::Float3.unpack(&data, &mut pos).unwrap();
         assert_eq!(result, [1.0, 2.0, 3.0, 1.0]);
     }
 
     #[test]
     fn test_ubyte4n_unpack() {
         let data: [u8; 4] = [255, 128, 0, 255];
-        let mut cursor = Cursor::new(&data);
-        let result = VertexElementType::UByte4N.unpack(&mut cursor).unwrap();
+        let mut pos = 0;
+        let result = VertexElementType::UByte4N.unpack(&data, &mut pos).unwrap();
         assert!((result[0] - 1.0).abs() < 0.01);
         assert!((result[1] - 0.5).abs() < 0.01);
         assert!((result[2] - 0.0).abs() < 0.01);
@@ -604,69 +553,62 @@ mod tests {
 
     #[test]
     fn test_unpack_as_indices_ubyte4() {
-        // Bytes: [5, 10, 200, 0] packed little-endian
         let data: [u8; 4] = [5, 10, 200, 0];
-        let mut cursor = Cursor::new(&data);
+        let mut pos = 0;
         let result = VertexElementType::UByte4
-            .unpack_as_indices(&mut cursor)
+            .unpack_as_indices(&data, &mut pos)
             .unwrap();
         assert_eq!(result, [5, 10, 200, 0]);
     }
 
     #[test]
     fn test_unpack_as_indices_ubyte4n_not_normalized() {
-        // UByte4N.unpack() would return [1.0, 0.5, 0.0, 1.0]
-        // unpack_as_indices() must return the raw byte values instead
         let data: [u8; 4] = [255, 128, 0, 255];
-        let mut cursor = Cursor::new(&data);
+        let mut pos = 0;
         let result = VertexElementType::UByte4N
-            .unpack_as_indices(&mut cursor)
+            .unpack_as_indices(&data, &mut pos)
             .unwrap();
         assert_eq!(result, [255, 128, 0, 255]);
     }
 
     #[test]
     fn test_unpack_as_indices_short4_positive() {
-        // Two positive i16 values: 300, 1
         let mut data = Vec::new();
         data.extend_from_slice(&300i16.to_le_bytes());
         data.extend_from_slice(&1i16.to_le_bytes());
         data.extend_from_slice(&0i16.to_le_bytes());
         data.extend_from_slice(&0i16.to_le_bytes());
-        let mut cursor = Cursor::new(&data);
+        let mut pos = 0;
         let result = VertexElementType::Short4
-            .unpack_as_indices(&mut cursor)
+            .unpack_as_indices(&data, &mut pos)
             .unwrap();
         assert_eq!(result, [300, 1, 0, 0]);
     }
 
     #[test]
     fn test_unpack_as_indices_short4_negative_clamped() {
-        // Negative i16 should clamp to 0
         let mut data = Vec::new();
         data.extend_from_slice(&(-1i16).to_le_bytes());
         data.extend_from_slice(&5i16.to_le_bytes());
         data.extend_from_slice(&(-100i16).to_le_bytes());
         data.extend_from_slice(&0i16.to_le_bytes());
-        let mut cursor = Cursor::new(&data);
+        let mut pos = 0;
         let result = VertexElementType::Short4
-            .unpack_as_indices(&mut cursor)
+            .unpack_as_indices(&data, &mut pos)
             .unwrap();
         assert_eq!(result, [0, 5, 0, 0]);
     }
 
     #[test]
     fn test_unpack_as_indices_ushort4n_not_normalized() {
-        // UShort4N.unpack() would normalize to 0.0-1.0
-        // unpack_as_indices() must return raw u16 values
         let mut data = Vec::new();
         data.extend_from_slice(&500u16.to_le_bytes());
         data.extend_from_slice(&65535u16.to_le_bytes());
         data.extend_from_slice(&0u16.to_le_bytes());
         data.extend_from_slice(&1u16.to_le_bytes());
-        let mut cursor = Cursor::new(&data);
+        let mut pos = 0;
         let result = VertexElementType::UShort4N
-            .unpack_as_indices(&mut cursor)
+            .unpack_as_indices(&data, &mut pos)
             .unwrap();
         assert_eq!(result, [500, 65535, 0, 1]);
     }
@@ -675,10 +617,10 @@ mod tests {
 
     fn roundtrip_pack_unpack(ty: VertexElementType, value: [f32; 4]) -> [f32; 4] {
         let mut buf = Vec::new();
-        ty.pack(&mut buf, value).unwrap();
+        ty.pack(&mut buf, value);
         assert_eq!(buf.len(), ty.size(), "packed size mismatch for {:?}", ty);
-        let mut cursor = Cursor::new(&buf);
-        ty.unpack(&mut cursor).unwrap()
+        let mut pos = 0;
+        ty.unpack(&buf, &mut pos).unwrap()
     }
 
     #[test]
@@ -688,7 +630,7 @@ mod tests {
         assert_eq!(r[0], v[0]);
         assert_eq!(r[1], v[1]);
         assert_eq!(r[2], v[2]);
-        assert_eq!(r[3], 1.0); // Float3 always returns w=1.0
+        assert_eq!(r[3], 1.0);
     }
 
     #[test]
@@ -740,12 +682,10 @@ mod tests {
     fn test_pack_as_indices_ubyte4_roundtrip() {
         let indices = [5u16, 10, 200, 0];
         let mut buf = Vec::new();
-        VertexElementType::UByte4
-            .pack_as_indices(&mut buf, indices)
-            .unwrap();
-        let mut cursor = Cursor::new(&buf);
+        VertexElementType::UByte4.pack_as_indices(&mut buf, indices);
+        let mut pos = 0;
         let result = VertexElementType::UByte4
-            .unpack_as_indices(&mut cursor)
+            .unpack_as_indices(&buf, &mut pos)
             .unwrap();
         assert_eq!(result, indices);
     }
@@ -754,12 +694,10 @@ mod tests {
     fn test_pack_as_indices_short4_roundtrip() {
         let indices = [300u16, 1, 0, 0];
         let mut buf = Vec::new();
-        VertexElementType::Short4
-            .pack_as_indices(&mut buf, indices)
-            .unwrap();
-        let mut cursor = Cursor::new(&buf);
+        VertexElementType::Short4.pack_as_indices(&mut buf, indices);
+        let mut pos = 0;
         let result = VertexElementType::Short4
-            .unpack_as_indices(&mut cursor)
+            .unpack_as_indices(&buf, &mut pos)
             .unwrap();
         assert_eq!(result, indices);
     }

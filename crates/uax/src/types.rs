@@ -6,6 +6,57 @@
 //! All pointers in the serialized format are 32-bit offsets that need
 //! rebasing by subtracting 0x10 to get actual offsets within the chunk.
 
+use zerocopy::{FromBytes, Immutable, KnownLayout};
+
+// ============================================================================
+// Zerocopy raw overlays
+// ============================================================================
+
+/// Raw on-disk Granny animation structure (32 bytes, little-endian, x64).
+///
+/// ```text
+/// +0x00: uint64 name_ptr          - Pointer to null-terminated name string
+/// +0x08: float  duration          - Animation duration in seconds
+/// +0x0C: float  time_step         - Time step between keyframes
+/// +0x10: float  oversampling      - Oversampling factor
+/// +0x14: int32  track_group_count - Number of track groups
+/// +0x18: uint64 track_groups_ptr  - Pointer to track group array
+/// ```
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct AnimationRaw {
+    pub name_ptr: [u8; 8],
+    pub duration: [u8; 4],
+    pub time_step: [u8; 4],
+    pub oversampling: [u8; 4],
+    pub track_group_count: [u8; 4],
+    pub track_groups_ptr: [u8; 8],
+}
+
+/// Raw on-disk Granny file_info header (partial, 96 bytes, little-endian).
+///
+/// We only overlay the fields we actually read from file_info.
+/// The full file_info is much larger but we access specific offsets.
+///
+/// ```text
+/// +0x4C: int32  track_group_count
+/// +0x50: uint32 track_groups_ptr
+/// +0x58: int32  animation_count
+/// +0x5C: uint32 animations_ptr
+/// ```
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct FileInfoPartialRaw {
+    /// Bytes 0x00..0x4C that we skip over.
+    pub _prefix: [u8; 0x4C],
+    pub track_group_count: [u8; 4],
+    pub track_groups_ptr: [u8; 4],
+    /// Bytes 0x54..0x58 (padding/other fields).
+    pub _gap: [u8; 4],
+    pub animation_count: [u8; 4],
+    pub animations_ptr: [u8; 4],
+}
+
 /// Granny file_info structure offsets (32-bit pointer layout).
 /// Offsets are relative to the start of file_info (after 32-byte Granny header).
 pub mod file_info {

@@ -1,14 +1,11 @@
 //! Error types for UGX parsing.
 
+use alloc::string::{FromUtf8Error, String};
 use thiserror::Error;
 
 /// UGX parsing errors.
 #[derive(Error, Debug)]
 pub enum Error {
-    /// I/O error.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// ECF error.
     #[error("ECF error: {0}")]
     Ecf(#[from] ecf::Error),
@@ -47,12 +44,17 @@ pub enum Error {
 
     /// Invalid UTF-8 string.
     #[error("Invalid UTF-8 string: {0}")]
-    InvalidUtf8(#[from] std::string::FromUtf8Error),
+    InvalidUtf8(#[from] FromUtf8Error),
 
     /// Unsupported format.
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
+
+    /// I/O error (std feature only).
+    #[cfg(feature = "std")]
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Result type for UGX operations.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;

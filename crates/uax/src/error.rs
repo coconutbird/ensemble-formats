@@ -1,20 +1,21 @@
 //! Error types for UAX parsing.
 
+use alloc::string::String;
 use thiserror::Error;
 
 /// Result type for UAX operations.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// Error type for UAX parsing.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// I/O error during reading.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// ECF parsing error.
     #[error("ECF error: {0}")]
     Ecf(#[from] ecf::Error),
+
+    /// Unexpected end of data.
+    #[error("unexpected end of data")]
+    UnexpectedEof,
 
     /// Invalid UAX file ID.
     #[error("Invalid UAX file ID: expected 0xAAC93747, got 0x{0:08X}")]

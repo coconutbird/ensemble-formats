@@ -13,6 +13,11 @@
 //! Key insight: column-major storage of `M_gl` = row-major storage of `M_dx`,
 //! because `M_gl = M_dx^T`. So we just write DX matrix rows flat for glTF.
 
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use gltf_json as json;
 use json::validation::Checked::Valid;
@@ -1433,6 +1438,8 @@ fn create_skeleton_nodes_from_granny(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
+    use alloc::vec;
 
     #[test]
     fn test_export_options_default() {
@@ -1964,7 +1971,7 @@ mod tests {
                 position: pos,
                 ..Default::default()
             };
-            packer.pack_vertex(&mut vb, &v).unwrap();
+            packer.pack_vertex(&mut vb, &v);
         }
 
         let geom = UgxGeom {

@@ -3,11 +3,12 @@
 //! This module provides a container that preserves the raw Granny data
 //! while exposing parsed animation metadata for inspection and modification.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::types::{self, GRANNY_HEADER_SIZE, animation, file_info};
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use ecf::{EcfChunkHeader, EcfHeader, Reader};
-use std::io::{Cursor, Seek, SeekFrom, Write};
+use ecf::{EcfChunkHeader, EcfHeader, Reader as EcfReader};
 
 /// A parsed UAX animation file.
 ///
@@ -26,7 +27,7 @@ pub struct UaxFile {
 impl UaxFile {
     /// Read a UAX file from a byte slice.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let ecf = Reader::new(data)?;
+        let ecf = EcfReader::new(data)?;
 
         // Validate file ID
         let file_id = ecf.header().id;
@@ -61,36 +62,32 @@ impl UaxFile {
         })
     }
 
-    /// Write the UAX file to a writer, preserving original ECF structure.
-    pub fn write<W: Write + Seek>(&self, mut writer: W) -> Result<()> {
+    /// Write the UAX file to bytes, preserving original ECF structure.
+    pub fn to_bytes(&self) -> Vec<u8> {
         // Write the original ECF header
-        writer.write_all(&self.ecf_header.to_bytes())?;
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.ecf_header.to_bytes());
 
         // Write the original chunk header (with updated checksum if data changed)
         let mut chunk_header = self.chunk_header.clone();
         chunk_header.adler32 = ecf::adler32(&self.chunk_data);
         chunk_header.size = self.chunk_data.len() as u32;
-        writer.write_all(&chunk_header.to_bytes())?;
+        out.extend_from_slice(&chunk_header.to_bytes());
 
-        // Seek to the chunk data offset and write the data
-        writer.seek(SeekFrom::Start(chunk_header.offset as u64))?;
-        writer.write_all(&self.chunk_data)?;
+        // Pad up to the chunk data offset
+        let chunk_offset = chunk_header.offset as usize;
+        if out.len() < chunk_offset {
+            out.resize(chunk_offset, 0);
+        }
+        out.extend_from_slice(&self.chunk_data);
 
         // Pad to original file size if needed
-        let current_pos = writer.stream_position()? as usize;
         let target_size = self.ecf_header.file_size as usize;
-        if current_pos < target_size {
-            writer.write_all(&vec![0u8; target_size - current_pos])?;
+        if out.len() < target_size {
+            out.resize(target_size, 0);
         }
 
-        Ok(())
-    }
-
-    /// Write the UAX file to bytes.
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut buf = Cursor::new(Vec::new());
-        self.write(&mut buf)?;
-        Ok(buf.into_inner())
+        out
     }
 
     /// Get the raw chunk data (for debugging/inspection).
@@ -123,12 +120,21 @@ impl UaxFile {
         let anim_offset = self.animation_offset()?;
         let data = self.file_info_data();
 
-        if anim_offset + animation::NAME_PTR + 8 > data.len() {
+        let name_off = anim_offset + animation::NAME_PTR;
+        if name_off + 8 > data.len() {
             return Err(Error::InvalidPointerOffset(anim_offset as u64, data.len()));
         }
 
-        let mut cursor = Cursor::new(&data[anim_offset..]);
-        let name_ptr = cursor.read_u64::<LittleEndian>()?;
+        let name_ptr = u64::from_le_bytes([
+            data[name_off],
+            data[name_off + 1],
+            data[name_off + 2],
+            data[name_off + 3],
+            data[name_off + 4],
+            data[name_off + 5],
+            data[name_off + 6],
+            data[name_off + 7],
+        ]);
 
         if name_ptr == 0 || name_ptr as usize >= data.len() {
             return Ok(None);
@@ -164,10 +170,15 @@ impl UaxFile {
     // Helper to get the animation offset in file_info data
     fn animation_offset(&self) -> Result<usize> {
         let data = self.file_info_data();
+        let off = file_info::ANIMATIONS_PTR;
+
+        if off + 4 > data.len() {
+            return Err(Error::UnexpectedEof);
+        }
 
         // Read Animations pointer (32-bit, needs rebasing)
-        let mut cursor = Cursor::new(&data[file_info::ANIMATIONS_PTR..]);
-        let stored = cursor.read_u32::<LittleEndian>()? as u64;
+        let stored =
+            u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]) as u64;
         let offset = types::rebase_pointer(stored) as usize;
 
         if offset == 0 || offset >= data.len() {
@@ -183,8 +194,12 @@ impl UaxFile {
         if offset + 4 > data.len() {
             return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
         }
-        let mut cursor = Cursor::new(&data[offset..]);
-        Ok(cursor.read_i32::<LittleEndian>()?)
+        Ok(i32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]))
     }
 
     // Read f32 at offset in file_info data
@@ -193,8 +208,12 @@ impl UaxFile {
         if offset + 4 > data.len() {
             return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
         }
-        let mut cursor = Cursor::new(&data[offset..]);
-        Ok(cursor.read_f32::<LittleEndian>()?)
+        Ok(f32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]))
     }
 
     // Write f32 at offset in file_info data
@@ -203,8 +222,8 @@ impl UaxFile {
         if offset + 4 > data.len() {
             return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
         }
-        let mut cursor = Cursor::new(&mut data[offset..]);
-        cursor.write_f32::<LittleEndian>(value)?;
+        let bytes = value.to_le_bytes();
+        data[offset..offset + 4].copy_from_slice(&bytes);
         Ok(())
     }
 }
@@ -227,6 +246,9 @@ fn read_cstring(data: &[u8], offset: u64) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+    use std::{eprintln, println};
+
     use super::*;
 
     #[test]
@@ -252,7 +274,7 @@ mod tests {
         println!("Oversampling: {}", uax.oversampling().unwrap());
 
         // Write back to bytes
-        let written_data = uax.to_bytes().expect("Failed to write UAX");
+        let written_data = uax.to_bytes();
 
         // Compare - they should be identical
         assert_eq!(
@@ -301,7 +323,7 @@ mod tests {
             if path.extension().map(|e| e == "uax").unwrap_or(false) {
                 let original_data = std::fs::read(&path).expect("Failed to read UAX file");
                 let uax = UaxFile::from_bytes(&original_data).expect("Failed to parse UAX");
-                let written_data = uax.to_bytes().expect("Failed to write UAX");
+                let written_data = uax.to_bytes();
 
                 assert_eq!(
                     original_data,
@@ -342,7 +364,7 @@ mod tests {
         assert!((uax.duration().unwrap() - new_duration).abs() < 0.001);
 
         // Write and re-read
-        let written = uax.to_bytes().expect("Failed to write UAX");
+        let written = uax.to_bytes();
         let reloaded = UaxFile::from_bytes(&written).expect("Failed to re-read UAX");
 
         assert!((reloaded.duration().unwrap() - new_duration).abs() < 0.001);
