@@ -7,15 +7,16 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use bdt::Writer;
+//! use bdt::{Endian, Writer};
 //!
-//! let data = Writer::write_le(&root)?;
+//! let data = Writer::write(&root, Endian::Little)?;
 //! ```
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
+use crate::Endian;
 use crate::error::Result;
 use crate::node::Node;
 use crate::variant::{
@@ -29,13 +30,21 @@ use crate::variant::{
 pub struct Writer;
 
 impl Writer {
-    /// Build little-endian packed data (PC/Definitive Edition format).
-    pub fn write_le(root: &Node) -> Result<Vec<u8>> {
-        Self::write_le_with_base(root, 0)
+    /// Build packed data with the given endianness.
+    pub fn write(root: &Node, endian: Endian) -> Result<Vec<u8>> {
+        Self::write_with_base(root, 0, endian)
+    }
+
+    /// Build packed data with a pointer base offset and the given endianness.
+    pub fn write_with_base(root: &Node, pointer_base: usize, endian: Endian) -> Result<Vec<u8>> {
+        match endian {
+            Endian::Little => Self::write_le_impl(root, pointer_base),
+            Endian::Big => Self::write_be_impl(root, pointer_base),
+        }
     }
 
     /// Build little-endian packed data with a pointer base offset.
-    pub fn write_le_with_base(root: &Node, pointer_base: usize) -> Result<Vec<u8>> {
+    fn write_le_impl(root: &Node, pointer_base: usize) -> Result<Vec<u8>> {
         let mut buf = VariantBuffer::new(false);
         let mut nodes = Vec::new();
 
@@ -133,13 +142,8 @@ impl Writer {
         Ok(data)
     }
 
-    /// Build big-endian packed data (Xbox 360 format).
-    pub fn write_be(root: &Node) -> Result<Vec<u8>> {
-        Self::write_be_with_base(root, 0)
-    }
-
     /// Build big-endian packed data with a pointer base offset.
-    pub fn write_be_with_base(root: &Node, pointer_base: usize) -> Result<Vec<u8>> {
+    fn write_be_impl(root: &Node, pointer_base: usize) -> Result<Vec<u8>> {
         let mut buf = VariantBuffer::new(true);
         let mut nodes = Vec::new();
 

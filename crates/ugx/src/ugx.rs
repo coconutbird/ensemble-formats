@@ -785,7 +785,7 @@ impl UgxGeom {
     /// has a "Name" attribute, map type children (Diffuse, Normal, etc.),
     /// UVW velocity children, and a Properties child (BNameValueMap).
     fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
-        let root = match bdt::Reader::read_le(data)? {
+        let root = match bdt::Reader::read(data, bdt::Endian::Little)? {
             Some(root) => root,
             None => return Ok(Vec::new()),
         };
@@ -1431,7 +1431,7 @@ mod tests {
                     eprintln!("    {}", hex.join(" "));
                 }
 
-                match bdt::Reader::read_le(&mat_data) {
+                match bdt::Reader::read(&mat_data, bdt::Endian::Little) {
                     Ok(Some(root)) => {
                         eprintln!(
                             "  BDT root: '{}' children={}",

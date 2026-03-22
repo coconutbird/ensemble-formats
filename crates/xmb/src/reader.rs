@@ -74,20 +74,22 @@ impl Reader {
 
         // The packed document header starts after the 4-byte signature.
         // All internal pointers are absolute from data[0] (including the sig).
-        if is_big_endian {
-            let root = bdt::Reader::read_be_at(data, 4)?;
-            Ok(Document {
-                root,
-                format: Format::Xbox360,
-                source_file: None,
-            })
+        let endian = if is_big_endian {
+            bdt::Endian::Big
         } else {
-            let root = bdt::Reader::read_le_at(data, 4)?;
-            Ok(Document {
-                root,
-                format: Format::PC,
-                source_file: None,
-            })
-        }
+            bdt::Endian::Little
+        };
+        let format = if is_big_endian {
+            Format::Xbox360
+        } else {
+            Format::PC
+        };
+
+        let root = bdt::Reader::read_at(data, 4, endian)?;
+        Ok(Document {
+            root,
+            format,
+            source_file: None,
+        })
     }
 }

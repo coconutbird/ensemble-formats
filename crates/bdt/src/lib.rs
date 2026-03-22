@@ -12,10 +12,10 @@
 //! ## Example
 //!
 //! ```ignore
-//! use bdt::{Reader, Node};
+//! use bdt::{Endian, Reader, Node};
 //!
 //! // Read a packed document from raw bytes (e.g., from an ECF chunk)
-//! let node = Reader::read_le(&data)?;
+//! let node = Reader::read(&data, Endian::Little)?;
 //! if let Some(root) = node {
 //!     for child in &root.children {
 //!         println!("{}: {:?}", child.name, child.get_attribute("Name"));
@@ -25,6 +25,17 @@
 
 #![no_std]
 extern crate alloc;
+
+/// Runtime byte-order selection.
+///
+/// Passed to [`Reader`] and [`Writer`] so callers can choose endianness
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Endian {
+    /// Little-endian (PC / Definitive Edition).
+    Little,
+    /// Big-endian (Xbox 360).
+    Big,
+}
 
 mod error;
 pub use error::{Error, Result};

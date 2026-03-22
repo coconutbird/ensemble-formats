@@ -34,10 +34,7 @@ impl Writer {
 
     /// Write an XMB document with explicit compression option.
     pub fn write_with_options(doc: &Document, format: Format, compress: bool) -> Result<Vec<u8>> {
-        let packed_data = match format {
-            Format::PC => Self::build_packed_data_le(doc)?,
-            Format::Xbox360 => Self::build_packed_data_be(doc)?,
-        };
+        let packed_data = Self::build_packed_data(doc, format)?;
 
         let mut ecf = ecf::Writer::new(ECF_FILE_ID);
         if compress {
@@ -59,51 +56,49 @@ impl Writer {
         Self::write(doc, doc.format())
     }
 
-    /// Build packed data in little-endian (PC) format.
+    /// Build packed data for the given format.
     ///
-    /// Layout: `[signature LE (4)] [bdt packed data with base offset 4]`
-    fn build_packed_data_le(doc: &Document) -> Result<Vec<u8>> {
+    /// Layout: `[signature (4)] [bdt packed data with base offset 4]`
+    fn build_packed_data(doc: &Document, format: Format) -> Result<Vec<u8>> {
+        let endian = match format {
+            Format::PC => bdt::Endian::Little,
+            Format::Xbox360 => bdt::Endian::Big,
+        };
+
         if let Some(root) = &doc.root {
-            let bdt_data = bdt::Writer::write_le_with_base(root, 4)?;
+            let bdt_data = bdt::Writer::write_with_base(root, 4, endian)?;
 
             let mut data = Vec::with_capacity(4 + bdt_data.len());
-            data.extend_from_slice(&SIGNATURE.to_le_bytes());
+            let sig_bytes = match format {
+                Format::PC => SIGNATURE.to_le_bytes(),
+                Format::Xbox360 => SIGNATURE.to_be_bytes(),
+            };
+            data.extend_from_slice(&sig_bytes);
             data.extend_from_slice(&bdt_data);
             Ok(data)
         } else {
             let mut data = Vec::new();
-            data.extend_from_slice(&SIGNATURE.to_le_bytes());
-            data.extend_from_slice(&0u32.to_le_bytes()); // padding
-            // Nodes BPackedArray (empty)
-            data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
-            data.extend_from_slice(&0u32.to_le_bytes());
-            data.extend_from_slice(&0u64.to_le_bytes());
-            // Variant BPackedArray (empty)
-            data.extend_from_slice(&0u32.to_le_bytes());
-            data.extend_from_slice(&0u32.to_le_bytes());
-            data.extend_from_slice(&0u64.to_le_bytes());
-            Ok(data)
-        }
-    }
-
-    /// Build packed data in big-endian (Xbox 360) format.
-    ///
-    /// Layout: `[signature BE (4)] [bdt packed data with base offset 4]`
-    fn build_packed_data_be(doc: &Document) -> Result<Vec<u8>> {
-        if let Some(root) = &doc.root {
-            let bdt_data = bdt::Writer::write_be_with_base(root, 4)?;
-
-            let mut data = Vec::with_capacity(4 + bdt_data.len());
-            data.extend_from_slice(&SIGNATURE.to_be_bytes());
-            data.extend_from_slice(&bdt_data);
-            Ok(data)
-        } else {
-            let mut data = Vec::new();
-            data.extend_from_slice(&SIGNATURE.to_be_bytes());
-            data.extend_from_slice(&0u32.to_be_bytes()); // nodes_size
-            data.extend_from_slice(&0u32.to_be_bytes()); // nodes_ptr
-            data.extend_from_slice(&0u32.to_be_bytes()); // variant_data_size
-            data.extend_from_slice(&0u32.to_be_bytes()); // variant_data_ptr
+            match format {
+                Format::PC => {
+                    data.extend_from_slice(&SIGNATURE.to_le_bytes());
+                    data.extend_from_slice(&0u32.to_le_bytes()); // padding
+                    // Nodes BPackedArray (empty)
+                    data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+                    data.extend_from_slice(&0u32.to_le_bytes());
+                    data.extend_from_slice(&0u64.to_le_bytes());
+                    // Variant BPackedArray (empty)
+                    data.extend_from_slice(&0u32.to_le_bytes());
+                    data.extend_from_slice(&0u32.to_le_bytes());
+                    data.extend_from_slice(&0u64.to_le_bytes());
+                }
+                Format::Xbox360 => {
+                    data.extend_from_slice(&SIGNATURE.to_be_bytes());
+                    data.extend_from_slice(&0u32.to_be_bytes()); // nodes_size
+                    data.extend_from_slice(&0u32.to_be_bytes()); // nodes_ptr
+                    data.extend_from_slice(&0u32.to_be_bytes()); // variant_data_size
+                    data.extend_from_slice(&0u32.to_be_bytes()); // variant_data_ptr
+                }
+            }
             Ok(data)
         }
     }

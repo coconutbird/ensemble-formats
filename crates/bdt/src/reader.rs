@@ -8,9 +8,9 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use bdt::Reader;
+//! use bdt::{Endian, Reader};
 //!
-//! let node = Reader::read_le(&data)?;
+//! let node = Reader::read(&data, Endian::Little)?;
 //! ```
 
 use alloc::format;
@@ -18,6 +18,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use zerocopy::Ref;
 
+use crate::Endian;
 use crate::compact;
 use crate::error::{Error, Result};
 use crate::node::{Attribute, Node};
@@ -36,37 +37,28 @@ use crate::variant::{
 pub struct Reader;
 
 impl Reader {
-    /// Parse little-endian packed data (PC/Definitive Edition format).
+    /// Parse packed data with the given endianness.
     ///
     /// Auto-detects the format:
-    /// - If data starts with 0x3E: compact BPackedHeader format
+    /// - If data starts with `0x3E`/`0xE3`: compact BPackedHeader format
     /// - Otherwise: XMX variant format (pad + BPackedArrays)
-    pub fn read_le(data: &[u8]) -> Result<Option<Node>> {
-        Self::read_le_at(data, 0)
+    pub fn read(data: &[u8], endian: Endian) -> Result<Option<Node>> {
+        Self::read_at(data, 0, endian)
     }
 
-    /// Parse little-endian packed data with a header offset.
+    /// Parse packed data with a header offset and the given endianness.
     ///
     /// The header starts at `header_offset` within `data`. All internal pointers
     /// (node pointers, attribute pointers, etc.) are absolute offsets from `data[0]`.
-    pub fn read_le_at(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
+    pub fn read_at(data: &[u8], header_offset: usize, endian: Endian) -> Result<Option<Node>> {
+        let big_endian = endian == Endian::Big;
         if compact::is_compact_signature(data, header_offset) {
-            return compact::read_compact(data, header_offset, false);
+            return compact::read_compact(data, header_offset, big_endian);
         }
-        read_xmx_le(data, header_offset)
-    }
-
-    /// Parse big-endian packed data (Xbox 360 format).
-    pub fn read_be(data: &[u8]) -> Result<Option<Node>> {
-        Self::read_be_at(data, 0)
-    }
-
-    /// Parse big-endian packed data with a header offset.
-    pub fn read_be_at(data: &[u8], header_offset: usize) -> Result<Option<Node>> {
-        if compact::is_compact_signature(data, header_offset) {
-            return compact::read_compact(data, header_offset, true);
+        match endian {
+            Endian::Little => read_xmx_le(data, header_offset),
+            Endian::Big => read_xmx_be(data, header_offset),
         }
-        read_xmx_be(data, header_offset)
     }
 }
 

@@ -983,7 +983,7 @@ fn build_material_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         root.children.push(build_material_node(mat));
     }
 
-    let data = bdt::Writer::write_le(&root)?;
+    let data = bdt::Writer::write(&root, bdt::Endian::Little)?;
     Ok(data)
 }
 
