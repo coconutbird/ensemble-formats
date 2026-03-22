@@ -1,27 +1,42 @@
 //! Decrypting reader wrapper for encrypted ERA files.
+//!
+//! [`DecryptReader`] is generic over [`ecf::io::Read`] + [`ecf::io::Seek`].
+//! When the `std` feature is enabled, those traits *are* `std::io::Read` /
+//! `std::io::Seek`, so a `File` or `BufReader` works directly.  In `no_std`
+//! mode they are minimal replacements defined in `ecf::io`.
 
+#[cfg(feature = "std")]
 extern crate std;
 
-use std::io::{Read, Seek, SeekFrom};
+use ecf::io::{IoError, Read, Seek, SeekFrom, invalid_seek};
 
 use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64};
 
-/// A reader that decrypts TEA-encrypted data on the fly
+/// A reader that decrypts TEA-encrypted data on the fly.
+///
+/// Wraps any [`Read`] + [`Seek`] source and transparently decrypts
+/// 64-byte TEA blocks in CTR mode as data is read.
+///
+/// ```ignore
+/// use era::{DecryptReader, TeaKeys};
+/// let file = std::fs::File::open("archive.era")?;
+/// let mut reader = DecryptReader::new(file, TeaKeys::default_archive_keys());
+/// ```
 pub struct DecryptReader<R> {
     inner: R,
     keys: TeaKeys,
-    /// Current position in the decrypted stream
+    /// Current position in the decrypted stream.
     position: u64,
-    /// Buffered decrypted block
+    /// Buffered decrypted block.
     buffer: [u8; TEA_BLOCK_SIZE],
-    /// File offset of the start of the buffered block (aligned to TEA_BLOCK_SIZE)
+    /// File offset of the start of the buffered block (aligned to TEA_BLOCK_SIZE).
     buffer_offset: u64,
-    /// Whether the buffer is valid
+    /// Whether the buffer is valid.
     buffer_valid: bool,
 }
 
 impl<R: Read + Seek> DecryptReader<R> {
-    /// Create a new decrypting reader
+    /// Create a new decrypting reader.
     pub fn new(inner: R, keys: TeaKeys) -> Self {
         Self {
             inner,
@@ -33,8 +48,8 @@ impl<R: Read + Seek> DecryptReader<R> {
         }
     }
 
-    /// Read and decrypt a block at the given aligned offset
-    fn read_block(&mut self, block_offset: u64) -> std::io::Result<()> {
+    /// Read and decrypt a block at the given aligned offset.
+    fn read_block(&mut self, block_offset: u64) -> Result<(), IoError> {
         if self.buffer_valid && self.buffer_offset == block_offset {
             return Ok(());
         }
@@ -53,14 +68,14 @@ impl<R: Read + Seek> DecryptReader<R> {
         Ok(())
     }
 
-    /// Get the underlying reader
+    /// Consume this reader and return the underlying source.
     pub fn into_inner(self) -> R {
         self.inner
     }
 }
 
 impl<R: Read + Seek> Read for DecryptReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -68,20 +83,15 @@ impl<R: Read + Seek> Read for DecryptReader<R> {
         let mut total_read = 0;
 
         while total_read < buf.len() {
-            // Calculate which block we need
             let block_offset = (self.position / TEA_BLOCK_SIZE as u64) * TEA_BLOCK_SIZE as u64;
             let offset_in_block = (self.position % TEA_BLOCK_SIZE as u64) as usize;
 
-            // Read and decrypt the block
             match self.read_block(block_offset) {
                 Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    break;
-                }
+                Err(ref e) if is_eof(e) => break,
                 Err(e) => return Err(e),
             }
 
-            // Copy from buffer to output
             let bytes_available = TEA_BLOCK_SIZE - offset_in_block;
             let bytes_to_copy = (buf.len() - total_read).min(bytes_available);
 
@@ -97,7 +107,7 @@ impl<R: Read + Seek> Read for DecryptReader<R> {
 }
 
 impl<R: Read + Seek> Seek for DecryptReader<R> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError> {
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset,
             SeekFrom::Current(offset) => if offset >= 0 {
@@ -105,24 +115,31 @@ impl<R: Read + Seek> Seek for DecryptReader<R> {
             } else {
                 self.position.checked_sub((-offset) as u64)
             }
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of bounds")
-            })?,
+            .ok_or(invalid_seek())?,
             SeekFrom::End(offset) => {
-                // Get file size
                 let end = self.inner.seek(SeekFrom::End(0))?;
                 if offset >= 0 {
                     end.checked_add(offset as u64)
                 } else {
                     end.checked_sub((-offset) as u64)
                 }
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of bounds")
-                })?
+                .ok_or(invalid_seek())?
             }
         };
 
         self.position = new_pos;
         Ok(new_pos)
+    }
+}
+
+/// Check whether an IO error is an unexpected-EOF.
+fn is_eof(e: &IoError) -> bool {
+    #[cfg(feature = "std")]
+    {
+        e.kind() == std::io::ErrorKind::UnexpectedEof
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        matches!(e, IoError::UnexpectedEof)
     }
 }

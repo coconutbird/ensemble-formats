@@ -23,8 +23,8 @@ use gltf_json as json;
 use json::validation::Checked::Valid;
 
 use crate::error::Result;
+use crate::reader::{GrannyBone, UgxGeom};
 use crate::types::{Bone, MapType, Material};
-use crate::ugx::{GrannyBone, UgxGeom};
 use crate::univert_packer::UnpackedVertex;
 
 /// glTF export options.

@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = ["std"]
-std = ["rayon"]
+std = ["rayon", "ecf/std"]
 rayon = ["dep:rayon"]
 
 [dependencies]

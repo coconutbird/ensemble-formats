@@ -6,7 +6,7 @@
 //! # Reading ERA archives
 //!
 //! ```ignore
-//! let reader = era::Reader::new(decrypted_bytes).unwrap();
+//! let reader = era::Reader::from_decrypted(decrypted_bytes).unwrap();
 //! for entry in reader.iter() {
 //!     println!("{}", entry.filename.as_deref().unwrap_or("<unnamed>"));
 //! }
@@ -28,9 +28,9 @@ pub mod crypto;
 mod error;
 mod header;
 mod reader;
+mod streaming_reader;
 mod writer;
 
-#[cfg(feature = "std")]
 mod decrypt_reader;
 #[cfg(feature = "std")]
 mod encrypt_writer;
@@ -39,13 +39,13 @@ pub use buffer_pool::{BufferPool, PooledBuffer};
 pub use crypto::{ARCHIVE_PASSWORD, TEA_BLOCK_SIZE, TeaKeys};
 #[cfg(feature = "rayon")]
 pub use crypto::{tea_decrypt_data_parallel, tea_encrypt_data_parallel};
-#[cfg(feature = "std")]
 pub use decrypt_reader::DecryptReader;
 #[cfg(feature = "std")]
 pub use encrypt_writer::EncryptWriter;
 pub use error::*;
 pub use header::*;
 pub use reader::*;
+pub use streaming_reader::StreamingReader;
 pub use writer::{CompressedData, Writer, compress_file_data};
 
 #[cfg(test)]
@@ -64,7 +64,7 @@ mod tests {
         writer.add_file("test/hello.txt", b"Hello, World!".to_vec());
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::new(&data).expect("Failed to read");
+        let archive = Reader::from_decrypted(&data).expect("Failed to read");
 
         assert_eq!(archive.len(), 2); // filename chunk + 1 file
         let entry = archive.entry(1).unwrap();
@@ -82,7 +82,7 @@ mod tests {
         writer.add_file("empty.txt", vec![]);
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::new(&data).expect("Failed to read");
+        let archive = Reader::from_decrypted(&data).expect("Failed to read");
 
         assert_eq!(archive.len(), 4); // filename chunk + 3 files
 
@@ -106,7 +106,7 @@ mod tests {
         let data1 = writer.finalize().expect("Failed to write");
 
         // Read back and collect hashes
-        let archive = Reader::new(&data1).expect("Failed to read");
+        let archive = Reader::from_decrypted(&data1).expect("Failed to read");
         let hashes1: Vec<_> = archive.iter().map(|e| e.extra.comp_tiger128).collect();
 
         // Create new writer from extracted files
@@ -122,7 +122,7 @@ mod tests {
         let data2 = writer2.finalize().expect("Failed to write second time");
 
         // Read second archive and collect hashes
-        let archive2 = Reader::new(&data2).expect("Failed to read second");
+        let archive2 = Reader::from_decrypted(&data2).expect("Failed to read second");
         let hashes2: Vec<_> = archive2.iter().map(|e| e.extra.comp_tiger128).collect();
 
         // Verify identical bytes and hashes
@@ -141,7 +141,7 @@ mod tests {
         writer.add_file("large.bin", large_data.clone());
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::new(&data).expect("Failed to read");
+        let archive = Reader::from_decrypted(&data).expect("Failed to read");
 
         let content = archive.read_entry(1).expect("Failed to read entry");
         assert_eq!(content, large_data);
@@ -197,7 +197,7 @@ mod tests {
         );
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::new(&data).expect("Failed to read");
+        let archive = Reader::from_decrypted(&data).expect("Failed to read");
 
         assert_eq!(archive.len(), 3);
 
@@ -214,7 +214,7 @@ mod tests {
         writer.add_file("test.txt", b"Test content for compression".to_vec());
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::new(&data).expect("Failed to read");
+        let archive = Reader::from_decrypted(&data).expect("Failed to read");
 
         let (compressed, decomp_size, tiger128) =
             archive.read_entry_compressed(1).expect("Failed to read");
@@ -254,7 +254,7 @@ mod tests {
         let (last_written, last_total) = progress_calls.last().unwrap();
         assert_eq!(last_written, last_total);
 
-        let archive = Reader::new(&data).expect("Failed to read");
+        let archive = Reader::from_decrypted(&data).expect("Failed to read");
         assert_eq!(archive.len(), 4);
         let content = archive.read_entry(1).expect("Failed to read entry");
         assert_eq!(content, b"Hello, World!");

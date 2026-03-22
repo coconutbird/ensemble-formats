@@ -1,12 +1,12 @@
 //! UGX CLI - Command-line tool for UGX model files.
 
 use clap::{Parser, Subcommand};
-use ecf::Reader;
+use ecf::Reader as EcfReader;
 use std::fs;
 use std::path::PathBuf;
 use ugx::{
-    GltfExportOptions, GltfImportOptions, UgxGeom, export_to_gltf_with_buffer_name,
-    import_from_gltf, write_ugx,
+    GltfExportOptions, GltfImportOptions, Reader as UgxReader, Writer as UgxWriter,
+    export_to_gltf_with_buffer_name, import_from_gltf,
 };
 
 #[derive(Parser)]
@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
-    let geom = UgxGeom::read(&data)?;
+    let geom = UgxReader::read(&data)?;
 
     println!("UGX File: {}", input.display());
     println!();
@@ -237,7 +237,7 @@ fn cmd_to_gltf(
     no_skeleton: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
-    let geom = UgxGeom::read(&data)?;
+    let geom = UgxReader::read(&data)?;
 
     let options = GltfExportOptions {
         embed_buffers: !external_buffer,
@@ -413,7 +413,7 @@ fn cmd_from_gltf(
     let geom = import_from_gltf(&json_str, buffer_data.as_deref(), &options)?;
 
     // Write UGX
-    let ugx_data = write_ugx(&geom)?;
+    let ugx_data = UgxWriter::write(&geom)?;
     fs::write(output, &ugx_data)?;
 
     println!("Wrote {}", output.display());
@@ -435,7 +435,7 @@ fn cmd_from_gltf(
 
 fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let data = std::fs::read(input)?;
-    let ecf = Reader::new(&data)?;
+    let ecf = EcfReader::new(&data)?;
 
     println!("=== ECF Header ===");
     let header = ecf.header();

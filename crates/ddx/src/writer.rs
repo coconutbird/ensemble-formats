@@ -29,7 +29,22 @@ const DDSCAPS_TEXTURE: u32 = 0x1000;
 const DDSCAPS_MIPMAP: u32 = 0x400000;
 const DDSCAPS_COMPLEX: u32 = 0x8;
 
+/// DDX/DDS file writer.
+pub struct Writer;
+
+impl Writer {
+    /// Write a DDX texture as a standard DDS file.
+    pub fn write(texture: &DdxTexture) -> Result<Vec<u8>> {
+        texture.to_bytes()
+    }
+}
+
 impl DdxTexture {
+    /// Write texture as bytes (standard DDS format).
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        self.to_dds()
+    }
+
     /// Write texture as a standard DDS file.
     pub fn to_dds(&self) -> Result<Vec<u8>> {
         let mut output = Vec::new();

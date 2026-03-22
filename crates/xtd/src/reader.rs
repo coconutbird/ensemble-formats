@@ -39,6 +39,13 @@ pub struct Reader;
 impl Reader {
     /// Read an XTD file from a byte slice.
     pub fn read(data: &[u8]) -> Result<XtdFile> {
+        XtdFile::from_bytes(data)
+    }
+}
+
+impl XtdFile {
+    /// Parse an XTD file from a byte slice (ECF container).
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let ecf = ecf::Reader::new(data)?;
 
         let mut file = XtdFile {
@@ -61,11 +68,10 @@ impl Reader {
 
             match chunk_header.id {
                 CHUNK_XTD_HEADER => {
-                    file.header = Self::read_header(&chunk_data)?;
+                    file.header = read_header(&chunk_data)?;
                 }
                 CHUNK_TERRAIN => {
-                    file.visual_chunks
-                        .push(Self::read_visual_chunk(&chunk_data)?);
+                    file.visual_chunks.push(read_visual_chunk(&chunk_data)?);
                 }
                 CHUNK_ATLAS => file.atlas_data = chunk_data,
                 CHUNK_TESS => file.tess_data = chunk_data,
@@ -78,64 +84,64 @@ impl Reader {
 
         Ok(file)
     }
+}
 
-    fn read_header(data: &[u8]) -> Result<XtdHeader> {
-        let (raw, _): (Ref<_, XtdHeaderRaw>, _) =
-            Ref::from_prefix(data).map_err(|_| Error::InvalidHeaderSize {
-                expected: XtdHeader::SIZE,
-                actual: data.len(),
-            })?;
-
-        let version = i32::from_be_bytes(raw.version);
-        if version != XTD_VERSION {
-            return Err(Error::InvalidVersion {
-                expected: XTD_VERSION,
-                actual: version,
-            });
-        }
-
-        Ok(XtdHeader {
-            version,
-            num_x_verts: i32::from_be_bytes(raw.num_x_verts),
-            num_x_chunks: i32::from_be_bytes(raw.num_x_chunks),
-            tile_scale: f32::from_be_bytes(raw.tile_scale),
-            world_min: [
-                f32::from_be_bytes(raw.world_min[0]),
-                f32::from_be_bytes(raw.world_min[1]),
-                f32::from_be_bytes(raw.world_min[2]),
-            ],
-            world_max: [
-                f32::from_be_bytes(raw.world_max[0]),
-                f32::from_be_bytes(raw.world_max[1]),
-                f32::from_be_bytes(raw.world_max[2]),
-            ],
-        })
-    }
-
-    fn read_visual_chunk(data: &[u8]) -> Result<XtdVisualChunk> {
-        let (raw, _): (Ref<_, XtdVisualChunkRaw>, _) = Ref::from_prefix(data).map_err(|_| {
-            Error::InvalidChunkData(format!(
-                "Visual chunk too small: {} < {}",
-                data.len(),
-                XtdVisualChunk::SIZE
-            ))
+fn read_header(data: &[u8]) -> Result<XtdHeader> {
+    let (raw, _): (Ref<_, XtdHeaderRaw>, _) =
+        Ref::from_prefix(data).map_err(|_| Error::InvalidHeaderSize {
+            expected: XtdHeader::SIZE,
+            actual: data.len(),
         })?;
 
-        Ok(XtdVisualChunk {
-            grid_x: i32::from_be_bytes(raw.grid_x),
-            grid_z: i32::from_be_bytes(raw.grid_z),
-            max_v_stride: i32::from_be_bytes(raw.max_v_stride),
-            min: [
-                f32::from_be_bytes(raw.min[0]),
-                f32::from_be_bytes(raw.min[1]),
-                f32::from_be_bytes(raw.min[2]),
-            ],
-            max: [
-                f32::from_be_bytes(raw.max[0]),
-                f32::from_be_bytes(raw.max[1]),
-                f32::from_be_bytes(raw.max[2]),
-            ],
-            can_cast_shadows: raw.can_cast_shadows != 0,
-        })
+    let version = i32::from_be_bytes(raw.version);
+    if version != XTD_VERSION {
+        return Err(Error::InvalidVersion {
+            expected: XTD_VERSION,
+            actual: version,
+        });
     }
+
+    Ok(XtdHeader {
+        version,
+        num_x_verts: i32::from_be_bytes(raw.num_x_verts),
+        num_x_chunks: i32::from_be_bytes(raw.num_x_chunks),
+        tile_scale: f32::from_be_bytes(raw.tile_scale),
+        world_min: [
+            f32::from_be_bytes(raw.world_min[0]),
+            f32::from_be_bytes(raw.world_min[1]),
+            f32::from_be_bytes(raw.world_min[2]),
+        ],
+        world_max: [
+            f32::from_be_bytes(raw.world_max[0]),
+            f32::from_be_bytes(raw.world_max[1]),
+            f32::from_be_bytes(raw.world_max[2]),
+        ],
+    })
+}
+
+fn read_visual_chunk(data: &[u8]) -> Result<XtdVisualChunk> {
+    let (raw, _): (Ref<_, XtdVisualChunkRaw>, _) = Ref::from_prefix(data).map_err(|_| {
+        Error::InvalidChunkData(format!(
+            "Visual chunk too small: {} < {}",
+            data.len(),
+            XtdVisualChunk::SIZE
+        ))
+    })?;
+
+    Ok(XtdVisualChunk {
+        grid_x: i32::from_be_bytes(raw.grid_x),
+        grid_z: i32::from_be_bytes(raw.grid_z),
+        max_v_stride: i32::from_be_bytes(raw.max_v_stride),
+        min: [
+            f32::from_be_bytes(raw.min[0]),
+            f32::from_be_bytes(raw.min[1]),
+            f32::from_be_bytes(raw.min[2]),
+        ],
+        max: [
+            f32::from_be_bytes(raw.max[0]),
+            f32::from_be_bytes(raw.max[1]),
+            f32::from_be_bytes(raw.max[2]),
+        ],
+        can_cast_shadows: raw.can_cast_shadows != 0,
+    })
 }

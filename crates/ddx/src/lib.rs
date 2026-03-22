@@ -44,7 +44,8 @@ pub use header::{
     DDX_MIN_REQUIRED_VERSION, DDX_MIP0_CHUNK_ID, DDX_MIPCHAIN_CHUNK_ID, DdxHeader, Platform,
     ResourceType, flags,
 };
-pub use reader::{DdxTexture, TextureInfo};
+pub use reader::{DdxTexture, Reader, TextureInfo};
+pub use writer::Writer;
 
 #[cfg(test)]
 mod tests {
@@ -76,7 +77,7 @@ mod tests {
     #[ignore] // Requires root.era to be present
     fn test_parse_ddx_from_era() {
         let era_data = read_and_decrypt_era(&find_era_path());
-        let archive = era::Reader::new(&era_data).expect("Failed to read ERA");
+        let archive = era::Reader::from_decrypted(&era_data).expect("Failed to read ERA");
 
         let ddx_idx = archive
             .iter()
@@ -111,7 +112,7 @@ mod tests {
     #[ignore] // Requires root.era to be present
     fn test_parse_all_ddx_from_era() {
         let era_data = read_and_decrypt_era(&find_era_path());
-        let archive = era::Reader::new(&era_data).expect("Failed to read ERA");
+        let archive = era::Reader::from_decrypted(&era_data).expect("Failed to read ERA");
 
         let ddx_indices: Vec<usize> = archive
             .iter()
@@ -161,7 +162,7 @@ mod tests {
     #[ignore] // Requires root.era to be present
     fn test_roundtrip_ddx() {
         let era_data = read_and_decrypt_era(&find_era_path());
-        let archive = era::Reader::new(&era_data).expect("Failed to read ERA");
+        let archive = era::Reader::from_decrypted(&era_data).expect("Failed to read ERA");
 
         let ddx_indices: Vec<usize> = archive
             .iter()

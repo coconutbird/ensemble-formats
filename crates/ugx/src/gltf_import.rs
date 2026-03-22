@@ -14,8 +14,8 @@ use alloc::vec::Vec;
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 use crate::error::{Error, Result};
+use crate::reader::{GrannyBone, GrannyMesh, UgxGeom};
 use crate::types::*;
-use crate::ugx::{GrannyBone, GrannyMesh, UgxGeom};
 use crate::univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
 use crate::vertex_element::VertexElementType;
 
@@ -1400,10 +1400,10 @@ mod tests {
             import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
 
         // 3. Write to UGX bytes
-        let ugx_bytes = crate::write_ugx(&imported).unwrap();
+        let ugx_bytes = crate::Writer::write(&imported).unwrap();
 
         // 4. Read back
-        let re_read = UgxGeom::read(&ugx_bytes).unwrap();
+        let re_read = crate::Reader::read(&ugx_bytes).unwrap();
 
         // 5. Verify
         assert_eq!(re_read.sections.len(), 1);
@@ -1636,8 +1636,8 @@ mod tests {
         }
 
         // Write to UGX and read back to verify it survives serialization
-        let ugx_bytes = crate::write_ugx(&imported).unwrap();
-        let re_read = UgxGeom::read(&ugx_bytes).unwrap();
+        let ugx_bytes = crate::Writer::write(&imported).unwrap();
+        let re_read = crate::Reader::read(&ugx_bytes).unwrap();
 
         // Verify granny_meshes survived the round trip
         assert_eq!(
@@ -1670,7 +1670,7 @@ mod tests {
                 Err(_) => continue,
             };
 
-            let original = match UgxGeom::read(&data) {
+            let original = match crate::Reader::read(&data) {
                 Ok(g) => g,
                 Err(e) => {
                     eprintln!("Failed to read {}: {}", path, e);
@@ -1834,8 +1834,8 @@ mod tests {
             }
 
             // 4. Write to UGX bytes and read back
-            let ugx_bytes = crate::write_ugx(&imported).unwrap();
-            let re_read = UgxGeom::read(&ugx_bytes).unwrap();
+            let ugx_bytes = crate::Writer::write(&imported).unwrap();
+            let re_read = crate::Reader::read(&ugx_bytes).unwrap();
 
             // 5. Verify write→read preserved the data
             assert_eq!(re_read.sections.len(), imported.sections.len());
@@ -1944,7 +1944,7 @@ mod tests {
                 Err(_) => continue,
             };
 
-            let original = match UgxGeom::read(&data) {
+            let original = match crate::Reader::read(&data) {
                 Ok(g) => g,
                 Err(e) => {
                     eprintln!("Failed to read {}: {}", path, e);
@@ -2091,8 +2091,8 @@ mod tests {
             }
 
             // Write to UGX and read back
-            let ugx_bytes = crate::write_ugx(&imported).unwrap();
-            let re_read = UgxGeom::read(&ugx_bytes).unwrap();
+            let ugx_bytes = crate::Writer::write(&imported).unwrap();
+            let re_read = crate::Reader::read(&ugx_bytes).unwrap();
 
             assert_eq!(
                 re_read.sections.len(),

@@ -264,8 +264,8 @@ pub struct GrannyMesh {
 }
 
 impl UgxGeom {
-    /// Read UGX geometry from raw bytes (ECF container).
-    pub fn read(data: &[u8]) -> Result<Self> {
+    /// Parse UGX geometry from a byte slice (ECF container).
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
         // Parse ECF container
         let ecf = ecf::Reader::new(data)?;
 
@@ -1136,6 +1136,16 @@ fn variant_to_u8(v: &bdt::Variant) -> u8 {
     }
 }
 
+/// UGX file reader.
+pub struct Reader;
+
+impl Reader {
+    /// Read a UGX file from a byte slice.
+    pub fn read(data: &[u8]) -> Result<UgxGeom> {
+        UgxGeom::from_bytes(data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1449,8 +1459,8 @@ mod tests {
                 eprintln!("\n=== {} === NO 0x704 chunk", label);
             }
 
-            // Now test through UgxGeom::read
-            let geom = UgxGeom::read(&data).unwrap();
+            // Now test through Reader::read
+            let geom = Reader::read(&data).unwrap();
             eprintln!("  UgxGeom materials: {}", geom.materials.len());
             for (i, mat) in geom.materials.iter().enumerate() {
                 eprintln!(

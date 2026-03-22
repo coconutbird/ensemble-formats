@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+std = []
+
 [dependencies]
 miniz_oxide = "0.8"
 thiserror.workspace = true

@@ -47,6 +47,19 @@ pub struct DdxTexture {
     pub data: Vec<u8>,
 }
 
+/// DDX file reader.
+pub struct Reader;
+
+impl Reader {
+    /// Read a DDX texture from a byte slice.
+    ///
+    /// Automatically detects whether the file is a standard DDS file
+    /// (Definitive Edition) or an ECF-wrapped DDX file (Xbox 360 original).
+    pub fn read(data: &[u8]) -> Result<DdxTexture> {
+        DdxTexture::from_bytes(data)
+    }
+}
+
 impl DdxTexture {
     /// Parse a DDX file from bytes.
     ///

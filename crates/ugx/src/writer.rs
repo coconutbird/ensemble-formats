@@ -13,8 +13,8 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{Cursor, Seek, Write};
 
 use crate::error::Result;
+use crate::reader::UgxGeom;
 use crate::types::{MapType, Material};
-use crate::ugx::UgxGeom;
 
 /// ECF chunk IDs for UGX.
 const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
@@ -25,9 +25,25 @@ const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 
 /// Geometry header signature (v4 = original format, writer always writes v4).
 const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
+/// UGX file writer.
+pub struct Writer;
+
+impl Writer {
+    /// Write a UGX geometry to a byte vector.
+    pub fn write(geom: &UgxGeom) -> Result<Vec<u8>> {
+        geom.to_bytes()
+    }
+}
+
+impl UgxGeom {
+    /// Serialize this geometry to UGX binary format (ECF container).
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        write_ugx(self)
+    }
+}
 
 /// Write a UGX geometry to bytes (ECF container).
-pub fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
+fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
     let cached_data = build_cached_data(geom)?;
     let ib_data = build_index_buffer(geom);
 
@@ -1067,8 +1083,8 @@ fn build_material_node(mat: &Material) -> bdt::Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reader::GrannyBone;
     use crate::types::*;
-    use crate::ugx::GrannyBone;
     use crate::univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
     use crate::vertex_element::VertexElementType;
     use alloc::string::ToString;
@@ -1212,7 +1228,7 @@ mod tests {
         let bytes = write_ugx(&original).unwrap();
 
         // Read back
-        let read_back = UgxGeom::read(&bytes).unwrap();
+        let read_back = crate::Reader::read(&bytes).unwrap();
 
         // Compare header fields
         assert_eq!(read_back.rigid_bone_index, original.rigid_bone_index);
@@ -1342,7 +1358,7 @@ mod tests {
         let bytes = write_ugx(&geom).unwrap();
 
         // Read back
-        let read_back = UgxGeom::read(&bytes).unwrap();
+        let read_back = crate::Reader::read(&bytes).unwrap();
 
         // Verify material count
         assert_eq!(read_back.materials.len(), 2);
@@ -1430,7 +1446,7 @@ mod tests {
         let bytes = write_ugx(&geom).unwrap();
 
         // Read back
-        let read_back = UgxGeom::read(&bytes).unwrap();
+        let read_back = crate::Reader::read(&bytes).unwrap();
 
         // Verify granny bones survived
         assert_eq!(read_back.granny_bones.len(), 2);

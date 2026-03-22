@@ -9,6 +9,9 @@
 //! [`Document::from_xml`].
 
 use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::Result;
 
 pub use bdt::{Attribute, Node};
 
@@ -97,5 +100,20 @@ impl Document {
     /// Returns a mutable reference to the root node, if present.
     pub fn root_mut(&mut self) -> Option<&mut Node> {
         self.root.as_mut()
+    }
+
+    /// Parse a document from a byte slice, auto-detecting XML vs binary.
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        crate::Reader::read(data)
+    }
+
+    /// Serialize this document to bytes in its native format (compressed).
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        crate::Writer::write_native(self)
+    }
+
+    /// Serialize this document to bytes with explicit format.
+    pub fn to_bytes_with_format(&self, format: Format) -> Result<Vec<u8>> {
+        crate::Writer::write(self, format)
     }
 }

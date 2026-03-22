@@ -13,10 +13,10 @@
 //! ## Example (Read-Only)
 //!
 //! ```no_run
-//! use uax::UaxAnimation;
+//! use uax::Reader;
 //!
 //! let data = std::fs::read("animation.uax").unwrap();
-//! let anim = UaxAnimation::from_bytes(&data).unwrap();
+//! let anim = Reader::read(&data).unwrap();
 //!
 //! println!("Duration: {} seconds", anim.duration());
 //! println!("Animation name: {:?}", anim.name());
@@ -46,13 +46,13 @@ mod error;
 pub use error::{Error, Result};
 
 mod reader;
-pub use reader::UaxAnimation;
+pub use reader::{Reader, UaxAnimation};
 
 pub mod types;
 pub use types::{GRANNY_HEADER_SIZE, POINTER_REBASE_OFFSET};
 
-mod uax_file;
-pub use uax_file::UaxFile;
+mod file;
+pub use file::UaxFile;
 
 /// UAX ECF file ID (from uaxdefs.h)
 pub const UAX_FILE_ID: u32 = 0xAAC93747;

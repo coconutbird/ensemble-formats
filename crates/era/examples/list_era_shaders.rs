@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut data = Vec::new();
     decrypt.read_to_end(&mut data)?;
 
-    let archive = Reader::new(&data)?;
+    let archive = Reader::from_decrypted(&data)?;
 
     println!("\nAll files containing 'terrain', 'shader', or '.bin':\n");
 

@@ -58,6 +58,9 @@ extern crate alloc;
 mod error;
 pub use error::{Error, Result};
 
+/// Minimal `no_std` IO traits and helpers.
+pub mod io;
+
 mod header;
 pub use header::{EcfChunkHeader, EcfChunkHeaderRaw, EcfHeader, EcfHeaderRaw};
 

@@ -166,7 +166,7 @@ fn list_archive(path: &str, json: bool) -> i32 {
             return exit_code::FILE_NOT_FOUND;
         }
     };
-    let archive = match Reader::new(&data) {
+    let archive = match Reader::from_decrypted(&data) {
         Ok(a) => a,
         Err(e) => {
             if json {
@@ -319,7 +319,7 @@ fn info_archive(path: &str, json: bool) -> i32 {
             return exit_code::FILE_NOT_FOUND;
         }
     };
-    let archive = match Reader::new(&data) {
+    let archive = match Reader::from_decrypted(&data) {
         Ok(a) => a,
         Err(e) => {
             if json {
@@ -434,7 +434,7 @@ fn extract_archive(
             return exit_code::FILE_NOT_FOUND;
         }
     };
-    let archive = match Reader::new(&data) {
+    let archive = match Reader::from_decrypted(&data) {
         Ok(a) => a,
         Err(e) => {
             if json {

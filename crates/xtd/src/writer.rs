@@ -13,6 +13,19 @@ pub struct Writer;
 impl Writer {
     /// Write an XTD file to a byte vector.
     pub fn write(file: &XtdFile) -> Result<Vec<u8>> {
+        file.to_bytes()
+    }
+}
+
+impl XtdFile {
+    /// Serialize this XTD file to bytes (ECF container).
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        Writer::write_inner(self)
+    }
+}
+
+impl Writer {
+    fn write_inner(file: &XtdFile) -> Result<Vec<u8>> {
         let mut ecf = ecf::Writer::new(file.ecf_file_id);
 
         let mut visual_chunk_idx = 0;

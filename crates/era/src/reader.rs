@@ -1,9 +1,11 @@
 //! ERA archive reader.
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
-use ecf::{EcfChunkHeader, EcfHeader};
+use ecf::{EcfChunkHeader, EcfHeader, HEADER_MAGIC};
 
+use crate::crypto::{TeaKeys, tea_decrypt_data};
 use crate::error::{Error, Result};
 use crate::header::{EraArchiveHeader, EraChunkExtra, EraEntry, resolve_filename};
 
@@ -58,9 +60,12 @@ fn parse_chunk_headers(
     Ok((entries, expected_end))
 }
 
-/// An ERA archive reader that operates on a byte slice.
+/// An ERA archive reader.
+///
+/// Holds either a borrowed slice (already decrypted) or an owned `Vec<u8>`
+/// (decrypted in-place during auto-detection).
 pub struct Reader<'a> {
-    data: &'a [u8],
+    data: Cow<'a, [u8]>,
     /// ECF header.
     pub ecf_header: EcfHeader,
     /// Archive header extension.
@@ -69,24 +74,60 @@ pub struct Reader<'a> {
     pub entries: Vec<EraEntry>,
 }
 
+/// Check whether the first 4 bytes match the ECF magic.
+fn looks_decrypted(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+    let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    magic == HEADER_MAGIC
+}
+
 impl<'a> Reader<'a> {
-    /// Parse an ERA archive from a decrypted byte slice.
-    pub fn new(data: &'a [u8]) -> Result<Self> {
+    /// Parse an ERA archive from a decrypted byte slice (zero-copy).
+    pub fn from_decrypted(data: &'a [u8]) -> Result<Self> {
+        Self::parse(Cow::Borrowed(data))
+    }
+
+    /// Decrypt `data` in-place with the given keys, then parse.
+    ///
+    /// The `Vec` is consumed and owned by the returned `Reader`.
+    pub fn from_encrypted(mut data: Vec<u8>, keys: &TeaKeys) -> Result<Self> {
+        // Pad to TEA_BLOCK_SIZE boundary for in-place decrypt
+        let block = crate::crypto::TEA_BLOCK_SIZE;
+        let remainder = data.len() % block;
+        if remainder != 0 {
+            data.resize(data.len() + (block - remainder), 0);
+        }
+        tea_decrypt_data(keys, &mut data, 0);
+        Self::parse(Cow::Owned(data))
+    }
+
+    /// Auto-detect: if the data starts with the ECF magic it is treated as
+    /// already decrypted (borrowed); otherwise it is decrypted in-place with
+    /// the supplied keys and owned by the reader.
+    pub fn new(data: &'a [u8], keys: &TeaKeys) -> Result<Self> {
+        if looks_decrypted(data) {
+            Self::from_decrypted(data)
+        } else {
+            Self::from_encrypted(data.to_vec(), keys)
+        }
+    }
+
+    /// Internal: parse from a `Cow` that already contains decrypted bytes.
+    fn parse(data: Cow<'a, [u8]>) -> Result<Self> {
         if data.len() < EcfHeader::SIZE + EraArchiveHeader::SIZE {
             return Err(Error::UnexpectedEof);
         }
 
-        // Parse ECF header
         let ecf_header = EcfHeader::from_bytes(&data[..EcfHeader::SIZE])?;
 
-        // Parse archive header extension
         let archive_header = EraArchiveHeader::from_bytes(
             &data[EcfHeader::SIZE..EcfHeader::SIZE + EraArchiveHeader::SIZE],
         )?;
 
-        // Chunk headers start after the full header
         let chunk_start = ecf_header.header_size as usize;
-        let (mut entries, _) = parse_chunk_headers(data, chunk_start, &ecf_header)?;
+        let (mut entries, _) = parse_chunk_headers(&data, chunk_start, &ecf_header)?;
 
         // Read and decompress filename table (always at index 0)
         let filename_table = if !entries.is_empty() {
@@ -101,7 +142,6 @@ impl<'a> Reader<'a> {
             Vec::new()
         };
 
-        // Resolve filenames (skip index 0 which is the filename table)
         for entry in entries.iter_mut().skip(1) {
             entry.filename = resolve_filename(&filename_table, entry.extra.name_offset);
         }

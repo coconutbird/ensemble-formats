@@ -232,6 +232,16 @@ fn parse_animation(data: &[u8], offset: u64, motion_flags: u32) -> Result<UaxAni
     })
 }
 
+/// UAX file reader.
+pub struct Reader;
+
+impl Reader {
+    /// Read a UAX animation from a byte slice.
+    pub fn read(data: &[u8]) -> Result<UaxAnimation> {
+        UaxAnimation::from_bytes(data)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -255,7 +265,7 @@ mod tests {
             }
 
             let data = std::fs::read(test_path).expect("Failed to read UAX file");
-            let anim = UaxAnimation::from_bytes(&data)
+            let anim = Reader::read(&data)
                 .unwrap_or_else(|e| panic!("Failed to parse {}: {:?}", test_path, e));
 
             // Verify parsed data

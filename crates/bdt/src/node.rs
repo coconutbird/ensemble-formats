@@ -16,6 +16,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::variant::Variant;
+use crate::{Endian, Result};
 
 /// A named attribute on a [`Node`].
 ///
@@ -124,5 +125,15 @@ impl Node {
     /// Count this node plus all descendants recursively.
     pub fn node_count(&self) -> usize {
         1 + self.children.iter().map(|c| c.node_count()).sum::<usize>()
+    }
+
+    /// Parse a node tree from a byte slice with the given endianness.
+    pub fn from_bytes(data: &[u8], endian: Endian) -> Result<Option<Self>> {
+        crate::Reader::read(data, endian)
+    }
+
+    /// Serialize this node tree to bytes with the given endianness.
+    pub fn to_bytes(&self, endian: Endian) -> Result<Vec<u8>> {
+        crate::Writer::write(self, endian)
     }
 }

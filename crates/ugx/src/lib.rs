@@ -9,10 +9,10 @@
 //! ## Example
 //!
 //! ```ignore
-//! use ugx::UgxGeom;
+//! use ugx::Reader;
 //!
 //! let data = std::fs::read("model.ugx")?;
-//! let geom = UgxGeom::read(&data)?;
+//! let geom = Reader::read(&data)?;
 //!
 //! println!("Sections: {}", geom.sections.len());
 //! println!("Materials: {}", geom.materials.len());
@@ -37,8 +37,8 @@ pub use univert_packer::{UnivertPacker, UnpackedVertex};
 mod types;
 pub use types::*;
 
-mod ugx;
-pub use ugx::{GrannyBone, GrannyMesh, UgxGeom};
+mod reader;
+pub use reader::{GrannyBone, GrannyMesh, Reader, UgxGeom};
 
 #[cfg(feature = "std")]
 mod gltf_export;
@@ -53,9 +53,9 @@ mod gltf_import;
 pub use gltf_import::{GltfImportOptions, import_from_gltf};
 
 #[cfg(feature = "std")]
-mod ugx_writer;
+mod writer;
 #[cfg(feature = "std")]
-pub use ugx_writer::write_ugx;
+pub use writer::Writer;
 
 #[cfg(test)]
 mod tests {
