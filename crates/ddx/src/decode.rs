@@ -2,6 +2,10 @@
 //!
 //! Converts compressed texture data (DXT1, DXT5, DXN, etc.) to RGBA8 format.
 
+use alloc::format;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::format::DataFormat;
 use crate::reader::DdxTexture;
 use crate::{Error, Result};

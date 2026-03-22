@@ -2,7 +2,6 @@
 
 use crate::format::DataFormat;
 use crate::{Error, Result};
-use byteorder::{LittleEndian, ReadBytesExt};
 
 /// DDX header magic number.
 pub const DDX_HEADER_MAGIC: u32 = 0xDDBB7738;
@@ -110,7 +109,7 @@ pub struct DdxHeader {
 
 impl DdxHeader {
     /// Size of the header in bytes.
-    pub const SIZE: usize = 32;
+    pub const SIZE: usize = 36;
 
     /// Parse header from bytes.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
@@ -121,17 +120,15 @@ impl DdxHeader {
             });
         }
 
-        let mut cursor = std::io::Cursor::new(data);
-
-        let magic = cursor.read_u32::<LittleEndian>()?;
+        let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
         if magic != DDX_HEADER_MAGIC {
             return Err(Error::InvalidMagic(magic));
         }
 
-        let header_size = cursor.read_u32::<LittleEndian>()?;
-        let header_adler32 = cursor.read_u32::<LittleEndian>()?;
-        let creator_version = cursor.read_u16::<LittleEndian>()?;
-        let min_required_version = cursor.read_u16::<LittleEndian>()?;
+        let header_size = u32::from_le_bytes(data[4..8].try_into().unwrap());
+        let header_adler32 = u32::from_le_bytes(data[8..12].try_into().unwrap());
+        let creator_version = u16::from_le_bytes(data[12..14].try_into().unwrap());
+        let min_required_version = u16::from_le_bytes(data[14..16].try_into().unwrap());
 
         if min_required_version > DDX_CURRENT_VERSION {
             return Err(Error::UnsupportedVersion(
@@ -140,22 +137,21 @@ impl DdxHeader {
             ));
         }
 
-        let width_pow2 = cursor.read_u8()?;
-        let height_pow2 = cursor.read_u8()?;
-        let mip_chain_size = cursor.read_u8()?;
-        let platform_byte = cursor.read_u8()?;
-        let platform = Platform::from_u8(platform_byte);
+        let width_pow2 = data[16];
+        let height_pow2 = data[17];
+        let mip_chain_size = data[18];
+        let platform = Platform::from_u8(data[19]);
 
-        let data_format_raw = cursor.read_u32::<LittleEndian>()?;
+        let data_format_raw = u32::from_le_bytes(data[20..24].try_into().unwrap());
         let data_format = DataFormat::from_u32(data_format_raw)
             .ok_or(Error::InvalidDataFormat(data_format_raw))?;
 
-        let resource_type_raw = cursor.read_u32::<LittleEndian>()?;
+        let resource_type_raw = u32::from_le_bytes(data[24..28].try_into().unwrap());
         let resource_type = ResourceType::from_u32(resource_type_raw)
             .ok_or(Error::InvalidResourceType(resource_type_raw))?;
 
-        let flags = cursor.read_u32::<LittleEndian>()?;
-        let hdr_scale = cursor.read_f32::<LittleEndian>()?;
+        let flags = u32::from_le_bytes(data[28..32].try_into().unwrap());
+        let hdr_scale = f32::from_le_bytes(data[32..36].try_into().unwrap());
 
         Ok(Self {
             magic,

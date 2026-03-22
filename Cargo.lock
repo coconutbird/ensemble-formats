@@ -386,10 +386,9 @@ dependencies = [
 name = "ddx"
 version = "0.1.0"
 dependencies = [
- "byteorder",
  "ecf",
  "era",
- "flate2",
+ "miniz_oxide",
  "texture2ddecoder",
  "thiserror",
  "zerocopy",

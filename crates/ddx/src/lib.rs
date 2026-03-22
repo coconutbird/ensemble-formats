@@ -15,19 +15,12 @@
 //! - Raw: A8R8G8B8, A8B8G8R8, A8, A16B16G16R16F
 //! - DXT: DXT1, DXT3, DXT5, DXT5N, DXT5Y, DXN, DXT5H
 //! - DXTQ (custom quantized): DXT1Q, DXT5Q, DXT5HQ, DXNQ, DXT5YQ
-//!
-//! ## Example
-//!
-//! ```no_run
-//! use ddx::DdxTexture;
-//!
-//! let data = std::fs::read("texture.ddx").unwrap();
-//! let texture = DdxTexture::from_bytes(&data).unwrap();
-//!
-//! println!("Size: {}x{}", texture.info.width, texture.info.height);
-//! println!("Format: {:?}", texture.info.data_format);
-//! println!("Mip levels: {}", texture.info.num_mip_levels);
-//! ```
+
+#![no_std]
+extern crate alloc;
+
+#[cfg(test)]
+extern crate std;
 
 mod decode;
 mod error;
@@ -49,6 +42,10 @@ pub use writer::Writer;
 
 #[cfg(test)]
 mod tests {
+    use std::println;
+    use std::string::{String, ToString};
+    use std::vec::Vec;
+
     use super::*;
 
     fn read_and_decrypt_era(path: &str) -> Vec<u8> {

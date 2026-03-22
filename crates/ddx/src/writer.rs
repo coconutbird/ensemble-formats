@@ -2,11 +2,11 @@
 //!
 //! Writes textures in standard DDS format (Definitive Edition compatible).
 
+use alloc::vec::Vec;
+
 use crate::Result;
 use crate::format::DataFormat;
 use crate::reader::{DdxTexture, TextureInfo};
-use byteorder::{LittleEndian, WriteBytesExt};
-use std::io::Write;
 
 /// DDS file magic number "DDS " (0x20534444 in little-endian)
 const DDS_MAGIC: u32 = 0x20534444;
@@ -52,13 +52,13 @@ impl DdxTexture {
         Ok(output)
     }
 
-    /// Write texture as DDS to a writer.
-    pub fn write_dds<W: Write>(&self, writer: &mut W) -> Result<()> {
+    /// Write texture as DDS to a `Vec<u8>`.
+    pub fn write_dds(&self, out: &mut Vec<u8>) -> Result<()> {
         // Magic
-        writer.write_u32::<LittleEndian>(DDS_MAGIC)?;
+        out.extend_from_slice(&DDS_MAGIC.to_le_bytes());
 
         // DDS_HEADER (124 bytes)
-        writer.write_u32::<LittleEndian>(124)?; // dwSize
+        out.extend_from_slice(&124u32.to_le_bytes()); // dwSize
 
         // Flags
         let mut flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT;
@@ -68,41 +68,40 @@ impl DdxTexture {
         if self.info.data_format.is_dxt() {
             flags |= DDSD_LINEARSIZE;
         }
-        writer.write_u32::<LittleEndian>(flags)?;
+        out.extend_from_slice(&flags.to_le_bytes());
 
-        writer.write_u32::<LittleEndian>(self.info.height)?; // dwHeight
-        writer.write_u32::<LittleEndian>(self.info.width)?; // dwWidth
+        out.extend_from_slice(&self.info.height.to_le_bytes());
+        out.extend_from_slice(&self.info.width.to_le_bytes());
 
-        // dwPitchOrLinearSize
         let linear_size =
             calculate_linear_size(self.info.width, self.info.height, self.info.data_format);
-        writer.write_u32::<LittleEndian>(linear_size)?;
+        out.extend_from_slice(&linear_size.to_le_bytes());
 
-        writer.write_u32::<LittleEndian>(0)?; // dwDepth
-        writer.write_u32::<LittleEndian>(self.info.num_mip_levels)?; // dwMipMapCount
+        out.extend_from_slice(&0u32.to_le_bytes()); // dwDepth
+        out.extend_from_slice(&self.info.num_mip_levels.to_le_bytes());
 
         // dwReserved1[11]
         for _ in 0..11 {
-            writer.write_u32::<LittleEndian>(0)?;
+            out.extend_from_slice(&0u32.to_le_bytes());
         }
 
         // DDS_PIXELFORMAT (32 bytes)
-        write_pixel_format(writer, &self.info)?;
+        write_pixel_format(out, &self.info)?;
 
         // dwCaps
         let mut caps = DDSCAPS_TEXTURE;
         if self.info.num_mip_levels > 1 {
             caps |= DDSCAPS_MIPMAP | DDSCAPS_COMPLEX;
         }
-        writer.write_u32::<LittleEndian>(caps)?;
+        out.extend_from_slice(&caps.to_le_bytes());
 
-        writer.write_u32::<LittleEndian>(0)?; // dwCaps2
-        writer.write_u32::<LittleEndian>(0)?; // dwCaps3
-        writer.write_u32::<LittleEndian>(0)?; // dwCaps4
-        writer.write_u32::<LittleEndian>(0)?; // dwReserved2
+        out.extend_from_slice(&0u32.to_le_bytes()); // dwCaps2
+        out.extend_from_slice(&0u32.to_le_bytes()); // dwCaps3
+        out.extend_from_slice(&0u32.to_le_bytes()); // dwCaps4
+        out.extend_from_slice(&0u32.to_le_bytes()); // dwReserved2
 
         // Texture data
-        writer.write_all(&self.data)?;
+        out.extend_from_slice(&self.data);
 
         Ok(())
     }
@@ -124,59 +123,42 @@ fn calculate_linear_size(width: u32, height: u32, format: DataFormat) -> u32 {
 }
 
 /// Write DDS_PIXELFORMAT structure.
-fn write_pixel_format<W: Write>(writer: &mut W, info: &TextureInfo) -> Result<()> {
-    writer.write_u32::<LittleEndian>(32)?; // dwSize
+fn write_pixel_format(out: &mut Vec<u8>, info: &TextureInfo) -> Result<()> {
+    out.extend_from_slice(&32u32.to_le_bytes()); // dwSize
 
     match info.data_format {
         DataFormat::Dxt1 => {
-            writer.write_u32::<LittleEndian>(DDPF_FOURCC)?;
-            writer.write_all(b"DXT1")?;
-            writer.write_u32::<LittleEndian>(0)?; // dwRGBBitCount
-            writer.write_u32::<LittleEndian>(0)?; // dwRBitMask
-            writer.write_u32::<LittleEndian>(0)?; // dwGBitMask
-            writer.write_u32::<LittleEndian>(0)?; // dwBBitMask
-            writer.write_u32::<LittleEndian>(0)?; // dwABitMask
+            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.extend_from_slice(b"DXT1");
+            out.extend_from_slice(&[0u8; 20]); // 5 zero DWORDs
         }
         DataFormat::Dxt3 => {
-            writer.write_u32::<LittleEndian>(DDPF_FOURCC)?;
-            writer.write_all(b"DXT3")?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
+            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.extend_from_slice(b"DXT3");
+            out.extend_from_slice(&[0u8; 20]);
         }
         DataFormat::Dxt5 | DataFormat::Dxt5N | DataFormat::Dxt5Y | DataFormat::Dxt5H => {
-            writer.write_u32::<LittleEndian>(DDPF_FOURCC)?;
-            writer.write_all(b"DXT5")?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
+            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.extend_from_slice(b"DXT5");
+            out.extend_from_slice(&[0u8; 20]);
         }
         DataFormat::Dxn => {
-            writer.write_u32::<LittleEndian>(DDPF_FOURCC)?;
-            writer.write_all(b"ATI2")?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
-            writer.write_u32::<LittleEndian>(0)?;
+            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.extend_from_slice(b"ATI2");
+            out.extend_from_slice(&[0u8; 20]);
         }
         _ => {
-            // Uncompressed ARGB (A8R8G8B8 and others)
             let mut pf_flags = DDPF_RGB;
             if info.has_alpha {
                 pf_flags |= DDPF_ALPHAPIXELS;
             }
-            writer.write_u32::<LittleEndian>(pf_flags)?;
-            writer.write_u32::<LittleEndian>(0)?; // dwFourCC
-            writer.write_u32::<LittleEndian>(32)?; // dwRGBBitCount
-            writer.write_u32::<LittleEndian>(0x00FF0000)?; // R mask
-            writer.write_u32::<LittleEndian>(0x0000FF00)?; // G mask
-            writer.write_u32::<LittleEndian>(0x000000FF)?; // B mask
-            writer.write_u32::<LittleEndian>(0xFF000000)?; // A mask
+            out.extend_from_slice(&pf_flags.to_le_bytes());
+            out.extend_from_slice(&0u32.to_le_bytes()); // dwFourCC
+            out.extend_from_slice(&32u32.to_le_bytes()); // dwRGBBitCount
+            out.extend_from_slice(&0x00FF0000u32.to_le_bytes()); // R mask
+            out.extend_from_slice(&0x0000FF00u32.to_le_bytes()); // G mask
+            out.extend_from_slice(&0x000000FFu32.to_le_bytes()); // B mask
+            out.extend_from_slice(&0xFF000000u32.to_le_bytes()); // A mask
         }
     }
 

@@ -9,9 +9,8 @@ authors.workspace = true
 
 [dependencies]
 ecf = { workspace = true }
-byteorder = { workspace = true }
 thiserror = { workspace = true }
-flate2 = { workspace = true }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 texture2ddecoder = "0.1"
 zerocopy.workspace = true
 
