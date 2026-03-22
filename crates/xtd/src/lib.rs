@@ -13,6 +13,9 @@
 //! - `0xCCCC` - AOChunk: Ambient occlusion data
 //! - `0xDDDD` - AlphaChunk: Alpha/transparency data
 
+#![no_std]
+extern crate alloc;
+
 mod error;
 pub use error::{Error, Result};
 
@@ -20,10 +23,10 @@ mod types;
 pub use types::*;
 
 mod reader;
-pub use reader::XtdReader;
+pub use reader::Reader;
 
 mod writer;
-pub use writer::XtdWriter;
+pub use writer::Writer;
 
 mod decode;
 pub use decode::{
@@ -67,7 +70,11 @@ pub const CHUNK_ALPHA: u64 = 0xDDDD;
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    extern crate std;
     use super::*;
+    use alloc::vec::Vec;
+    use std::{print, println};
 
     // Test files are in the extracted test_extract directory (relative to workspace root)
     const TEST_XTD_PATH: &str =
@@ -77,7 +84,7 @@ mod tests {
     #[ignore = "requires extracted XTD file"]
     fn test_read_xtd() {
         let data = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
-        let file = XtdReader::read(&data).expect("Failed to parse XTD");
+        let file = Reader::read(&data).expect("Failed to parse XTD");
 
         println!("XTD Header:");
         println!("  Version: 0x{:04X}", file.header.version);
@@ -101,8 +108,8 @@ mod tests {
     #[ignore = "requires extracted XTD file"]
     fn test_xtd_roundtrip() {
         let original = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
-        let file = XtdReader::read(&original).expect("Failed to parse XTD");
-        let rewritten = XtdWriter::write(&file).expect("Failed to write XTD");
+        let file = Reader::read(&original).expect("Failed to parse XTD");
+        let rewritten = Writer::write(&file).expect("Failed to write XTD");
 
         println!("Original size: {} bytes", original.len());
         println!("Rewritten size: {} bytes", rewritten.len());
@@ -168,7 +175,7 @@ mod tests {
     #[ignore = "requires extracted XTD file"]
     fn test_decode_vertices() {
         let data = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
-        let file = XtdReader::read(&data).expect("Failed to parse XTD");
+        let file = Reader::read(&data).expect("Failed to parse XTD");
 
         let vertices = file.decode_vertices().expect("Failed to decode vertices");
 
@@ -223,7 +230,7 @@ mod tests {
     #[ignore = "requires extracted XTD file"]
     fn test_decode_tessellation() {
         let data = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
-        let file = XtdReader::read(&data).expect("Failed to parse XTD");
+        let file = Reader::read(&data).expect("Failed to parse XTD");
 
         println!("Raw tess_data size: {} bytes", file.tess_data.len());
 
@@ -274,7 +281,7 @@ mod tests {
     #[ignore = "requires extracted XTD file"]
     fn test_cpu_tessellation() {
         let data = std::fs::read(TEST_XTD_PATH).expect("Failed to read XTD file");
-        let file = XtdReader::read(&data).expect("Failed to parse XTD");
+        let file = Reader::read(&data).expect("Failed to parse XTD");
 
         let vertices = file.decode_vertices().expect("Failed to decode vertices");
         let tess = file

@@ -1,11 +1,11 @@
 use image::{ImageBuffer, Rgba};
 use std::fs;
-use xtt::XttReader;
+use xtt::Reader;
 
 fn main() {
     let data =
         fs::read("test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtt").unwrap();
-    let xtt = XttReader::read(&data).unwrap();
+    let xtt = Reader::read(&data).unwrap();
 
     println!("XTT Header:");
     println!("  version: 0x{:04X}", xtt.header.version);

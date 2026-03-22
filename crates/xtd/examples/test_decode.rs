@@ -1,8 +1,7 @@
 //! Test XTD vertex decoding with a real file.
 
-use byteorder::{BigEndian, ByteOrder};
 use std::env;
-use xtd::XtdReader;
+use xtd::Reader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -18,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Debug: print first 64 bytes of atlas data in hex
     let _atlas_offset = 0x8888; // Approximate - we'll get exact from the file
 
-    let file = XtdReader::read(&data)?;
+    let file = Reader::read(&data)?;
     println!("\n=== XTD Header ===");
     println!("  Version: 0x{:04X}", file.header.version);
     println!("  NumXVerts: {}", file.header.num_x_verts);
@@ -50,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..8 {
         let offset = 32 + i * 4;
         if offset + 4 <= atlas_data.len() {
-            let packed_be = BigEndian::read_u32(&atlas_data[offset..offset + 4]);
+            let packed_be = u32::from_be_bytes(atlas_data[offset..offset + 4].try_into().unwrap());
             let x = (packed_be >> 22) & 0x3FF;
             let y = (packed_be >> 11) & 0x3FF;
             let z = packed_be & 0x3FF;
@@ -67,8 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let offset0 = 32 + i * 4;
         let offset1 = 32 + (i + 1024) * 4;
         if offset1 + 4 <= atlas_data.len() {
-            let p0 = BigEndian::read_u32(&atlas_data[offset0..offset0 + 4]);
-            let p1 = BigEndian::read_u32(&atlas_data[offset1..offset1 + 4]);
+            let p0 = u32::from_be_bytes(atlas_data[offset0..offset0 + 4].try_into().unwrap());
+            let p1 = u32::from_be_bytes(atlas_data[offset1..offset1 + 4].try_into().unwrap());
             println!(
                 "    Row 0 col {}: 0x{:08x}   Row 1 col {}: 0x{:08x}",
                 i, p0, i, p1

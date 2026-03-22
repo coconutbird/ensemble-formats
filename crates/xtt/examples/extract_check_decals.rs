@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use xtt::XttReader;
+use xtt::Reader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Opening XTT: {}", xtt_path);
 
     let data = fs::read(xtt_path)?;
-    let xtt = XttReader::read(&data)?;
+    let xtt = Reader::read(&data)?;
 
     println!("\nXTT Header:");
     println!("  num_active_decals: {}", xtt.header.num_active_decals);

@@ -6,8 +6,13 @@
 //! The DE (PC) version stores data as LittleEndian with PC R10G10B10A2 bit layout.
 //! The original Xbox 360 data was BigEndian with tiled (swizzled) textures.
 
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::{Error, Result, XtdFile};
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 /// Xbox 360 texture tile size for 32-bit formats (R11G11B10, etc.)
 /// Kept for potential future use with original Xbox 360 data.
@@ -154,18 +159,11 @@ impl AtlasHeader {
             )));
         }
 
+        let f = |off: usize| f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
         Ok(Self {
-            mid: [
-                BigEndian::read_f32(&data[0..4]),
-                BigEndian::read_f32(&data[4..8]),
-                BigEndian::read_f32(&data[8..12]),
-            ],
+            mid: [f(0), f(4), f(8)],
             // Skip padding at bytes 12-15
-            range: [
-                BigEndian::read_f32(&data[16..20]),
-                BigEndian::read_f32(&data[20..24]),
-                BigEndian::read_f32(&data[24..28]),
-            ],
+            range: [f(16), f(20), f(24)],
             // Skip padding at bytes 28-31
         })
     }
@@ -293,13 +291,17 @@ impl XtdFile {
 
         for i in 0..num_verts {
             let pos_offset = pos_start + i * 4;
-            packed_positions.push(LittleEndian::read_u32(
-                &self.atlas_data[pos_offset..pos_offset + 4],
+            packed_positions.push(u32::from_le_bytes(
+                self.atlas_data[pos_offset..pos_offset + 4]
+                    .try_into()
+                    .unwrap(),
             ));
 
             let norm_offset = norm_start + i * 4;
-            packed_normals.push(LittleEndian::read_u32(
-                &self.atlas_data[norm_offset..norm_offset + 4],
+            packed_normals.push(u32::from_le_bytes(
+                self.atlas_data[norm_offset..norm_offset + 4]
+                    .try_into()
+                    .unwrap(),
             ));
         }
 
@@ -325,17 +327,6 @@ impl XtdFile {
 
         let header = AtlasHeader::from_bytes(&self.atlas_data)?;
 
-        // Debug: print header values
-        eprintln!("Atlas Header:");
-        eprintln!(
-            "  mid:   [{:.2}, {:.2}, {:.2}]",
-            header.mid[0], header.mid[1], header.mid[2]
-        );
-        eprintln!(
-            "  range: [{:.2}, {:.2}, {:.2}]",
-            header.range[0], header.range[1], header.range[2]
-        );
-
         let width = self.header.num_x_verts as usize;
         let num_verts = width * width;
 
@@ -359,13 +350,17 @@ impl XtdFile {
 
         for i in 0..num_verts {
             let pos_offset = pos_start + i * 4;
-            packed_positions.push(LittleEndian::read_u32(
-                &self.atlas_data[pos_offset..pos_offset + 4],
+            packed_positions.push(u32::from_le_bytes(
+                self.atlas_data[pos_offset..pos_offset + 4]
+                    .try_into()
+                    .unwrap(),
             ));
 
             let norm_offset = norm_start + i * 4;
-            packed_normals.push(LittleEndian::read_u32(
-                &self.atlas_data[norm_offset..norm_offset + 4],
+            packed_normals.push(u32::from_le_bytes(
+                self.atlas_data[norm_offset..norm_offset + 4]
+                    .try_into()
+                    .unwrap(),
             ));
         }
 
@@ -389,26 +384,6 @@ impl XtdFile {
             // X/Z: grid position provides the base, packed data adds displacement
             // Y: comes entirely from the packed data (height)
             let unpacked = unpack_position(packed_positions[i], &header.mid, &header.range);
-
-            // Debug: print first few positions with raw packed values
-            if i < 5 || i == num_verts / 2 {
-                let packed = packed_positions[i];
-                // PC layout
-                let pc_x = packed & 0x3FF;
-                let pc_y = (packed >> 10) & 0x3FF;
-                let pc_z = (packed >> 20) & 0x3FF;
-                // Xbox 360 layout
-                let xbox_x = (packed >> 22) & 0x3FF;
-                let xbox_y = (packed >> 11) & 0x3FF;
-                let xbox_z = packed & 0x3FF;
-                eprintln!("  [{}] packed=0x{:08X}", i, packed);
-                eprintln!("       PC:   x={}, y={}, z={}", pc_x, pc_y, pc_z);
-                eprintln!("       Xbox: x={}, y={}, z={}", xbox_x, xbox_y, xbox_z);
-                eprintln!(
-                    "       unpacked: [{:.2}, {:.2}, {:.2}]",
-                    unpacked[0], unpacked[1], unpacked[2]
-                );
-            }
 
             // Use grid position for X/Z base, unpacked Y for height
             // The unpacked X/Z may be small displacements (detail offsets)
@@ -491,7 +466,7 @@ impl TerrainVertices {
     ///
     /// Returns new positions, normals, uvs, and indices for the tessellated mesh.
     pub fn tessellate(&self, tess_data: &crate::TessellationData) -> TessellatedMesh {
-        use std::collections::HashMap;
+        // Using BTreeMap instead of HashMap for no_std compatibility
 
         let n = self.num_verts_per_axis;
 
@@ -502,7 +477,7 @@ impl TerrainVertices {
 
         // For efficient lookups, index existing vertices
         // Key: grid (x, z) position, Value: index in positions array
-        let mut vertex_map: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut vertex_map: BTreeMap<(usize, usize), usize> = BTreeMap::new();
         for z in 0..n {
             for x in 0..n {
                 vertex_map.insert((x, z), z * n + x);
@@ -517,7 +492,7 @@ impl TerrainVertices {
 
         // Track newly created vertices with fractional grid positions
         // Key: (x * 10000 + frac_x, z * 10000 + frac_z), Value: index
-        let mut new_vertex_map: HashMap<(u64, u64), usize> = HashMap::new();
+        let mut new_vertex_map: BTreeMap<(u64, u64), usize> = BTreeMap::new();
 
         // Helper to encode fractional position as u64
         let encode_pos =
@@ -527,8 +502,8 @@ impl TerrainVertices {
         let get_or_create_vertex = |positions: &mut Vec<[f32; 3]>,
                                     normals: &mut Vec<[f32; 3]>,
                                     uvs: &mut Vec<[f32; 2]>,
-                                    new_vertex_map: &mut HashMap<(u64, u64), usize>,
-                                    vertex_map: &HashMap<(usize, usize), usize>,
+                                    new_vertex_map: &mut BTreeMap<(u64, u64), usize>,
+                                    vertex_map: &BTreeMap<(usize, usize), usize>,
                                     x: f32,
                                     z: f32,
                                     n: usize|

@@ -4,9 +4,13 @@
 //! The albedo data is DXT1 (BC1) compressed with optional Xbox 360 tiling.
 //! Also provides alpha texture unpacking for splat blending.
 
-use crate::{Error, Result, XttFile, XttLinker};
-use byteorder::{BigEndian, ReadBytesExt};
-use std::io::Cursor;
+use alloc::format;
+use alloc::vec;
+use alloc::vec::Vec;
+
+use zerocopy::Ref;
+
+use crate::{AlbedoHeaderRaw, Error, Result, XttFile, XttLinker};
 
 /// Decoded albedo atlas information.
 #[derive(Debug, Clone)]
@@ -38,17 +42,15 @@ impl AlbedoHeader {
     /// Size of the header in bytes.
     pub const SIZE: usize = 16;
 
-    /// Parse albedo header from bytes (BigEndian).
+    /// Parse albedo header from bytes (BigEndian, zero-copy).
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        if data.len() < Self::SIZE {
-            return Err(Error::InvalidChunkData("Albedo header too short".into()));
-        }
-        let mut cursor = Cursor::new(data);
+        let (raw, _): (Ref<_, AlbedoHeaderRaw>, _) = Ref::from_prefix(data)
+            .map_err(|_| Error::InvalidChunkData("Albedo header too short".into()))?;
         Ok(Self {
-            out_mem_size: cursor.read_i32::<BigEndian>()?,
-            width: cursor.read_i32::<BigEndian>()?,
-            height: cursor.read_i32::<BigEndian>()?,
-            num_mips: cursor.read_i32::<BigEndian>()?,
+            out_mem_size: i32::from_be_bytes(raw.out_mem_size),
+            width: i32::from_be_bytes(raw.width),
+            height: i32::from_be_bytes(raw.height),
+            num_mips: i32::from_be_bytes(raw.num_mips),
         })
     }
 }
@@ -399,8 +401,22 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
 // Road Data Decoding
 // ============================================================================
 
+use alloc::string::String;
+
 use crate::types::{RoadData, RoadQNChunk, RoadVertex};
 use half::f16;
+
+/// Helper: read a big-endian i32 from a slice at the given offset.
+#[inline]
+fn read_i32_be(data: &[u8], off: usize) -> i32 {
+    i32::from_be_bytes(data[off..off + 4].try_into().unwrap())
+}
+
+/// Helper: read a big-endian u16 from a slice at the given offset.
+#[inline]
+fn read_u16_be(data: &[u8], off: usize) -> u16 {
+    u16::from_be_bytes(data[off..off + 2].try_into().unwrap())
+}
 
 /// Decode road data from the raw XTT road chunk (0x8888).
 ///
@@ -418,63 +434,40 @@ pub fn decode_road_data(data: &[u8]) -> Result<RoadData> {
         return Err(Error::InvalidChunkData("Empty road data".into()));
     }
 
-    let mut cursor = Cursor::new(data);
-
     // Read texture filename (32 bytes, null-terminated)
-    let mut name_bytes = [0u8; 32];
-    std::io::Read::read_exact(&mut cursor, &mut name_bytes)
-        .map_err(|e| Error::InvalidChunkData(format!("Failed to read road texture name: {}", e)))?;
-    let texture_name = String::from_utf8_lossy(&name_bytes)
-        .trim_end_matches('\0')
-        .to_string();
+    let end = data[..32].iter().position(|&b| b == 0).unwrap_or(32);
+    let texture_name = String::from_utf8_lossy(&data[..end]).into_owned();
+    let mut off = 32;
 
-    // Read number of QN chunks
-    let num_qn_chunks = cursor
-        .read_i32::<BigEndian>()
-        .map_err(|e| Error::InvalidChunkData(format!("Failed to read QN count: {}", e)))?;
-
+    let num_qn_chunks = read_i32_be(data, off);
+    off += 4;
     let mut qn_chunks = Vec::with_capacity(num_qn_chunks as usize);
 
     for _ in 0..num_qn_chunks {
-        let qn_index = cursor
-            .read_i32::<BigEndian>()
-            .map_err(|e| Error::InvalidChunkData(format!("Failed to read QN index: {}", e)))?;
-        let num_tris = cursor
-            .read_i32::<BigEndian>()
-            .map_err(|e| Error::InvalidChunkData(format!("Failed to read tri count: {}", e)))?;
-        let _mem_size = cursor
-            .read_i32::<BigEndian>()
-            .map_err(|e| Error::InvalidChunkData(format!("Failed to read mem size: {}", e)))?;
+        let qn_index = read_i32_be(data, off);
+        off += 4;
+        let num_tris = read_i32_be(data, off);
+        off += 4;
+        let _mem_size = read_i32_be(data, off);
+        off += 4;
 
         let num_verts = (num_tris * 3) as usize;
         let mut vertices = Vec::with_capacity(num_verts);
 
         for _ in 0..num_verts {
             // Each vertex: 6 × float16 (big-endian)
-            // [posX, posY, posZ, pad, uvX, uvY]
-            let px = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
-                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
-            })?)
-            .to_f32();
-            let py = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
-                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
-            })?)
-            .to_f32();
-            let pz = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
-                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
-            })?)
-            .to_f32();
-            let _pad = cursor.read_u16::<BigEndian>().map_err(|e| {
-                Error::InvalidChunkData(format!("Failed to read road vertex pad: {}", e))
-            })?;
-            let u = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
-                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
-            })?)
-            .to_f32();
-            let v = f16::from_bits(cursor.read_u16::<BigEndian>().map_err(|e| {
-                Error::InvalidChunkData(format!("Failed to read road vertex: {}", e))
-            })?)
-            .to_f32();
+            let px = f16::from_bits(read_u16_be(data, off)).to_f32();
+            off += 2;
+            let py = f16::from_bits(read_u16_be(data, off)).to_f32();
+            off += 2;
+            let pz = f16::from_bits(read_u16_be(data, off)).to_f32();
+            off += 2;
+            let _pad = read_u16_be(data, off);
+            off += 2;
+            let u = f16::from_bits(read_u16_be(data, off)).to_f32();
+            off += 2;
+            let v = f16::from_bits(read_u16_be(data, off)).to_f32();
+            off += 2;
 
             vertices.push(RoadVertex {
                 position: [px, py, pz],

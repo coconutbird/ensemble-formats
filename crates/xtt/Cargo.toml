@@ -9,7 +9,6 @@ authors.workspace = true
 
 [dependencies]
 ecf = { workspace = true }
-byteorder = { workspace = true }
 thiserror = { workspace = true }
 texture2ddecoder = { workspace = true }
 half.workspace = true

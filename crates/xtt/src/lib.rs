@@ -12,6 +12,9 @@
 //! - `0xAAAA` - FoliageHeaderChunk: Foliage header data
 //! - `0xBBBB` - FoliageQNChunk: Foliage quantization data (multiple)
 
+#![no_std]
+extern crate alloc;
+
 mod error;
 pub use error::{Error, Result};
 
@@ -19,10 +22,10 @@ mod types;
 pub use types::*;
 
 mod reader;
-pub use reader::XttReader;
+pub use reader::Reader;
 
 mod writer;
-pub use writer::XttWriter;
+pub use writer::Writer;
 
 mod decode;
 pub use decode::{
@@ -59,7 +62,9 @@ pub const FILENAME_SIZE: usize = 256;
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
+    use std::{print, println};
 
     // Test files are in the extracted --filter directory (relative to workspace root)
     const TEST_XTT_PATH: &str = "../../--filter/scenario/skirmish/design/release/release.xtt";
@@ -68,7 +73,7 @@ mod tests {
     #[ignore = "requires extracted XTT file"]
     fn test_read_xtt() {
         let data = std::fs::read(TEST_XTT_PATH).expect("Failed to read XTT file");
-        let file = XttReader::read(&data).expect("Failed to parse XTT");
+        let file = Reader::read(&data).expect("Failed to parse XTT");
 
         println!("XTT Header:");
         println!("  Version: 0x{:04X}", file.header.version);
@@ -96,8 +101,8 @@ mod tests {
     #[ignore = "requires extracted XTT file"]
     fn test_xtt_roundtrip() {
         let original = std::fs::read(TEST_XTT_PATH).expect("Failed to read XTT file");
-        let file = XttReader::read(&original).expect("Failed to parse XTT");
-        let rewritten = XttWriter::write(&file).expect("Failed to write XTT");
+        let file = Reader::read(&original).expect("Failed to parse XTT");
+        let rewritten = Writer::write(&file).expect("Failed to write XTT");
 
         println!("Original size: {} bytes", original.len());
         println!("Rewritten size: {} bytes", rewritten.len());
@@ -158,26 +163,27 @@ mod tests {
             );
         }
     }
-}
 
-#[test]
-fn check_blood_gulch_layer_ids() {
-    // Path is relative to workspace root (ensemble-rs/)
-    let data =
-        std::fs::read("../../test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtt")
-            .expect("Failed to read XTT file");
-    let file = XttReader::read(&data).expect("Failed to parse XTT");
+    #[test]
+    #[ignore = "requires extracted XTT file"]
+    fn check_blood_gulch_layer_ids() {
+        let data = std::fs::read(
+            "../../test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtt",
+        )
+        .expect("Failed to read XTT file");
+        let file = Reader::read(&data).expect("Failed to parse XTT");
 
-    println!("\n=== ACTIVE TEXTURES ===");
-    for (i, tex) in file.active_textures.iter().enumerate() {
-        println!("[{}] {}", i, tex.filename);
-    }
+        println!("\n=== ACTIVE TEXTURES ===");
+        for (i, tex) in file.active_textures.iter().enumerate() {
+            println!("[{}] {}", i, tex.filename);
+        }
 
-    println!("\n=== FIRST 5 LINKER SPLAT_LAYER_IDS ===");
-    for linker in file.linkers.iter().take(5) {
-        println!(
-            "Chunk ({}, {}): {:?}",
-            linker.grid_x, linker.grid_z, linker.splat_layer_ids
-        );
+        println!("\n=== FIRST 5 LINKER SPLAT_LAYER_IDS ===");
+        for linker in file.linkers.iter().take(5) {
+            println!(
+                "Chunk ({}, {}): {:?}",
+                linker.grid_x, linker.grid_z, linker.splat_layer_ids
+            );
+        }
     }
 }

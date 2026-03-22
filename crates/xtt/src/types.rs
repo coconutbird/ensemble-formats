@@ -1,4 +1,55 @@
 //! XTT data types.
+//!
+//! Parsing uses the zero-copy overlay types [`XttHeaderRaw`] /
+//! [`XttLinkerHeaderRaw`] / [`AlbedoHeaderRaw`] (via `zerocopy`) and then
+//! converts into the friendlier native-endian structs.
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use zerocopy::{FromBytes, Immutable, KnownLayout};
+
+// ============================================================================
+// Zero-copy overlay structs
+// ============================================================================
+
+/// Raw on-disk XTT file header (16 bytes, big-endian).
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct XttHeaderRaw {
+    pub version: [u8; 4],
+    pub num_active_textures: [u8; 4],
+    pub num_active_decals: [u8; 4],
+    pub num_active_decal_instances: [u8; 4],
+}
+
+/// Raw on-disk XTT linker fixed header (36 bytes, big-endian).
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct XttLinkerHeaderRaw {
+    pub grid_x: [u8; 4],
+    pub grid_z: [u8; 4],
+    pub spec_pass_needed: [u8; 4],
+    pub self_pass_needed: [u8; 4],
+    pub env_mask_pass_needed: [u8; 4],
+    pub alpha_pass_needed: [u8; 4],
+    pub is_fully_opaque: [u8; 4],
+    pub num_splat_layers: [u8; 4],
+    pub num_decal_layers: [u8; 4],
+}
+
+/// Raw on-disk albedo atlas header (16 bytes, big-endian).
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+pub struct AlbedoHeaderRaw {
+    pub out_mem_size: [u8; 4],
+    pub width: [u8; 4],
+    pub height: [u8; 4],
+    pub num_mips: [u8; 4],
+}
+
+// ============================================================================
+// Parsed types
+// ============================================================================
 
 /// Metadata about a chunk for ECF reconstruction.
 #[derive(Debug, Clone)]

@@ -1,17 +1,18 @@
 //! Error types for XTT parsing.
 
+use alloc::string::String;
 use thiserror::Error;
 
 /// XTT parsing errors.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// I/O error.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// ECF error.
     #[error("ECF error: {0}")]
     Ecf(#[from] ecf::Error),
+
+    /// Unexpected end of data.
+    #[error("unexpected end of data")]
+    UnexpectedEof,
 
     /// Invalid XTT version.
     #[error("Invalid XTT version: expected {expected:#06X}, got {actual:#06X}")]
@@ -31,4 +32,4 @@ pub enum Error {
 }
 
 /// Result type for XTT operations.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;

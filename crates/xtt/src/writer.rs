@@ -1,48 +1,47 @@
 //! XTT writer implementation.
 
+use alloc::vec::Vec;
+
+use ecf::Writer as EcfWriter;
+
 use crate::{
     CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK, CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD,
     CHUNK_XTT_HEADER, FILENAME_SIZE, FoliageQNChunk, Result, XttFile, XttFoliage, XttHeader,
     XttLinker,
 };
-use byteorder::{BigEndian, WriteBytesExt};
-use ecf::Writer;
-use std::io::Cursor;
 
 /// XTT file writer.
-pub struct XttWriter;
+pub struct Writer;
 
-impl XttWriter {
+impl Writer {
     /// Write an XTT file to a byte vector.
     pub fn write(file: &XttFile) -> Result<Vec<u8>> {
-        let mut ecf = Writer::new(file.ecf_file_id);
+        let mut ecf = EcfWriter::new(file.ecf_file_id);
 
-        // Track indices for multi-instance chunk types
         let mut linker_idx = 0;
         let mut foliage_qn_idx = 0;
 
-        // Write chunks in original order using stored metadata
         for meta in &file.chunk_order {
             let data = match meta.id {
                 CHUNK_XTT_HEADER => {
-                    let mut header_data = Self::write_header(&file.header)?;
+                    let mut header_data = Self::write_header(&file.header);
                     header_data.extend_from_slice(&file.header_extra);
                     header_data
                 }
                 CHUNK_ATLAS_LINK => {
                     let linker = &file.linkers[linker_idx];
                     linker_idx += 1;
-                    Self::write_linker(linker)?
+                    Self::write_linker(linker)
                 }
                 CHUNK_ATLAS_ALBEDO => file.albedo_data.clone(),
                 CHUNK_ROAD => file.road_data.clone(),
-                CHUNK_FOLIAGE_HEADER => Self::write_foliage_header(&file.foliage)?,
+                CHUNK_FOLIAGE_HEADER => Self::write_foliage_header(&file.foliage),
                 CHUNK_FOLIAGE_QN => {
                     let qn = &file.foliage.qn_chunks[foliage_qn_idx];
                     foliage_qn_idx += 1;
-                    Self::write_foliage_qn_chunk(qn)?
+                    Self::write_foliage_qn_chunk(qn)
                 }
-                _ => continue, // Skip unknown chunks
+                _ => continue,
             };
 
             ecf.add_chunk_with_alignment(meta.id, data, meta.alignment_log2);
@@ -51,20 +50,16 @@ impl XttWriter {
         Ok(ecf.finalize()?)
     }
 
-    fn write_header(header: &XttHeader) -> Result<Vec<u8>> {
-        let mut buffer = Vec::with_capacity(XttHeader::SIZE);
-        let mut cursor = Cursor::new(&mut buffer);
-
-        cursor.write_i32::<BigEndian>(header.version)?;
-        cursor.write_i32::<BigEndian>(header.num_active_textures)?;
-        cursor.write_i32::<BigEndian>(header.num_active_decals)?;
-        cursor.write_i32::<BigEndian>(header.num_active_decal_instances)?;
-
-        Ok(buffer)
+    fn write_header(header: &XttHeader) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(XttHeader::SIZE);
+        buf.extend_from_slice(&header.version.to_be_bytes());
+        buf.extend_from_slice(&header.num_active_textures.to_be_bytes());
+        buf.extend_from_slice(&header.num_active_decals.to_be_bytes());
+        buf.extend_from_slice(&header.num_active_decal_instances.to_be_bytes());
+        buf
     }
 
-    fn write_linker(linker: &XttLinker) -> Result<Vec<u8>> {
-        // Calculate total size
+    fn write_linker(linker: &XttLinker) -> Vec<u8> {
         let splat_ids_size = linker.splat_layer_ids.len() * 4;
         let decal_ids_size = linker.decal_layer_ids.len() * 4;
         let total_size = XttLinker::HEADER_SIZE
@@ -73,95 +68,72 @@ impl XttWriter {
             + decal_ids_size
             + linker.decal_alpha_data.len();
 
-        let mut buffer = Vec::with_capacity(total_size);
-        let mut cursor = Cursor::new(&mut buffer);
+        let mut buf = Vec::with_capacity(total_size);
+        buf.extend_from_slice(&linker.grid_x.to_be_bytes());
+        buf.extend_from_slice(&linker.grid_z.to_be_bytes());
+        buf.extend_from_slice(&linker.spec_pass_needed.to_be_bytes());
+        buf.extend_from_slice(&linker.self_pass_needed.to_be_bytes());
+        buf.extend_from_slice(&linker.env_mask_pass_needed.to_be_bytes());
+        buf.extend_from_slice(&linker.alpha_pass_needed.to_be_bytes());
+        buf.extend_from_slice(&linker.is_fully_opaque.to_be_bytes());
+        buf.extend_from_slice(&linker.num_splat_layers.to_be_bytes());
+        buf.extend_from_slice(&linker.num_decal_layers.to_be_bytes());
 
-        cursor.write_i32::<BigEndian>(linker.grid_x)?;
-        cursor.write_i32::<BigEndian>(linker.grid_z)?;
-        cursor.write_i32::<BigEndian>(linker.spec_pass_needed)?;
-        cursor.write_i32::<BigEndian>(linker.self_pass_needed)?;
-        cursor.write_i32::<BigEndian>(linker.env_mask_pass_needed)?;
-        cursor.write_i32::<BigEndian>(linker.alpha_pass_needed)?;
-        cursor.write_i32::<BigEndian>(linker.is_fully_opaque)?;
-        cursor.write_i32::<BigEndian>(linker.num_splat_layers)?;
-        cursor.write_i32::<BigEndian>(linker.num_decal_layers)?;
-
-        // Write splat layer IDs
         for &id in &linker.splat_layer_ids {
-            cursor.write_i32::<BigEndian>(id)?;
+            buf.extend_from_slice(&id.to_be_bytes());
         }
+        buf.extend_from_slice(&linker.splat_alpha_data);
 
-        // Write splat alpha data
-        cursor.get_mut().extend_from_slice(&linker.splat_alpha_data);
-
-        // Write decal layer IDs
         for &id in &linker.decal_layer_ids {
-            cursor.write_i32::<BigEndian>(id)?;
+            buf.extend_from_slice(&id.to_be_bytes());
         }
+        buf.extend_from_slice(&linker.decal_alpha_data);
 
-        // Write decal alpha data
-        cursor.get_mut().extend_from_slice(&linker.decal_alpha_data);
-
-        Ok(buffer)
+        buf
     }
 
-    /// Write foliage header chunk data.
-    fn write_foliage_header(foliage: &XttFoliage) -> Result<Vec<u8>> {
+    fn write_foliage_header(foliage: &XttFoliage) -> Vec<u8> {
         let num_sets = foliage.sets.len();
-        let mut buffer = Vec::with_capacity(4 + num_sets * FILENAME_SIZE);
-        let mut cursor = Cursor::new(&mut buffer);
-
-        cursor.write_u32::<BigEndian>(num_sets as u32)?;
+        let mut buf = Vec::with_capacity(4 + num_sets * FILENAME_SIZE);
+        buf.extend_from_slice(&(num_sets as u32).to_be_bytes());
 
         for set in &foliage.sets {
-            // Write 256-byte filename (null-padded)
             let mut filename_bytes = [0u8; FILENAME_SIZE];
             let bytes = set.filename.as_bytes();
             let len = bytes.len().min(FILENAME_SIZE - 1);
             filename_bytes[..len].copy_from_slice(&bytes[..len]);
-            cursor.get_mut().extend_from_slice(&filename_bytes);
+            buf.extend_from_slice(&filename_bytes);
         }
 
-        Ok(buffer)
+        buf
     }
 
-    /// Write foliage QN chunk data.
-    fn write_foliage_qn_chunk(qn: &FoliageQNChunk) -> Result<Vec<u8>> {
-        // Calculate total size
+    fn write_foliage_qn_chunk(qn: &FoliageQNChunk) -> Vec<u8> {
         let num_sets = qn.num_sets as usize;
         let total_index_buffer_size: usize = qn.index_buffers.iter().map(|b| b.len()).sum();
-        let total_size = 8 + num_sets * 4 * 3 + 4 + total_index_buffer_size; // header + sets*3*4 + totalMem + data
+        let total_size = 8 + num_sets * 4 * 3 + 4 + total_index_buffer_size;
 
-        let mut buffer = Vec::with_capacity(total_size);
-        let mut cursor = Cursor::new(&mut buffer);
+        let mut buf = Vec::with_capacity(total_size);
+        buf.extend_from_slice(&qn.qn_parent_index.to_be_bytes());
+        buf.extend_from_slice(&qn.num_sets.to_be_bytes());
 
-        cursor.write_u32::<BigEndian>(qn.qn_parent_index)?;
-        cursor.write_u32::<BigEndian>(qn.num_sets)?;
-
-        // Write set indices
         for &idx in &qn.set_indices {
-            cursor.write_i32::<BigEndian>(idx)?;
+            buf.extend_from_slice(&idx.to_be_bytes());
         }
-
-        // Write poly counts
         for &count in &qn.set_poly_counts {
-            cursor.write_i32::<BigEndian>(count)?;
+            buf.extend_from_slice(&count.to_be_bytes());
         }
 
-        // Calculate total physical memory
         let total_physical_memory: i32 = qn.index_buffers.iter().map(|b| b.len() as i32).sum();
-        cursor.write_i32::<BigEndian>(total_physical_memory)?;
+        buf.extend_from_slice(&total_physical_memory.to_be_bytes());
 
-        // Write individual memory sizes
-        for buf in &qn.index_buffers {
-            cursor.write_i32::<BigEndian>(buf.len() as i32)?;
+        for b in &qn.index_buffers {
+            buf.extend_from_slice(&(b.len() as i32).to_be_bytes());
+        }
+        for b in &qn.index_buffers {
+            buf.extend_from_slice(b);
         }
 
-        // Write raw index buffer data
-        for buf in &qn.index_buffers {
-            cursor.get_mut().extend_from_slice(buf);
-        }
-
-        Ok(buffer)
+        buf
     }
 }
