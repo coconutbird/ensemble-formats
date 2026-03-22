@@ -1,14 +1,15 @@
-//! XMB reader — parse an ECF-wrapped XMB file from a byte slice.
+//! XMB reader — parse binary XMB or XML text from a byte slice.
 //!
-//! The reader unwraps the ECF container, locates the packed data chunk,
-//! detects endianness from the 4-byte XMB signature, and delegates to
-//! [`bdt::Reader`] for the tree structure.
+//! [`Reader::read`] auto-detects the format: if the input starts with `<`
+//! (or a UTF-8 BOM followed by `<`) it is parsed as XML text; otherwise it
+//! is treated as a binary ECF-wrapped XMB file.
 //!
 //! # Example
 //!
 //! ```no_run
 //! use xmb::Reader;
 //!
+//! // Works with both binary XMB and XML text
 //! let data = std::fs::read("example.xmb").unwrap();
 //! let doc = Reader::read(&data).unwrap();
 //! println!("root: {}", doc.root().unwrap().name);
@@ -18,15 +19,30 @@ use crate::document::{Document, Format};
 use crate::error::{Error, Result};
 use crate::{ECF_FILE_ID, PACKED_DATA_CHUNK_ID, SIGNATURE};
 
+/// UTF-8 BOM prefix.
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
 /// XMB file reader.
 pub struct Reader;
 
 impl Reader {
-    /// Read an XMB file from a byte slice.
+    /// Read a [`Document`] from a byte slice, auto-detecting the format.
     ///
-    /// The slice must contain a complete ECF container with an XMB packed data
-    /// chunk. Compressed chunks are transparently decompressed.
+    /// - If the data starts with `<` or a UTF-8 BOM, it is parsed as XML text.
+    /// - Otherwise it is parsed as a binary ECF-wrapped XMB file.
     pub fn read(data: &[u8]) -> Result<Document> {
+        if Self::looks_like_xml(data) {
+            let s = core::str::from_utf8(data)?;
+            Document::from_xml(s)
+        } else {
+            Self::read_ecf(data)
+        }
+    }
+
+    /// Read a binary ECF-wrapped XMB file from a byte slice.
+    ///
+    /// Use this when you know the input is a binary XMB (skips XML detection).
+    pub fn read_ecf(data: &[u8]) -> Result<Document> {
         let ecf = ecf::Reader::new(data)?;
 
         if ecf.header().id != ECF_FILE_ID {
@@ -91,5 +107,11 @@ impl Reader {
             format,
             source_file: None,
         })
+    }
+
+    /// Returns `true` if `data` looks like XML text rather than binary XMB.
+    fn looks_like_xml(data: &[u8]) -> bool {
+        let data = data.strip_prefix(UTF8_BOM).unwrap_or(data);
+        data.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
     }
 }

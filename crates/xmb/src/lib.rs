@@ -30,6 +30,9 @@
 //! println!("{}", xml);
 //! ```
 
+#![no_std]
+extern crate alloc;
+
 mod document;
 mod error;
 mod reader;
@@ -56,6 +59,9 @@ pub const FILE_INFO_CHUNK_ID: u64 = 0xA9C96501;
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
+    use alloc::string::ToString;
+
     use super::*;
 
     #[test]

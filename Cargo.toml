@@ -6,6 +6,7 @@ members = [
     "crates/ecf",
     "crates/era",
     "crates/uax",
+    "crates/xml",
     "crates/xmb",
     "crates/ugx",
     "crates/xtd",
@@ -32,6 +33,7 @@ uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
 ugx = { path = "crates/ugx" }
 xtd = { path = "crates/xtd" }
+xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }
 ugx-cli = { path = "crates/ugx-cli" }
 
@@ -44,6 +46,7 @@ sha1 = "0.10"
 tiger = "0.2"
 clap = { version = "4.5", features = ["derive"] }
 quick-xml = "0.37"
+xmlparser = { version = "0.13", default-features = false }
 half = "2.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -14,6 +14,8 @@
 //! assert!(!bytes.is_empty());
 //! ```
 
+use alloc::vec::Vec;
+
 use crate::document::{Document, Format};
 use crate::error::Result;
 use crate::{ECF_FILE_ID, PACKED_DATA_CHUNK_ID, SIGNATURE};

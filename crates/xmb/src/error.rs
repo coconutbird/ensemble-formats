@@ -1,17 +1,14 @@
 //! Error types for XMB parsing and writing.
 
+use alloc::string::String;
 use thiserror::Error;
 
 /// Result type alias for XMB operations.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// Error types for XMB operations.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// I/O error during reading or writing.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// ECF format error.
     #[error("ECF error: {0}")]
     Ecf(#[from] ecf::Error),
@@ -32,9 +29,13 @@ pub enum Error {
     #[error("required chunk not found: 0x{0:016X}")]
     ChunkNotFound(u64),
 
-    /// Invalid string encoding or XML parse error.
-    #[error("invalid string: {0}")]
-    InvalidString(String),
+    /// XML parsing failed.
+    #[error("XML parse error: {0}")]
+    Xml(String),
+
+    /// Input was detected as XML text but contains invalid UTF-8.
+    #[error("invalid UTF-8: {0}")]
+    InvalidUtf8(#[from] core::str::Utf8Error),
 
     /// Data truncated unexpectedly.
     #[error("unexpected end of data")]

@@ -8,6 +8,8 @@
 //! one from bytes via [`crate::Reader::read`] / from XML via
 //! [`Document::from_xml`].
 
+use alloc::string::String;
+
 pub use bdt::{Attribute, Node};
 
 /// XMB format variant.

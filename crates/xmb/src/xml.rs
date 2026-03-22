@@ -1,7 +1,8 @@
 //! XML ↔ XMB conversion.
 //!
 //! Provides [`to_xml`] and [`from_xml`] conversions between [`Document`] and
-//! UTF-8 XML text. Uses [`quick_xml`] for streaming parse/write.
+//! UTF-8 XML text. Uses the workspace [`xml`] crate for tokenized reading,
+//! writing, and entity escaping.
 //!
 //! # Reading XML
 //!
@@ -23,10 +24,12 @@
 //! assert!(xml.contains("<root/>"));
 //! ```
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use bdt::Variant;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
-use std::io::{BufRead, Cursor, Write};
+use xml::reader::Event;
 
 use crate::document::{Attribute, Document, Format, Node};
 use crate::error::{Error, Result};
@@ -34,57 +37,45 @@ use crate::error::{Error, Result};
 impl Document {
     /// Serialize this document to an XML string.
     pub fn to_xml(&self) -> String {
-        let mut buffer = Cursor::new(Vec::new());
-        self.write_xml_to(&mut buffer)
-            .expect("Failed to write XML to buffer");
-        String::from_utf8(buffer.into_inner()).expect("Invalid UTF-8 in XML output")
-    }
-
-    /// Write this document as XML to the given writer.
-    pub fn write_xml_to<W: Write>(&self, writer: &mut W) -> Result<()> {
-        let mut xml_writer = Writer::new_with_indent(writer, b' ', 4);
-
-        xml_writer
-            .write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))
-            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
-
-        xml_writer.get_mut().write_all(b"\n").map_err(Error::Io)?;
-
+        let mut w = xml::Writer::new();
+        w.declaration();
         if let Some(root) = &self.root {
-            write_node_xml(root, &mut xml_writer)?;
+            write_node_xml(root, &mut w);
         }
-
-        Ok(())
+        w.finish()
     }
 
     /// Parse an XML string into a [`Document`].
-    pub fn from_xml(xml: &str) -> Result<Self> {
-        Self::from_xml_reader(xml.as_bytes())
-    }
-
-    /// Parse XML from any [`BufRead`] source into a [`Document`].
-    pub fn from_xml_reader<R: BufRead>(reader: R) -> Result<Self> {
-        let mut xml_reader = Reader::from_reader(reader);
-
-        let mut buf = Vec::new();
+    pub fn from_xml(input: &str) -> Result<Self> {
         let mut root: Option<Node> = None;
         let mut stack: Vec<Node> = Vec::new();
+        let mut current_node: Option<Node> = None;
+        let reader = xml::Reader::new(input);
 
-        loop {
-            match xml_reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let node = parse_start_element(e)?;
-                    stack.push(node);
+        for result in reader {
+            let event = result.map_err(|e| Error::Xml(format!("{}", e)))?;
+
+            match event {
+                Event::ElementStart { name } => {
+                    if let Some(node) = current_node.take() {
+                        stack.push(node);
+                    }
+                    current_node = Some(Node::new(&name));
                 }
-                Ok(Event::Empty(ref e)) => {
-                    let node = parse_start_element(e)?;
-                    if let Some(parent) = stack.last_mut() {
-                        parent.children.push(node);
-                    } else {
-                        root = Some(node);
+                Event::Attribute { name, value } => {
+                    if let Some(ref mut node) = current_node {
+                        node.attributes.push(Attribute {
+                            name,
+                            value: parse_text_value(&value),
+                        });
                     }
                 }
-                Ok(Event::End(_)) => {
+                Event::ElementOpen => {
+                    if let Some(node) = current_node.take() {
+                        stack.push(node);
+                    }
+                }
+                Event::ElementClose { .. } => {
                     if let Some(mut node) = stack.pop() {
                         if let Variant::String(ref s) = node.text {
                             node.text = parse_text_value(s);
@@ -96,16 +87,21 @@ impl Document {
                         }
                     }
                 }
-                Ok(Event::Text(ref e)) => {
-                    let text = e
-                        .unescape()
-                        .map_err(|err| Error::InvalidString(err.to_string()))?;
-
+                Event::ElementEmpty => {
+                    if let Some(node) = current_node.take() {
+                        if let Some(parent) = stack.last_mut() {
+                            parent.children.push(node);
+                        } else {
+                            root = Some(node);
+                        }
+                    }
+                }
+                Event::Text(text) => {
                     if let Some(node) = stack.last_mut() {
                         match &node.text {
                             Variant::Null => {
                                 if !text.trim().is_empty() {
-                                    node.text = Variant::String(text.into_owned());
+                                    node.text = Variant::String(text);
                                 }
                             }
                             Variant::String(existing) => {
@@ -118,19 +114,14 @@ impl Document {
                         }
                     }
                 }
-                Ok(Event::CData(ref e)) => {
-                    let text = String::from_utf8_lossy(e.as_ref()).to_string();
-                    if !text.is_empty()
+                Event::Cdata(s) => {
+                    if !s.is_empty()
                         && let Some(node) = stack.last_mut()
                     {
-                        node.text = Variant::String(text);
+                        node.text = Variant::String(s);
                     }
                 }
-                Ok(Event::Eof) => break,
-                Ok(_) => {}
-                Err(e) => return Err(Error::InvalidString(format!("XML parse error: {}", e))),
             }
-            buf.clear();
         }
 
         Ok(Document {
@@ -141,62 +132,31 @@ impl Document {
     }
 }
 
-fn write_node_xml<W: Write>(node: &Node, writer: &mut Writer<W>) -> Result<()> {
+fn write_node_xml(node: &Node, w: &mut xml::Writer) {
     let has_text = !matches!(node.text, Variant::Null);
     let has_children = !node.children.is_empty();
 
-    let mut elem = BytesStart::new(&node.name);
+    w.open(&node.name);
     for attr in &node.attributes {
-        elem.push_attribute((attr.name.as_str(), attr.value.to_string_value().as_str()));
+        w.attr(&attr.name, &attr.value.to_string_value());
     }
 
     if !has_text && !has_children {
-        writer
-            .write_event(Event::Empty(elem))
-            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        w.close_empty();
     } else {
-        writer
-            .write_event(Event::Start(elem.borrow()))
-            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        w.close();
 
         if has_text {
             let text = node.text.to_string_value();
-            writer
-                .write_event(Event::Text(BytesText::new(&text)))
-                .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+            w.text(&text);
         }
 
         for child in &node.children {
-            write_node_xml(child, writer)?;
+            write_node_xml(child, w);
         }
 
-        writer
-            .write_event(Event::End(BytesEnd::new(&node.name)))
-            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        w.end(&node.name);
     }
-
-    Ok(())
-}
-
-fn parse_start_element(e: &BytesStart) -> Result<Node> {
-    let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-    let mut node = Node::new(name);
-
-    for attr_result in e.attributes() {
-        let attr =
-            attr_result.map_err(|e| Error::InvalidString(format!("Attribute error: {}", e)))?;
-        let attr_name = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-        let attr_value = attr
-            .unescape_value()
-            .map_err(|e| Error::InvalidString(format!("Attribute value error: {}", e)))?
-            .to_string();
-        node.attributes.push(Attribute {
-            name: attr_name,
-            value: parse_text_value(&attr_value),
-        });
-    }
-
-    Ok(node)
 }
 
 fn parse_text_value(s: &str) -> Variant {
@@ -214,7 +174,7 @@ fn parse_text_value(s: &str) -> Variant {
     if s.contains(',') {
         let parts: Vec<&str> = s.split(',').collect();
         if parts.len() >= 2 && parts.len() <= 4 {
-            let floats: std::result::Result<Vec<f32>, _> =
+            let floats: core::result::Result<Vec<f32>, _> =
                 parts.iter().map(|p| p.trim().parse::<f32>()).collect();
             if let Ok(vec) = floats {
                 return Variant::FloatVec(vec);
@@ -247,8 +207,8 @@ fn parse_text_value(s: &str) -> Variant {
     }
 
     if s.is_ascii() {
-        Variant::String(s.to_string())
+        Variant::String(String::from(s))
     } else {
-        Variant::UString(s.to_string())
+        Variant::UString(String::from(s))
     }
 }

@@ -7,6 +7,6 @@ description = "XMB binary XML format reader/writer for Halo Wars (Ensemble Studi
 [dependencies]
 bdt.workspace = true
 ecf.workspace = true
+xml.workspace = true
 thiserror.workspace = true
-quick-xml.workspace = true
 zerocopy.workspace = true
