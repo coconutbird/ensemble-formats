@@ -23,6 +23,9 @@
 //! }
 //! ```
 
+#![no_std]
+extern crate alloc;
+
 mod error;
 pub use error::{Error, Result};
 
@@ -34,11 +37,12 @@ pub use variant::{
     unpack_int24, unpack_uint24,
 };
 
-mod types;
-pub use types::{Attribute, Node};
+mod node;
+pub use node::{Attribute, Node};
 
-mod reader;
-pub use reader::PackedReader;
+pub mod raw;
 
-mod writer;
-pub use writer::PackedWriter;
+mod compact;
+mod util;
+mod xmx;
+pub use xmx::{PackedReader, PackedWriter};

@@ -15,11 +15,10 @@
 //!   For offset values: Offset into the data/string table
 //! ```
 
-use crate::error::{Error, Result};
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
-// ============================================================================
-// Variant Type Flags
-// ============================================================================
+use crate::error::{Error, Result};
 
 /// Type mask for extracting the variant type (bits 0-4).
 #[allow(dead_code)]
@@ -39,29 +38,40 @@ pub const VEC_SIZE_MASK: u8 = 0x60;
 #[allow(dead_code)]
 pub const VEC_SIZE_SHIFT: u8 = 5;
 
-// ============================================================================
-// Variant Type Enum
-// ============================================================================
-
-/// Variant type enumeration matching the BBinaryDataTree format.
+/// On-disk type code stored in the upper byte of a packed variant value.
+///
+/// These codes occupy bits 0–3 of the type byte. The remaining bits carry
+/// flags ([`OFFSET_FLAG`], [`UNSIGNED_FLAG`], vector size).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 #[allow(dead_code)]
 pub enum VariantType {
+    /// No value.
     Null = 0,
+    /// 24-bit packed float (direct, no offset).
     Float24 = 1,
+    /// 32-bit IEEE 754 float (stored at offset in data table).
     Float = 2,
+    /// 24-bit packed signed/unsigned integer (direct).
     Int24 = 3,
+    /// 32-bit integer (stored at offset in data table).
     Int32 = 4,
+    /// 24-bit fixed-point fraction (value × 10 000).
     Fract24 = 5,
+    /// 64-bit IEEE 754 double (stored at offset).
     Double = 6,
+    /// Boolean (direct, 0 or 1).
     Bool = 7,
+    /// Null-terminated UTF-8 string.
     String = 8,
+    /// Null-terminated UTF-16 string.
     UString = 9,
+    /// Vector of 2–4 floats (stored at offset).
     FloatVec = 10,
 }
 
 impl VariantType {
+    /// Decode a type code from the lower 5 bits of a byte.
     #[allow(dead_code)]
     pub fn from_byte(byte: u8) -> Result<Self> {
         match byte & TYPE_MASK {
@@ -80,6 +90,7 @@ impl VariantType {
         }
     }
 
+    /// Returns `true` if this type is always stored at an offset in the data table.
     #[allow(dead_code)]
     pub fn always_offset(&self) -> bool {
         matches!(
@@ -88,6 +99,7 @@ impl VariantType {
         )
     }
 
+    /// Returns `true` if this type is always encoded directly in the 24-bit data field.
     #[allow(dead_code)]
     pub fn always_direct(&self) -> bool {
         matches!(
@@ -101,26 +113,40 @@ impl VariantType {
     }
 }
 
-// ============================================================================
-// Variant Value Enum
-// ============================================================================
-
-/// A variant value in the BBinaryDataTree format.
+/// A dynamically-typed value in the BBinaryDataTree format.
+///
+/// Each node's text content and each attribute value is stored as a `Variant`.
+/// The variant type determines how the value is serialized in the packed binary
+/// format (see [`VariantType`] for the on-disk type codes).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Variant {
+    /// No value / absent.
     #[default]
     Null,
+    /// 32-bit IEEE 754 float.
     Float(f32),
+    /// 64-bit IEEE 754 double.
     Double(f64),
+    /// Signed 32-bit integer (may be packed as 24-bit on disk).
     Int(i32),
+    /// Unsigned 32-bit integer (may be packed as 24-bit on disk).
     UInt(u32),
+    /// Boolean flag.
     Bool(bool),
+    /// UTF-8 string (narrow).
     String(String),
+    /// UTF-16 string (wide), stored as a Rust `String` after decoding.
     UString(String),
+    /// Vector of 2–4 floats (e.g. position, color).
     FloatVec(Vec<f32>),
 }
 
 impl Variant {
+    /// Format the value as a human-readable string.
+    ///
+    /// - `Null` → `""`
+    /// - `FloatVec` → comma-separated (e.g. `"1.0,2.0,3.0"`)
+    /// - All others → their natural `ToString` representation.
     pub fn to_string_value(&self) -> String {
         match self {
             Variant::Null => String::new(),
@@ -138,6 +164,10 @@ impl Variant {
         }
     }
 
+    /// Try to interpret the value as an `f32`.
+    ///
+    /// Converts `Float`, `Double`, `Int`, and `UInt` variants; returns `None`
+    /// for strings, bools, vecs, and null.
     pub fn as_float(&self) -> Option<f32> {
         match self {
             Variant::Float(v) => Some(*v),
@@ -148,6 +178,10 @@ impl Variant {
         }
     }
 
+    /// Try to interpret the value as an `i32`.
+    ///
+    /// Converts numeric and boolean variants; returns `None` for strings,
+    /// vecs, and null.
     pub fn as_int(&self) -> Option<i32> {
         match self {
             Variant::Int(v) => Some(*v),
@@ -159,6 +193,10 @@ impl Variant {
         }
     }
 
+    /// Try to interpret the value as a `bool`.
+    ///
+    /// Converts `Bool`, `Int`, and `UInt` (non-zero = true); returns `None`
+    /// for other types.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Variant::Bool(v) => Some(*v),
@@ -168,10 +206,6 @@ impl Variant {
         }
     }
 }
-
-// ============================================================================
-// Variant Encoding/Decoding Functions
-// ============================================================================
 
 /// Pack a 32-bit float into a 24-bit representation.
 pub fn pack_float24(value: f32) -> u32 {
