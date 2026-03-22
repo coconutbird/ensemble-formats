@@ -98,6 +98,32 @@ pub trait Write {
     }
 }
 
+// Blanket impls for `&mut T` — `std::io` provides these automatically,
+// but in `no_std` we need them explicitly.
+#[cfg(not(feature = "std"))]
+impl<T: Read + ?Sized> Read for &mut T {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        (**self).read(buf)
+    }
+}
+
+#[cfg(not(feature = "std"))]
+impl<T: Seek + ?Sized> Seek for &mut T {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError> {
+        (**self).seek(pos)
+    }
+}
+
+#[cfg(not(feature = "std"))]
+impl<T: Write + ?Sized> Write for &mut T {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, IoError> {
+        (**self).write(buf)
+    }
+    fn flush(&mut self) -> Result<(), IoError> {
+        (**self).flush()
+    }
+}
+
 /// Create an "unexpected EOF" error.
 #[inline]
 pub fn unexpected_eof() -> IoError {
@@ -121,6 +147,19 @@ pub fn invalid_seek() -> IoError {
     #[cfg(not(feature = "std"))]
     {
         IoError::InvalidSeek
+    }
+}
+
+/// Check whether an IO error is an "unexpected EOF".
+#[inline]
+pub fn is_unexpected_eof(err: &IoError) -> bool {
+    #[cfg(feature = "std")]
+    {
+        err.kind() == std::io::ErrorKind::UnexpectedEof
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        matches!(err, IoError::UnexpectedEof)
     }
 }
 

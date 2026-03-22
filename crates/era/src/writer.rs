@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::io::Write;
+use ecf::io::{Read, Seek, Write};
 use tiger::{Digest, Tiger};
 
 use crate::error::Result;
@@ -513,17 +513,13 @@ fn write_chunk_header(buf: &mut [u8], chunk: &ChunkLayout) {
     buf[24..56].copy_from_slice(&extra.to_bytes());
 }
 
-#[cfg(feature = "std")]
-extern crate std;
-
-#[cfg(feature = "std")]
 impl Writer {
     /// Stream the archive through an [`EncryptWriter`](crate::EncryptWriter),
     /// encrypting on the fly.
     ///
     /// The destination must implement `Write + Seek + Read` (e.g. a `File`).
     /// Returns the inner writer after finishing encryption.
-    pub fn write_to_encrypted<W: std::io::Write + std::io::Seek + std::io::Read>(
+    pub fn write_to_encrypted<W: Write + Seek + Read>(
         &self,
         dest: W,
         keys: crate::TeaKeys,
@@ -533,7 +529,7 @@ impl Writer {
 
     /// Stream the archive through an [`EncryptWriter`](crate::EncryptWriter)
     /// with optional progress callback.
-    pub fn write_to_encrypted_with_progress<W: std::io::Write + std::io::Seek + std::io::Read>(
+    pub fn write_to_encrypted_with_progress<W: Write + Seek + Read>(
         &self,
         dest: W,
         keys: crate::TeaKeys,

@@ -31,7 +31,6 @@ mod reader;
 mod writer;
 
 mod decrypt_reader;
-#[cfg(feature = "std")]
 mod encrypt_writer;
 
 pub use buffer_pool::{BufferPool, PooledBuffer};
@@ -39,7 +38,6 @@ pub use crypto::{ARCHIVE_PASSWORD, TEA_BLOCK_SIZE, TeaKeys};
 #[cfg(feature = "rayon")]
 pub use crypto::{tea_decrypt_data_parallel, tea_encrypt_data_parallel};
 pub use decrypt_reader::DecryptReader;
-#[cfg(feature = "std")]
 pub use encrypt_writer::EncryptWriter;
 pub use error::*;
 pub use header::*;

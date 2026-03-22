@@ -1,8 +1,6 @@
 //! Encrypting writer wrapper for ERA files.
 
-extern crate std;
-
-use std::io::{Read, Seek, SeekFrom, Write};
+use ecf::io::{IoError, Read, Seek, SeekFrom, Write, invalid_seek, is_unexpected_eof};
 
 use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64, tea_encrypt_block64};
 
@@ -37,7 +35,7 @@ impl<W: Write + Seek + Read> EncryptWriter<W> {
     }
 
     /// Flush the current buffer, encrypting and writing it
-    fn flush_buffer(&mut self) -> std::io::Result<()> {
+    fn flush_buffer(&mut self) -> Result<(), IoError> {
         if self.buffer_len == 0 {
             return Ok(());
         }
@@ -62,7 +60,7 @@ impl<W: Write + Seek + Read> EncryptWriter<W> {
     }
 
     /// Read back and decrypt a previously written block
-    fn read_block(&mut self, block_offset: u64) -> std::io::Result<bool> {
+    fn read_block(&mut self, block_offset: u64) -> Result<bool, IoError> {
         self.inner.seek(SeekFrom::Start(block_offset))?;
         let mut encrypted = [0u8; TEA_BLOCK_SIZE];
         match self.inner.read_exact(&mut encrypted) {
@@ -71,7 +69,7 @@ impl<W: Write + Seek + Read> EncryptWriter<W> {
                 tea_decrypt_block64(&self.keys, &encrypted, &mut self.buffer, counter);
                 Ok(true)
             }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Err(e) if is_unexpected_eof(&e) => {
                 // Block doesn't exist yet, initialize to zeros
                 self.buffer = [0; TEA_BLOCK_SIZE];
                 Ok(false)
@@ -81,7 +79,7 @@ impl<W: Write + Seek + Read> EncryptWriter<W> {
     }
 
     /// Finish writing and return the inner writer
-    pub fn finish(mut self) -> std::io::Result<W> {
+    pub fn finish(mut self) -> Result<W, IoError> {
         self.flush_buffer()?;
         Ok(self.inner)
     }
@@ -93,7 +91,7 @@ impl<W: Write + Seek + Read> EncryptWriter<W> {
 }
 
 impl<W: Write + Seek + Read> Write for EncryptWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, IoError> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -144,14 +142,14 @@ impl<W: Write + Seek + Read> Write for EncryptWriter<W> {
         Ok(total_written)
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> Result<(), IoError> {
         self.flush_buffer()?;
         self.inner.flush()
     }
 }
 
 impl<W: Write + Seek + Read> Seek for EncryptWriter<W> {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError> {
         // Flush before seeking
         self.flush_buffer()?;
 
@@ -162,14 +160,9 @@ impl<W: Write + Seek + Read> Seek for EncryptWriter<W> {
             } else {
                 self.position.checked_sub((-offset) as u64)
             }
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek out of bounds")
-            })?,
+            .ok_or_else(invalid_seek)?,
             SeekFrom::End(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "SeekFrom::End not supported for EncryptWriter",
-                ));
+                return Err(invalid_seek());
             }
         };
 
