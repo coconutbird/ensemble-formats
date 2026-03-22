@@ -4,8 +4,9 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
-use era::{EraArchive, EraWriter};
+use era::{DecryptReader, EncryptWriter, Reader, TeaKeys, Writer};
 use serde::Serialize;
+use std::io::{Read, Write};
 
 /// Exit codes for scripting
 pub mod exit_code {
@@ -140,9 +141,22 @@ struct ListEntry {
     tiger128: String,
 }
 
+/// Read and decrypt an ERA file into a byte buffer.
+fn read_and_decrypt(path: &str) -> Result<Vec<u8>, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    let reader = std::io::BufReader::new(file);
+    let keys = TeaKeys::default_archive_keys();
+    let mut decrypt = DecryptReader::new(reader, keys);
+    let mut buf = Vec::new();
+    decrypt
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+    Ok(buf)
+}
+
 fn list_archive(path: &str, json: bool) -> i32 {
-    let archive = match EraArchive::open(path) {
-        Ok(a) => a,
+    let data = match read_and_decrypt(path) {
+        Ok(d) => d,
         Err(e) => {
             if json {
                 eprintln!(r#"{{"error": "{}"}}"#, e);
@@ -150,6 +164,17 @@ fn list_archive(path: &str, json: bool) -> i32 {
                 eprintln!("Error opening archive: {}", e);
             }
             return exit_code::FILE_NOT_FOUND;
+        }
+    };
+    let archive = match Reader::new(&data) {
+        Ok(a) => a,
+        Err(e) => {
+            if json {
+                eprintln!(r#"{{"error": "{}"}}"#, e);
+            } else {
+                eprintln!("Error parsing archive: {}", e);
+            }
+            return exit_code::INVALID_FORMAT;
         }
     };
 
@@ -283,8 +308,8 @@ struct ArchiveHeaderInfo {
 }
 
 fn info_archive(path: &str, json: bool) -> i32 {
-    let archive = match EraArchive::open(path) {
-        Ok(a) => a,
+    let data = match read_and_decrypt(path) {
+        Ok(d) => d,
         Err(e) => {
             if json {
                 eprintln!(r#"{{"error": "{}"}}"#, e);
@@ -292,6 +317,17 @@ fn info_archive(path: &str, json: bool) -> i32 {
                 eprintln!("Error opening archive: {}", e);
             }
             return exit_code::FILE_NOT_FOUND;
+        }
+    };
+    let archive = match Reader::new(&data) {
+        Ok(a) => a,
+        Err(e) => {
+            if json {
+                eprintln!(r#"{{"error": "{}"}}"#, e);
+            } else {
+                eprintln!("Error parsing archive: {}", e);
+            }
+            return exit_code::INVALID_FORMAT;
         }
     };
 
@@ -387,8 +423,8 @@ fn extract_archive(
     json: bool,
     quiet: bool,
 ) -> i32 {
-    let mut archive = match EraArchive::open(path) {
-        Ok(a) => a,
+    let data = match read_and_decrypt(path) {
+        Ok(d) => d,
         Err(e) => {
             if json {
                 eprintln!(r#"{{"error": "{}"}}"#, e);
@@ -396,6 +432,17 @@ fn extract_archive(
                 eprintln!("Error opening archive: {}", e);
             }
             return exit_code::FILE_NOT_FOUND;
+        }
+    };
+    let archive = match Reader::new(&data) {
+        Ok(a) => a,
+        Err(e) => {
+            if json {
+                eprintln!(r#"{{"error": "{}"}}"#, e);
+            } else {
+                eprintln!("Error parsing archive: {}", e);
+            }
+            return exit_code::INVALID_FORMAT;
         }
     };
 
@@ -580,7 +627,7 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
         println!("Creating {} from {}...", output_path, input_dir);
     }
 
-    let mut writer = EraWriter::new();
+    let mut writer = Writer::new();
 
     // Recursively collect files
     let mut file_count = 0;
@@ -604,8 +651,42 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
         println!("  Collected {} files", file_count);
     }
 
-    // Write archive
-    if let Err(e) = writer.write_to_file(output_path) {
+    // Build archive bytes
+    let archive_bytes = match writer.finalize() {
+        Ok(b) => b,
+        Err(e) => {
+            if json {
+                let output = CreateOutput {
+                    archive: output_path.to_string(),
+                    input_dir: input_dir.to_string(),
+                    files_added: file_count,
+                    success: false,
+                    error: Some(format!("Error building archive: {}", e)),
+                };
+                println!("{}", serde_json::to_string(&output).unwrap());
+            } else {
+                eprintln!("Error building archive: {}", e);
+            }
+            return exit_code::IO_ERROR;
+        }
+    };
+
+    // Encrypt and write to file
+    let write_result = (|| -> std::io::Result<()> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(output_path)?;
+        let keys = TeaKeys::default_archive_keys();
+        let mut encrypt_writer = EncryptWriter::new(file, keys);
+        encrypt_writer.write_all(&archive_bytes)?;
+        encrypt_writer.finish()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_result {
         if json {
             let output = CreateOutput {
                 archive: output_path.to_string(),
@@ -640,7 +721,7 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
 fn collect_files(
     base: &Path,
     dir: &Path,
-    writer: &mut EraWriter,
+    writer: &mut Writer,
     count: &mut usize,
 ) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {

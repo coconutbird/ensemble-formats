@@ -3,7 +3,6 @@
 //! ERA archives are encrypted using a modified TEA cipher in CTR mode with 64-byte blocks.
 //! The key is derived from a password using SHA-1.
 
-use rayon::prelude::*;
 use sha1::{Digest, Sha1};
 
 /// Default TEA initialization vector
@@ -519,11 +518,14 @@ pub fn tea_encrypt_data(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
     }
 }
 
-/// Decrypt data in-place using parallel processing (for large buffers)
+/// Decrypt data in-place using parallel processing (for large buffers).
 ///
 /// This is faster than `tea_decrypt_data` for large amounts of data by
 /// utilizing multiple CPU cores. Each 64-byte block is independent in CTR mode.
+#[cfg(feature = "rayon")]
 pub fn tea_decrypt_data_parallel(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
+    use rayon::prelude::*;
+
     assert!(data.len().is_multiple_of(TEA_BLOCK_SIZE));
     assert!(start_offset.is_multiple_of(TEA_BLOCK_SIZE as u64));
 
@@ -541,11 +543,14 @@ pub fn tea_decrypt_data_parallel(keys: &TeaKeys, data: &mut [u8], start_offset: 
         });
 }
 
-/// Encrypt data in-place using parallel processing (for large buffers)
+/// Encrypt data in-place using parallel processing (for large buffers).
 ///
 /// This is faster than `tea_encrypt_data` for large amounts of data by
 /// utilizing multiple CPU cores. Each 64-byte block is independent in CTR mode.
+#[cfg(feature = "rayon")]
 pub fn tea_encrypt_data_parallel(keys: &TeaKeys, data: &mut [u8], start_offset: u64) {
+    use rayon::prelude::*;
+
     assert!(data.len().is_multiple_of(TEA_BLOCK_SIZE));
     assert!(start_offset.is_multiple_of(TEA_BLOCK_SIZE as u64));
 

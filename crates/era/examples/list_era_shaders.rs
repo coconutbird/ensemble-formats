@@ -1,5 +1,6 @@
-use era::EraArchive;
+use era::{DecryptReader, Reader, TeaKeys};
 use std::env;
+use std::io::Read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -9,7 +10,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("/Users/dev/Documents/steamcmd/halo_wars/root.era");
 
     println!("Opening ERA: {}", era_path);
-    let archive = EraArchive::open(era_path)?;
+
+    let file = std::fs::File::open(era_path)?;
+    let keys = TeaKeys::default_archive_keys();
+    let mut decrypt = DecryptReader::new(file, keys);
+    let mut data = Vec::new();
+    decrypt.read_to_end(&mut data)?;
+
+    let archive = Reader::new(&data)?;
 
     println!("\nAll files containing 'terrain', 'shader', or '.bin':\n");
 

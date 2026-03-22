@@ -7,13 +7,18 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = ["std"]
+std = ["rayon"]
+rayon = ["dep:rayon"]
+
 [dependencies]
 ecf.workspace = true
-byteorder.workspace = true
-flate2.workspace = true
 thiserror.workspace = true
-sha1.workspace = true
-tiger.workspace = true
-rayon.workspace = true
-memmap2.workspace = true
 zerocopy.workspace = true
+sha1 = { workspace = true, default-features = false }
+tiger = { workspace = true, default-features = false }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+
+# Optional std-only dependencies
+rayon = { workspace = true, optional = true }

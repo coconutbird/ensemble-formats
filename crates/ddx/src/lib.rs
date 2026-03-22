@@ -50,31 +50,37 @@ pub use reader::{DdxTexture, TextureInfo};
 mod tests {
     use super::*;
 
-    #[test]
-    #[ignore] // Requires root.era to be present
-    fn test_parse_ddx_from_era() {
-        use era::EraArchive;
+    fn read_and_decrypt_era(path: &str) -> Vec<u8> {
+        use era::{DecryptReader, TeaKeys};
+        use std::io::Read;
 
-        // Try workspace root first, then current dir
-        let era_path = if std::path::Path::new("root.era").exists() {
+        let file = std::fs::File::open(path).expect("Failed to open ERA file");
+        let keys = TeaKeys::default_archive_keys();
+        let mut decrypt = DecryptReader::new(file, keys);
+        let mut data = Vec::new();
+        decrypt.read_to_end(&mut data).expect("Failed to decrypt");
+        data
+    }
+
+    fn find_era_path() -> String {
+        if std::path::Path::new("root.era").exists() {
             "root.era".to_string()
         } else if std::path::Path::new("../../root.era").exists() {
             "../../root.era".to_string()
         } else {
             panic!("Cannot find root.era - run from workspace root");
-        };
+        }
+    }
 
-        let mut archive = EraArchive::open(&era_path).expect("Failed to open root.era");
+    #[test]
+    #[ignore] // Requires root.era to be present
+    fn test_parse_ddx_from_era() {
+        let era_data = read_and_decrypt_era(&find_era_path());
+        let archive = era::Reader::new(&era_data).expect("Failed to read ERA");
 
-        // Find a DDX file
         let ddx_idx = archive
             .iter()
-            .position(|e| {
-                e.filename
-                    .as_ref()
-                    .map(|n| n.ends_with(".ddx"))
-                    .unwrap_or(false)
-            })
+            .position(|e| e.filename.as_ref().is_some_and(|n| n.ends_with(".ddx")))
             .expect("No DDX file found in archive");
 
         let entry = archive.entry(ddx_idx).unwrap();
@@ -96,7 +102,6 @@ mod tests {
         println!("  HDR Scale: {}", texture.info.hdr_scale);
         println!("  Decompressed Data Size: {} bytes", texture.data.len());
 
-        // Basic sanity checks
         assert!(texture.info.width > 0);
         assert!(texture.info.height > 0);
         assert!(texture.info.num_mip_levels >= 1);
@@ -105,27 +110,13 @@ mod tests {
     #[test]
     #[ignore] // Requires root.era to be present
     fn test_parse_all_ddx_from_era() {
-        use era::EraArchive;
-
-        let era_path = if std::path::Path::new("root.era").exists() {
-            "root.era".to_string()
-        } else if std::path::Path::new("../../root.era").exists() {
-            "../../root.era".to_string()
-        } else {
-            panic!("Cannot find root.era - run from workspace root");
-        };
-
-        let mut archive = EraArchive::open(&era_path).expect("Failed to open root.era");
+        let era_data = read_and_decrypt_era(&find_era_path());
+        let archive = era::Reader::new(&era_data).expect("Failed to read ERA");
 
         let ddx_indices: Vec<usize> = archive
             .iter()
             .enumerate()
-            .filter(|(_, e)| {
-                e.filename
-                    .as_ref()
-                    .map(|n| n.ends_with(".ddx"))
-                    .unwrap_or(false)
-            })
+            .filter(|(_, e)| e.filename.as_ref().is_some_and(|n| n.ends_with(".ddx")))
             .map(|(i, _)| i)
             .collect();
 
@@ -169,28 +160,13 @@ mod tests {
     #[test]
     #[ignore] // Requires root.era to be present
     fn test_roundtrip_ddx() {
-        use era::EraArchive;
+        let era_data = read_and_decrypt_era(&find_era_path());
+        let archive = era::Reader::new(&era_data).expect("Failed to read ERA");
 
-        let era_path = if std::path::Path::new("root.era").exists() {
-            "root.era".to_string()
-        } else if std::path::Path::new("../../root.era").exists() {
-            "../../root.era".to_string()
-        } else {
-            panic!("Cannot find root.era - run from workspace root");
-        };
-
-        let mut archive = EraArchive::open(&era_path).expect("Failed to open root.era");
-
-        // Find DDX files
         let ddx_indices: Vec<usize> = archive
             .iter()
             .enumerate()
-            .filter(|(_, e)| {
-                e.filename
-                    .as_ref()
-                    .map(|n| n.ends_with(".ddx"))
-                    .unwrap_or(false)
-            })
+            .filter(|(_, e)| e.filename.as_ref().is_some_and(|n| n.ends_with(".ddx")))
             .map(|(i, _)| i)
             .collect();
 
@@ -203,13 +179,9 @@ mod tests {
             let original_data = archive.read_entry(idx).expect("Failed to read DDX");
             let texture = DdxTexture::from_bytes(&original_data).expect("Failed to parse DDX");
 
-            // Write to DDS
             let dds_data = texture.to_dds().expect("Failed to write DDS");
-
-            // Parse the written DDS
             let reparsed = DdxTexture::from_bytes(&dds_data).expect("Failed to reparse DDS");
 
-            // Verify metadata matches
             assert_eq!(
                 texture.info.width, reparsed.info.width,
                 "{}: width mismatch",

@@ -1,4 +1,6 @@
-//! Decrypting reader wrapper for encrypted ERA files
+//! Decrypting reader wrapper for encrypted ERA files.
+
+extern crate std;
 
 use std::io::{Read, Seek, SeekFrom};
 

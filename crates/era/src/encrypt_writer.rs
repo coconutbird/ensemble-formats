@@ -1,4 +1,6 @@
-//! Encrypting writer wrapper for ERA files
+//! Encrypting writer wrapper for ERA files.
+
+extern crate std;
 
 use std::io::{Read, Seek, SeekFrom, Write};
 

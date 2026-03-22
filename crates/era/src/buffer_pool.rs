@@ -3,8 +3,9 @@
 //! This module provides reusable byte buffers to avoid repeated allocations
 //! when reading and writing many files in an archive.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
+use alloc::vec::Vec;
+use core::cell::RefCell;
 
 /// Thread-local buffer pool for reusable byte vectors
 ///
@@ -95,7 +96,7 @@ impl<'a> PooledBuffer<'a> {
     }
 }
 
-impl<'a> std::ops::Deref for PooledBuffer<'a> {
+impl<'a> core::ops::Deref for PooledBuffer<'a> {
     type Target = Vec<u8>;
 
     fn deref(&self) -> &Self::Target {
@@ -103,7 +104,7 @@ impl<'a> std::ops::Deref for PooledBuffer<'a> {
     }
 }
 
-impl<'a> std::ops::DerefMut for PooledBuffer<'a> {
+impl<'a> core::ops::DerefMut for PooledBuffer<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.buffer.as_mut().unwrap()
     }
