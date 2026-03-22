@@ -99,7 +99,7 @@
 //! ```
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{Cursor, Read, Seek};
+use std::io::Cursor;
 
 use crate::error::{Error, Result};
 use crate::types::*;
@@ -202,35 +202,29 @@ pub struct GrannyMesh {
 impl UgxGeom {
     /// Read UGX geometry from raw bytes (ECF container).
     pub fn read(data: &[u8]) -> Result<Self> {
-        let mut cursor = Cursor::new(data);
-        Self::read_from(&mut cursor)
-    }
-
-    /// Read UGX geometry from a reader (ECF container).
-    pub fn read_from<R: Read + Seek>(reader: &mut R) -> Result<Self> {
         // Parse ECF container
-        let mut ecf = ecf::EcfReader::new(reader)?;
+        let ecf = ecf::EcfReader::new(data)?;
 
         // Read cached data chunk (header, sections, bones, etc.)
         let cached_data = ecf
-            .read_chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID)
+            .chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID)
             .map_err(|_| Error::MissingChunk("cached_data (0x700)"))?;
 
         // Read vertex buffer chunk
         let vertex_buffer = ecf
-            .read_chunk_data_by_id(ECF_VB_CHUNK_ID)
+            .chunk_data_by_id(ECF_VB_CHUNK_ID)
             .map_err(|_| Error::MissingChunk("vertex_buffer (0x702)"))?;
 
         // Read index buffer chunk
         let ib_data = ecf
-            .read_chunk_data_by_id(ECF_IB_CHUNK_ID)
+            .chunk_data_by_id(ECF_IB_CHUNK_ID)
             .map_err(|_| Error::MissingChunk("index_buffer (0x701)"))?;
 
         // Read granny chunk (optional - contains bone inverse world matrices)
-        let granny_data = ecf.read_chunk_data_by_id(ECF_GRANNY_CHUNK_ID).ok();
+        let granny_data = ecf.chunk_data_by_id(ECF_GRANNY_CHUNK_ID).ok();
 
         // Read material chunk (optional - BBinaryDataTree packed document)
-        let material_data = ecf.read_chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).ok();
+        let material_data = ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).ok();
 
         // Convert index buffer from bytes to u16
         let mut ib_cursor = Cursor::new(&ib_data);
@@ -1163,12 +1157,11 @@ mod tests {
             }
         };
 
-        let mut cursor = Cursor::new(&data);
-        let mut ecf = ecf::EcfReader::new(&mut cursor).unwrap();
-        let granny = ecf.read_chunk_data_by_id(ECF_GRANNY_CHUNK_ID).unwrap();
+        let ecf = ecf::EcfReader::new(&data).unwrap();
+        let granny = ecf.chunk_data_by_id(ECF_GRANNY_CHUNK_ID).unwrap();
 
         // IB analysis
-        let ib = ecf.read_chunk_data_by_id(ECF_IB_CHUNK_ID).unwrap();
+        let ib = ecf.chunk_data_by_id(ECF_IB_CHUNK_ID).unwrap();
         let ib_u16: Vec<u16> = ib
             .chunks(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
@@ -1424,12 +1417,11 @@ mod tests {
             };
 
             // Check if 0x704 chunk exists
-            let mut cursor = Cursor::new(&data);
-            let mut ecf = ecf::EcfReader::new(&mut cursor).unwrap();
-            let has_mat_chunk = ecf.read_chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).is_ok();
+            let ecf = ecf::EcfReader::new(&data).unwrap();
+            let has_mat_chunk = ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).is_ok();
 
             // Try direct BDT parse on the material chunk
-            if let Ok(mat_data) = ecf.read_chunk_data_by_id(ECF_MATERIAL_CHUNK_ID) {
+            if let Ok(mat_data) = ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID) {
                 eprintln!("\n=== {} ===", label);
                 eprintln!("  Material chunk (0x704): {} bytes", mat_data.len());
                 // Hexdump first 64 bytes
@@ -1501,8 +1493,7 @@ mod tests {
             eprintln!("\n=== {} ({} bytes total) ===", label, data.len());
 
             // Dump ECF chunk info
-            let mut cursor = Cursor::new(&data);
-            if let Ok(mut ecf) = ecf::EcfReader::new(&mut cursor) {
+            if let Ok(ecf) = ecf::EcfReader::new(&data) {
                 eprintln!("  ECF chunks ({} total):", ecf.chunks().len());
                 for (i, chunk) in ecf.chunks().iter().enumerate() {
                     eprintln!(
@@ -1512,7 +1503,7 @@ mod tests {
                 }
 
                 // Dump first 256 bytes of cached data (0x700)
-                if let Ok(cached) = ecf.read_chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID) {
+                if let Ok(cached) = ecf.chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID) {
                     let dump_len = 320.min(cached.len());
                     eprintln!("  Cached data (0x700) first {} bytes:", dump_len);
                     let hex: Vec<String> = cached[..dump_len]

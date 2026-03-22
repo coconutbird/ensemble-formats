@@ -216,8 +216,7 @@ impl DdxTexture {
 
     /// Parse an ECF-wrapped DDX file (Xbox 360 format).
     fn from_ecf(data: &[u8]) -> Result<Self> {
-        let mut cursor = Cursor::new(data);
-        let mut ecf_reader = ecf::EcfReader::new(&mut cursor)?;
+        let ecf_reader = ecf::EcfReader::new(data)?;
 
         // Verify ECF file ID
         if ecf_reader.header().id != DDX_ECF_FILE_ID {
@@ -226,17 +225,17 @@ impl DdxTexture {
 
         // Find and parse header chunk (ECF chunk IDs are u64)
         let header_data = ecf_reader
-            .read_chunk_data_by_id(DDX_HEADER_CHUNK_ID)
+            .chunk_data_by_id(DDX_HEADER_CHUNK_ID)
             .map_err(|_| Error::MissingHeaderChunk)?;
         let header = DdxHeader::from_bytes(&header_data)?;
 
         // Find mip0 data chunk
         let mip0_data = ecf_reader
-            .read_chunk_data_by_id(DDX_MIP0_CHUNK_ID)
+            .chunk_data_by_id(DDX_MIP0_CHUNK_ID)
             .map_err(|_| Error::MissingMip0Chunk)?;
 
         // Find optional mip chain chunk
-        let mipchain_data = ecf_reader.read_chunk_data_by_id(DDX_MIPCHAIN_CHUNK_ID).ok();
+        let mipchain_data = ecf_reader.chunk_data_by_id(DDX_MIPCHAIN_CHUNK_ID).ok();
 
         // Decompress texture data
         let texture_data = decompress_texture(&header, &mip0_data, mipchain_data.as_deref())?;

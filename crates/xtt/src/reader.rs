@@ -7,7 +7,7 @@ use crate::{
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;
-use std::io::{Cursor, Read, Seek};
+use std::io::{Cursor, Read};
 
 /// Size of filename strings in XTT files.
 const XTT_FILENAME_SIZE: usize = 256;
@@ -18,13 +18,7 @@ pub struct XttReader;
 impl XttReader {
     /// Read an XTT file from a byte slice.
     pub fn read(data: &[u8]) -> Result<XttFile> {
-        let mut cursor = Cursor::new(data);
-        Self::read_from(&mut cursor)
-    }
-
-    /// Read an XTT file from a reader.
-    pub fn read_from<R: Read + Seek>(reader: &mut R) -> Result<XttFile> {
-        let mut ecf = EcfReader::new(reader)?;
+        let ecf = EcfReader::new(data)?;
 
         let mut file = XttFile {
             ecf_file_id: ecf.header().id,
@@ -45,7 +39,7 @@ impl XttReader {
                 resource_flags: chunk_header.resource_flags,
             });
 
-            let chunk_data = ecf.read_chunk_data(i)?;
+            let chunk_data = ecf.chunk_data(i)?;
 
             match chunk_header.id {
                 CHUNK_XTT_HEADER => {

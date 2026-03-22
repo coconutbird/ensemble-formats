@@ -6,7 +6,7 @@ use crate::{
 };
 use byteorder::{BigEndian, ReadBytesExt};
 use ecf::EcfReader;
-use std::io::{Cursor, Read, Seek};
+use std::io::Cursor;
 
 /// XTD file reader.
 pub struct XtdReader;
@@ -14,13 +14,7 @@ pub struct XtdReader;
 impl XtdReader {
     /// Read an XTD file from a byte slice.
     pub fn read(data: &[u8]) -> Result<XtdFile> {
-        let mut cursor = Cursor::new(data);
-        Self::read_from(&mut cursor)
-    }
-
-    /// Read an XTD file from a reader.
-    pub fn read_from<R: Read + Seek>(reader: &mut R) -> Result<XtdFile> {
-        let mut ecf = EcfReader::new(reader)?;
+        let ecf = EcfReader::new(data)?;
 
         let mut file = XtdFile {
             ecf_file_id: ecf.header().id,
@@ -41,7 +35,7 @@ impl XtdReader {
                 resource_flags: chunk_header.resource_flags,
             });
 
-            let chunk_data = ecf.read_chunk_data(i)?;
+            let chunk_data = ecf.chunk_data(i)?;
 
             match chunk_header.id {
                 CHUNK_XTD_HEADER => {

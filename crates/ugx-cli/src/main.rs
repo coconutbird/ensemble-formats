@@ -3,7 +3,6 @@
 use clap::{Parser, Subcommand};
 use ecf::EcfReader;
 use std::fs;
-use std::fs::File;
 use std::path::PathBuf;
 use ugx::{
     GltfExportOptions, GltfImportOptions, UgxGeom, export_to_gltf_with_buffer_name,
@@ -435,8 +434,8 @@ fn cmd_from_gltf(
 }
 
 fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = File::open(input)?;
-    let mut ecf = EcfReader::new(&mut file)?;
+    let data = std::fs::read(input)?;
+    let ecf = EcfReader::new(&data)?;
 
     println!("=== ECF Header ===");
     let header = ecf.header();
@@ -453,7 +452,7 @@ fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Read and dump cached data chunk (0x700)
-    if let Ok(cached_data) = ecf.read_chunk_data_by_id(0x700) {
+    if let Ok(cached_data) = ecf.chunk_data_by_id(0x700) {
         println!(
             "\n=== Cached Data (0x700) - {} bytes ===",
             cached_data.len()
@@ -462,20 +461,20 @@ fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Read IB chunk (0x701)
-    if let Ok(ib_data) = ecf.read_chunk_data_by_id(0x701) {
+    if let Ok(ib_data) = ecf.chunk_data_by_id(0x701) {
         println!("\n=== Index Buffer (0x701) - {} bytes ===", ib_data.len());
         println!("  {} indices", ib_data.len() / 2);
         hexdump(&ib_data, 64);
     }
 
     // Read VB chunk (0x702)
-    if let Ok(vb_data) = ecf.read_chunk_data_by_id(0x702) {
+    if let Ok(vb_data) = ecf.chunk_data_by_id(0x702) {
         println!("\n=== Vertex Buffer (0x702) - {} bytes ===", vb_data.len());
         hexdump(&vb_data, 64);
     }
 
     // Read material chunk (0x704)
-    if let Ok(mat_data) = ecf.read_chunk_data_by_id(0x704) {
+    if let Ok(mat_data) = ecf.chunk_data_by_id(0x704) {
         println!("\n=== Materials (0x704) - {} bytes ===", mat_data.len());
         hexdump(&mat_data, 512);
     }

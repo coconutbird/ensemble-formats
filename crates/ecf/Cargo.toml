@@ -8,7 +8,6 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-byteorder.workspace = true
-flate2.workspace = true
+miniz_oxide = "0.8"
 thiserror.workspace = true
 zerocopy.workspace = true

@@ -56,10 +56,10 @@ impl MmapEraArchive {
         tea_decrypt_data(&keys, &mut decrypted_header, 0);
 
         // Parse ECF header
-        let mut cursor = Cursor::new(&decrypted_header);
-        let ecf_header = EcfHeader::read(&mut cursor)?;
+        let ecf_header = EcfHeader::from_bytes(&decrypted_header)?;
 
-        // Parse ERA archive header
+        // Parse ERA archive header (starts right after the 32-byte ECF header)
+        let mut cursor = Cursor::new(&decrypted_header[32..]);
         let archive_header = EraArchiveHeader::read(&mut cursor)?;
 
         // The chunk headers start at ecf_header.header_size (accounts for signature/padding)

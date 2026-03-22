@@ -6,7 +6,7 @@ use crate::{
 };
 use byteorder::{BigEndian, WriteBytesExt};
 use ecf::EcfWriter;
-use std::io::{Cursor, Seek, Write};
+use std::io::Cursor;
 
 /// XTD file writer.
 pub struct XtdWriter;
@@ -14,14 +14,7 @@ pub struct XtdWriter;
 impl XtdWriter {
     /// Write an XTD file to a byte vector.
     pub fn write(file: &XtdFile) -> Result<Vec<u8>> {
-        let mut buffer = Cursor::new(Vec::new());
-        Self::write_to(file, &mut buffer)?;
-        Ok(buffer.into_inner())
-    }
-
-    /// Write an XTD file to a writer.
-    pub fn write_to<W: Write + Seek>(file: &XtdFile, writer: &mut W) -> Result<()> {
-        let mut ecf = EcfWriter::new(writer, file.ecf_file_id);
+        let mut ecf = EcfWriter::new(file.ecf_file_id);
 
         // Track which visual chunk we're on
         let mut visual_chunk_idx = 0;
@@ -46,8 +39,7 @@ impl XtdWriter {
             ecf.add_chunk_with_alignment(meta.id, data, meta.alignment_log2);
         }
 
-        ecf.finalize()?;
-        Ok(())
+        Ok(ecf.finalize()?)
     }
 
     fn write_header(header: &XtdHeader) -> Result<Vec<u8>> {

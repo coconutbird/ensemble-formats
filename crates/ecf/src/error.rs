@@ -1,24 +1,21 @@
-//! Error types for ECF operations.
+//! Error and result types for ECF parsing and serialisation.
 
+use alloc::string::String;
 use thiserror::Error;
 
 /// ECF error type.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// I/O error.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
     /// Invalid ECF magic number.
     #[error("invalid ECF magic: expected 0x{expected:08X}, found 0x{found:08X}")]
     InvalidMagic { expected: u32, found: u32 },
 
-    /// Chunk not found.
+    /// Chunk index out of bounds.
     #[error("chunk not found: 0x{0:016X}")]
     ChunkNotFound(u64),
 
-    /// Unexpected end of file.
-    #[error("unexpected end of file")]
+    /// Data too short for the expected structure.
+    #[error("unexpected end of data")]
     UnexpectedEof,
 
     /// Invalid BDeflateStream signature.
@@ -31,4 +28,4 @@ pub enum Error {
 }
 
 /// Result type for ECF operations.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;

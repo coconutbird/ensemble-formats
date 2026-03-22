@@ -1,8 +1,6 @@
 //! XMB CLI - Convert between XMB and XML formats.
 
 use clap::{Parser, Subcommand, ValueEnum};
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use xmb::{Node, XmbData, XmbFormat, XmbReader, XmbWriter};
 
@@ -101,9 +99,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("Converting {} -> {}", input.display(), output.display());
 
-            let file = File::open(&input)?;
-            let reader = BufReader::new(file);
-            let xmb = XmbReader::read(reader)?;
+            let data = std::fs::read(&input)?;
+            let xmb = XmbReader::read(&data)?;
 
             let xml = xmb.to_xml();
             std::fs::write(&output, xml)?;
@@ -134,17 +131,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let xml = std::fs::read_to_string(&input)?;
             let xmb = XmbData::from_xml(&xml)?;
 
-            let file = File::create(&output)?;
-            let writer = BufWriter::new(file);
-            XmbWriter::write_with_options(&xmb, writer, format.into(), compress)?;
+            let bytes = XmbWriter::write_with_options(&xmb, format.into(), compress)?;
+            std::fs::write(&output, bytes)?;
 
             println!("Done!");
         }
 
         Some(Commands::Info { input }) => {
-            let file = File::open(&input)?;
-            let reader = BufReader::new(file);
-            let xmb = XmbReader::read(reader)?;
+            let data = std::fs::read(&input)?;
+            let xmb = XmbReader::read(&data)?;
 
             println!("File: {}", input.display());
             println!("Format: {:?}", xmb.format());
@@ -257,9 +252,8 @@ fn convert_xml_to_xmb(
     let xml = std::fs::read_to_string(input)?;
     let xmb = XmbData::from_xml(&xml)?;
 
-    let file = File::create(&output)?;
-    let writer = BufWriter::new(file);
-    XmbWriter::write_with_options(&xmb, writer, format.into(), compress)?;
+    let bytes = XmbWriter::write_with_options(&xmb, format.into(), compress)?;
+    std::fs::write(&output, bytes)?;
 
     Ok(output)
 }
@@ -271,9 +265,8 @@ fn convert_xmb_to_xml(
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let output = output_path(input, "xml", overwrite);
 
-    let file = File::open(input)?;
-    let reader = BufReader::new(file);
-    let xmb = XmbReader::read(reader)?;
+    let data = std::fs::read(input)?;
+    let xmb = XmbReader::read(&data)?;
 
     let xml = xmb.to_xml();
     std::fs::write(&output, xml)?;

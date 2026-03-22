@@ -1,90 +1,110 @@
-//! ECF file reader.
+//! ECF container reader — zero-copy, operates on a borrowed byte slice.
+//!
+//! [`EcfReader`] parses the file and chunk headers up-front, then provides
+//! indexed or ID-based access to chunk data. Compressed chunks (BDeflateStream)
+//! are decompressed transparently by [`EcfReader::chunk_data`].
+//!
+//! ```ignore
+//! let bytes = std::fs::read("model.ugx")?;
+//! let ecf = ecf::EcfReader::new(&bytes)?;
+//!
+//! for (i, hdr) in ecf.chunks().iter().enumerate() {
+//!     let data = ecf.chunk_data(i)?;
+//!     println!("chunk {} — id 0x{:X}, {} bytes", i, hdr.id, data.len());
+//! }
+//! ```
 
-use std::io::{Read, Seek, SeekFrom};
+use alloc::vec::Vec;
 
 use crate::{
     EcfChunkHeader, EcfHeader, Error, Result, chunk_resource_flags, decompress_bdeflate_stream,
 };
 
-/// ECF file reader.
-pub struct EcfReader<R: Read + Seek> {
-    reader: R,
+/// Zero-copy ECF reader backed by a byte slice.
+pub struct EcfReader<'a> {
+    data: &'a [u8],
     header: EcfHeader,
     chunks: Vec<EcfChunkHeader>,
 }
 
-impl<R: Read + Seek> EcfReader<R> {
-    /// Create a new ECF reader from a Read + Seek source.
-    pub fn new(mut reader: R) -> Result<Self> {
-        let header = EcfHeader::read(&mut reader)?;
+impl<'a> EcfReader<'a> {
+    /// Parse an ECF container from a byte slice.
+    pub fn new(data: &'a [u8]) -> Result<Self> {
+        let header = EcfHeader::from_bytes(data)?;
 
-        // Skip extra header data
-        let extra_size = header.header_size as usize - EcfHeader::SIZE;
-        if extra_size > 0 {
-            reader.seek(SeekFrom::Current(extra_size as i64))?;
-        }
+        // Chunk headers start right after the (possibly extended) ECF header
+        let mut offset = header.header_size as usize;
+        let chunk_stride = EcfChunkHeader::SIZE + header.chunk_extra_data_size as usize;
 
-        // Read chunk headers
         let mut chunks = Vec::with_capacity(header.num_chunks as usize);
         for _ in 0..header.num_chunks {
-            let chunk = EcfChunkHeader::read(&mut reader)?;
-            // Skip extra chunk data
-            if header.chunk_extra_data_size > 0 {
-                reader.seek(SeekFrom::Current(header.chunk_extra_data_size as i64))?;
+            if offset + EcfChunkHeader::SIZE > data.len() {
+                return Err(Error::UnexpectedEof);
             }
-            chunks.push(chunk);
+            chunks.push(EcfChunkHeader::from_bytes(&data[offset..])?);
+            offset += chunk_stride;
         }
 
         Ok(Self {
-            reader,
+            data,
             header,
             chunks,
         })
     }
 
-    /// Get the ECF header.
+    /// The parsed ECF header.
     pub fn header(&self) -> &EcfHeader {
         &self.header
     }
 
-    /// Get the chunk headers.
+    /// The parsed chunk headers.
     pub fn chunks(&self) -> &[EcfChunkHeader] {
         &self.chunks
     }
 
-    /// Find a chunk by ID.
+    /// Find a chunk header by ID.
     pub fn find_chunk(&self, id: u64) -> Option<&EcfChunkHeader> {
         self.chunks.iter().find(|c| c.id == id)
     }
 
-    /// Read chunk data by index.
-    ///
-    /// If the chunk is compressed (deflate stream flag set), the data will be
-    /// automatically decompressed before being returned.
-    pub fn read_chunk_data(&mut self, index: usize) -> Result<Vec<u8>> {
-        if index >= self.chunks.len() {
-            return Err(Error::ChunkNotFound(index as u64));
+    /// Get raw (possibly compressed) chunk bytes by index.
+    pub fn raw_chunk_data(&self, index: usize) -> Result<&'a [u8]> {
+        let chunk = self
+            .chunks
+            .get(index)
+            .ok_or(Error::ChunkNotFound(index as u64))?;
+        let start = chunk.offset as usize;
+        let end = start + chunk.size as usize;
+        if end > self.data.len() {
+            return Err(Error::UnexpectedEof);
         }
-        let chunk = &self.chunks[index];
-        self.reader.seek(SeekFrom::Start(chunk.offset as u64))?;
-        let mut data = vec![0u8; chunk.size as usize];
-        self.reader.read_exact(&mut data)?;
+        Ok(&self.data[start..end])
+    }
 
-        // Check if the chunk data is deflate compressed
+    /// Get chunk data by index, automatically decompressing if needed.
+    pub fn chunk_data(&self, index: usize) -> Result<Vec<u8>> {
+        let raw = self.raw_chunk_data(index)?;
+        let chunk = &self.chunks[index];
+
         if (chunk.resource_flags & chunk_resource_flags::IS_DEFLATE_STREAM) != 0 {
-            decompress_bdeflate_stream(&data)
+            decompress_bdeflate_stream(raw)
         } else {
-            Ok(data)
+            Ok(raw.to_vec())
         }
     }
 
-    /// Read chunk data by ID.
-    pub fn read_chunk_data_by_id(&mut self, id: u64) -> Result<Vec<u8>> {
+    /// Get chunk data by ID, automatically decompressing if needed.
+    pub fn chunk_data_by_id(&self, id: u64) -> Result<Vec<u8>> {
         let index = self
             .chunks
             .iter()
             .position(|c| c.id == id)
             .ok_or(Error::ChunkNotFound(id))?;
-        self.read_chunk_data(index)
+        self.chunk_data(index)
+    }
+
+    /// The underlying byte slice.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.data
     }
 }

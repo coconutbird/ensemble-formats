@@ -1,32 +1,69 @@
-//! ECF (Ensemble Common Format) container handling.
+//! ECF (Ensemble Common Format) container — `no_std` / zero-copy.
 //!
-//! ECF is a container format used by Ensemble Studios to wrap various
-//! file types including XMB. The format uses big-endian byte order.
+//! ECF is a big-endian chunk container used by Ensemble Studios (Halo Wars,
+//! Age of Empires III) to wrap various asset types: XMB, UGX, XTD, XTT, DDX,
+//! UAX, and ERA archives.
 //!
-//! ## ECF Structure
+//! ## On-disk layout
 //!
-//! An ECF file consists of:
-//! - ECF Header (32 bytes)
-//! - Chunk Headers (24 bytes each + optional extra data)
-//! - Chunk Data (optionally compressed)
+//! ```text
+//! ┌──────────────────────────────────────┐
+//! │ ECF Header          (32 bytes, BE)   │
+//! ├──────────────────────────────────────┤
+//! │ Chunk Header 0      (24 bytes, BE)   │
+//! │ [per-chunk extra data]               │
+//! │ Chunk Header 1      …                │
+//! │ …                                    │
+//! ├──────────────────────────────────────┤
+//! │ Chunk Data 0  (aligned, optionally   │
+//! │                compressed)           │
+//! │ Chunk Data 1  …                      │
+//! │ …                                    │
+//! └──────────────────────────────────────┘
+//! ```
 //!
-//! ## Compression
+//! Chunk data may be stored raw or compressed with BDeflateStream (EA's
+//! custom wrapper around raw deflate). The [`EcfReader`] handles
+//! decompression transparently.
 //!
-//! Chunks can be compressed using BDeflateStream format, which wraps
-//! standard deflate compression with checksums and metadata.
+//! ## Reading
+//!
+//! ```ignore
+//! let bytes = std::fs::read("model.ugx")?;
+//! let ecf = ecf::EcfReader::new(&bytes)?;
+//!
+//! // Iterate chunks
+//! for (i, chunk) in ecf.chunks().iter().enumerate() {
+//!     println!("chunk {} id=0x{:X} size={}", i, chunk.id, chunk.size);
+//! }
+//!
+//! // Get decompressed chunk data by index or ID
+//! let data = ecf.chunk_data(0)?;
+//! let data = ecf.chunk_data_by_id(0x700)?;
+//! ```
+//!
+//! ## Writing
+//!
+//! ```ignore
+//! let mut ecf = ecf::EcfWriter::new(0xAAC93746);
+//! ecf.add_chunk(0x700, cached_data);
+//! ecf.add_chunk(0x701, index_buffer);
+//! ecf.add_chunk_compressed(0x702, vertex_buffer)?;
+//! let bytes: Vec<u8> = ecf.finalize()?;
+//! ```
+
+#![no_std]
+extern crate alloc;
 
 mod error;
-
 pub use error::{Error, Result};
 
 mod header;
-pub use header::{EcfChunkHeader, EcfHeader};
+pub use header::{EcfChunkHeader, EcfChunkHeaderRaw, EcfHeader, EcfHeaderRaw};
 
-mod deflate_stream;
-pub use deflate_stream::{
-    END_MAGIC, HEADER_SIZE, SIGNATURE, SIGNATURE_INVERTED, compress_bdeflate_stream,
-    decompress_bdeflate_stream,
-};
+/// BDeflateStream compression/decompression.
+pub mod deflate_stream;
+pub use deflate_stream::{compress_bdeflate_stream, decompress_bdeflate_stream};
 
 mod reader;
 pub use reader::EcfReader;
@@ -37,72 +74,65 @@ pub use writer::EcfWriter;
 mod checksum;
 pub use checksum::adler32;
 
-// ============================================================================
-// ECF Constants
-// ============================================================================
-
-/// ECF header magic number.
+/// ECF header magic number (`0xDABA7737`).
+///
+/// All ECF files begin with this 4-byte big-endian value.
 pub const ECF_HEADER_MAGIC: u32 = 0xDABA7737;
-/// ECF inverted header magic (for little-endian detection).
+
+/// Byte-swapped header magic (`0x3777BADA`).
+///
+/// Encountering this value at offset 0 indicates the file was written in
+/// little-endian byte order (not standard, but handled for robustness).
 pub const ECF_INVERTED_HEADER_MAGIC: u32 = 0x3777BADA;
 
-// ============================================================================
-// ECF Chunk Resource Flags
-// ============================================================================
-
-/// ECF chunk resource flags.
+/// Per-chunk resource flags stored in [`EcfChunkHeader::resource_flags`].
 pub mod chunk_resource_flags {
-    /// Bit 0: Memory is contiguous.
+    /// Bit 0 — memory region is contiguous.
     pub const CONTIGUOUS: u16 = 1 << 0;
-
-    /// Bit 1: Memory is write-combined.
+    /// Bit 1 — memory region is write-combined.
     pub const WRITE_COMBINED: u16 = 1 << 1;
-
-    /// Bit 2: Chunk data is compressed using BDeflateStream format.
+    /// Bit 2 — chunk data is compressed with BDeflateStream.
     pub const IS_DEFLATE_STREAM: u16 = 1 << 2;
-
-    /// Bit 3: Chunk contains a resource tag.
+    /// Bit 3 — chunk contains a resource tag.
     pub const IS_RESOURCE_TAG: u16 = 1 << 3;
 }
 
-// ============================================================================
-// Compression Method
-// ============================================================================
-
-/// Compression method for chunks (stored in flags field).
+/// Compression method for a chunk, derived from the low nibble of
+/// [`EcfChunkHeader::flags`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionMethod {
-    /// Uncompressed data
+    /// No compression — data is stored verbatim.
     Stored,
-    /// Raw deflate (no zlib header)
+    /// Raw deflate (no zlib/gzip wrapper).
     DeflateRaw,
-    /// BDeflateStream format (EA's custom wrapper around deflate)
+    /// BDeflateStream — EA's custom deflate wrapper with checksums.
     DeflateStream,
-    /// Unknown compression method
+    /// Unrecognised compression nibble.
     Unknown(u8),
 }
 
 impl CompressionMethod {
-    /// Parse compression method from chunk flags.
+    /// Decode the compression method from the low nibble of chunk flags.
     pub fn from_flags(flags: u8) -> Self {
         match flags & 0x0F {
-            0 => CompressionMethod::Stored,
-            1 => CompressionMethod::DeflateRaw,
-            2 => CompressionMethod::DeflateStream,
-            n => CompressionMethod::Unknown(n),
+            0 => Self::Stored,
+            1 => Self::DeflateRaw,
+            2 => Self::DeflateStream,
+            n => Self::Unknown(n),
         }
     }
 }
 
-/// Align a value up to the given alignment.
+/// Round `value` up to the next multiple of `alignment` (must be a power of two).
 pub fn align_up(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
     use super::*;
-    use std::io::Cursor;
+    use alloc::vec;
 
     #[test]
     fn test_ecf_roundtrip_single_chunk() {
@@ -110,47 +140,35 @@ mod tests {
         let file_id = 0x12345678;
         let chunk_id = 0xDEADBEEF;
 
-        // Write
-        let mut buffer = Cursor::new(Vec::new());
-        let mut writer = EcfWriter::new(&mut buffer, file_id);
+        let mut writer = EcfWriter::new(file_id);
         writer.add_chunk(chunk_id, data.clone());
-        writer.finalize().expect("Failed to finalize");
+        let bytes = writer.finalize().expect("Failed to finalize");
 
-        // Read
-        buffer.set_position(0);
-        let mut reader = EcfReader::new(&mut buffer).expect("Failed to read");
-
+        let reader = EcfReader::new(&bytes).expect("Failed to read");
         assert_eq!(reader.header().id, file_id);
         assert_eq!(reader.chunks().len(), 1);
         assert_eq!(reader.chunks()[0].id, chunk_id);
-
-        let read_data = reader.read_chunk_data(0).expect("Failed to read chunk");
-        assert_eq!(read_data, data);
+        assert_eq!(reader.chunk_data(0).unwrap(), data);
     }
 
     #[test]
     fn test_ecf_roundtrip_multiple_chunks() {
         let data1 = b"First chunk".to_vec();
         let data2 = b"Second chunk with more data".to_vec();
-        let data3 = vec![0u8; 100]; // Binary data
+        let data3 = vec![0u8; 100];
         let file_id = 0xABCD1234;
 
-        // Write
-        let mut buffer = Cursor::new(Vec::new());
-        let mut writer = EcfWriter::new(&mut buffer, file_id);
+        let mut writer = EcfWriter::new(file_id);
         writer.add_chunk(0x1111, data1.clone());
         writer.add_chunk(0x2222, data2.clone());
         writer.add_chunk(0x3333, data3.clone());
-        writer.finalize().expect("Failed to finalize");
+        let bytes = writer.finalize().expect("Failed to finalize");
 
-        // Read
-        buffer.set_position(0);
-        let mut reader = EcfReader::new(&mut buffer).expect("Failed to read");
-
+        let reader = EcfReader::new(&bytes).expect("Failed to read");
         assert_eq!(reader.chunks().len(), 3);
-        assert_eq!(reader.read_chunk_data(0).unwrap(), data1);
-        assert_eq!(reader.read_chunk_data(1).unwrap(), data2);
-        assert_eq!(reader.read_chunk_data(2).unwrap(), data3);
+        assert_eq!(reader.chunk_data(0).unwrap(), data1);
+        assert_eq!(reader.chunk_data(1).unwrap(), data2);
+        assert_eq!(reader.chunk_data(2).unwrap(), data3);
     }
 
     #[test]
@@ -160,58 +178,37 @@ mod tests {
         let file_id = 0x11111111;
         let chunk_id = 0x22222222;
 
-        // Write with compression
-        let mut buffer = Cursor::new(Vec::new());
-        let mut writer = EcfWriter::new(&mut buffer, file_id);
-        writer
-            .add_chunk_compressed(chunk_id, data.clone())
-            .expect("Failed to add compressed chunk");
-        writer.finalize().expect("Failed to finalize");
+        let mut writer = EcfWriter::new(file_id);
+        writer.add_chunk_compressed(chunk_id, data.clone()).unwrap();
+        let bytes = writer.finalize().expect("Failed to finalize");
 
-        // Read (should auto-decompress)
-        buffer.set_position(0);
-        let mut reader = EcfReader::new(&mut buffer).expect("Failed to read");
-
+        let reader = EcfReader::new(&bytes).expect("Failed to read");
         assert_eq!(reader.chunks().len(), 1);
-        let read_data = reader.read_chunk_data(0).expect("Failed to read chunk");
-        assert_eq!(read_data, data);
+        assert_eq!(reader.chunk_data(0).unwrap(), data);
     }
 
     #[test]
     fn test_bdeflate_stream_roundtrip_le() {
         let original = b"Test data for BDeflateStream compression - little endian".to_vec();
-
-        let compressed = compress_bdeflate_stream(&original, false).expect("Failed to compress");
-        let decompressed = decompress_bdeflate_stream(&compressed).expect("Failed to decompress");
-
-        assert_eq!(decompressed, original);
+        let compressed = compress_bdeflate_stream(&original, false).unwrap();
+        assert_eq!(decompress_bdeflate_stream(&compressed).unwrap(), original);
     }
 
     #[test]
     fn test_bdeflate_stream_roundtrip_be() {
         let original = b"Test data for BDeflateStream compression - big endian".to_vec();
-
-        let compressed = compress_bdeflate_stream(&original, true).expect("Failed to compress");
-        let decompressed = decompress_bdeflate_stream(&compressed).expect("Failed to decompress");
-
-        assert_eq!(decompressed, original);
+        let compressed = compress_bdeflate_stream(&original, true).unwrap();
+        assert_eq!(decompress_bdeflate_stream(&compressed).unwrap(), original);
     }
 
     #[test]
     fn test_adler32_known_values() {
-        // Empty data
         assert_eq!(adler32(&[]), 1);
-
-        // "Hello" - known adler32 value
         let hello = b"Hello";
         let checksum = adler32(hello);
         assert_ne!(checksum, 0);
         assert_ne!(checksum, 1);
-
-        // Same data should produce same checksum
         assert_eq!(adler32(hello), adler32(hello));
-
-        // Different data should produce different checksum
         assert_ne!(adler32(b"Hello"), adler32(b"World"));
     }
 

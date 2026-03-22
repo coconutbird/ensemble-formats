@@ -1,7 +1,5 @@
 //! Dump UGX file structure for debugging.
 
-use std::fs::File;
-
 use ecf::EcfReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,8 +9,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    let mut file = File::open(&args[1])?;
-    let mut ecf = EcfReader::new(&mut file)?;
+    let data = std::fs::read(&args[1])?;
+    let ecf = EcfReader::new(&data)?;
 
     println!("=== ECF Header ===");
     let header = ecf.header();
@@ -29,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Read and dump cached data chunk
-    let cached_data = ecf.read_chunk_data_by_id(0x700)?;
+    let cached_data = ecf.chunk_data_by_id(0x700)?;
     println!(
         "\n=== Cached Data (0x700) - {} bytes ===",
         cached_data.len()
@@ -37,18 +35,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     hexdump(&cached_data, 256);
 
     // Read IB chunk
-    let ib_data = ecf.read_chunk_data_by_id(0x701)?;
+    let ib_data = ecf.chunk_data_by_id(0x701)?;
     println!("\n=== Index Buffer (0x701) - {} bytes ===", ib_data.len());
     println!("  {} indices", ib_data.len() / 2);
     hexdump(&ib_data, 64);
 
     // Read VB chunk
-    let vb_data = ecf.read_chunk_data_by_id(0x702)?;
+    let vb_data = ecf.chunk_data_by_id(0x702)?;
     println!("\n=== Vertex Buffer (0x702) - {} bytes ===", vb_data.len());
     hexdump(&vb_data, 64);
 
     // Read material chunk if it exists
-    if let Ok(mat_data) = ecf.read_chunk_data_by_id(0x704) {
+    if let Ok(mat_data) = ecf.chunk_data_by_id(0x704) {
         println!("\n=== Materials (0x704) - {} bytes ===", mat_data.len());
         hexdump(&mat_data, 256);
     }

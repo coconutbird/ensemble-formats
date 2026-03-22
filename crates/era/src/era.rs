@@ -219,7 +219,9 @@ pub fn parse_chunk_headers<R: Read + Seek>(
     let mut entries = Vec::with_capacity(ecf_header.num_chunks as usize);
 
     for _ in 0..ecf_header.num_chunks {
-        let chunk = EcfChunkHeader::read(reader)?;
+        let mut chunk_buf = [0u8; 24];
+        reader.read_exact(&mut chunk_buf)?;
+        let chunk = EcfChunkHeader::from_bytes(&chunk_buf)?;
 
         let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
             let extra = EraChunkExtra::read(reader)?;
@@ -281,7 +283,9 @@ impl<R: Read + Seek> EraArchive<R> {
     /// Create a new ERA archive reader
     pub fn new(mut reader: R) -> Result<Self> {
         // Read ECF header
-        let ecf_header = EcfHeader::read(&mut reader)?;
+        let mut header_buf = [0u8; 32];
+        reader.read_exact(&mut header_buf)?;
+        let ecf_header = EcfHeader::from_bytes(&header_buf)?;
 
         // Read archive header extension
         let archive_header = EraArchiveHeader::read(&mut reader)?;

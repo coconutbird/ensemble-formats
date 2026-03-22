@@ -14,10 +14,9 @@
 //!
 //! ```no_run
 //! use uax::UaxAnimation;
-//! use std::io::Cursor;
 //!
 //! let data = std::fs::read("animation.uax").unwrap();
-//! let anim = UaxAnimation::from_reader(Cursor::new(&data)).unwrap();
+//! let anim = UaxAnimation::from_bytes(&data).unwrap();
 //!
 //! println!("Duration: {} seconds", anim.duration());
 //! println!("Animation name: {:?}", anim.name());

@@ -5,7 +5,7 @@
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 use ecf::{EcfReader, EcfWriter};
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::Cursor;
 
 use bdt::{PackedReader, PackedWriter};
 
@@ -29,9 +29,9 @@ pub const XMX_FILE_INFO_CHUNK_ID: u64 = 0xA9C96501;
 pub struct XmbReader;
 
 impl XmbReader {
-    /// Read an XMB file from a reader.
-    pub fn read<R: Read + Seek>(reader: R) -> Result<XmbData> {
-        let mut ecf = EcfReader::new(reader)?;
+    /// Read an XMB file from a byte slice.
+    pub fn read(data: &[u8]) -> Result<XmbData> {
+        let ecf = EcfReader::new(data)?;
 
         // Verify ECF file ID
         if ecf.header().id != XMB_ECF_FILE_ID {
@@ -49,7 +49,7 @@ impl XmbReader {
             .ok_or(Error::ChunkNotFound(XMX_PACKED_DATA_CHUNK_ID))?;
 
         // Read and decompress chunk data
-        let packed_data = ecf.read_chunk_data(chunk_idx)?;
+        let packed_data = ecf.chunk_data(chunk_idx)?;
 
         // Parse the packed data
         Self::parse_packed_data(&packed_data)
@@ -104,33 +104,24 @@ impl XmbReader {
 pub struct XmbWriter;
 
 impl XmbWriter {
-    /// Write an XMB document to a writer with the specified format.
-    pub fn write<W: Write + Seek>(xmb: &XmbData, writer: W, format: XmbFormat) -> Result<()> {
-        Self::write_with_options(xmb, writer, format, true)
+    /// Write an XMB document to bytes with the specified format.
+    pub fn write(xmb: &XmbData, format: XmbFormat) -> Result<Vec<u8>> {
+        Self::write_with_options(xmb, format, true)
     }
 
     /// Write an XMB document without compression.
-    pub fn write_uncompressed<W: Write + Seek>(
-        xmb: &XmbData,
-        writer: W,
-        format: XmbFormat,
-    ) -> Result<()> {
-        Self::write_with_options(xmb, writer, format, false)
+    pub fn write_uncompressed(xmb: &XmbData, format: XmbFormat) -> Result<Vec<u8>> {
+        Self::write_with_options(xmb, format, false)
     }
 
     /// Write an XMB document with explicit compression option.
-    pub fn write_with_options<W: Write + Seek>(
-        xmb: &XmbData,
-        writer: W,
-        format: XmbFormat,
-        compress: bool,
-    ) -> Result<()> {
+    pub fn write_with_options(xmb: &XmbData, format: XmbFormat, compress: bool) -> Result<Vec<u8>> {
         let packed_data = match format {
             XmbFormat::PC => Self::build_packed_data_pc(xmb)?,
             XmbFormat::Xbox360 => Self::build_packed_data_xbox360(xmb)?,
         };
 
-        let mut ecf = EcfWriter::new(writer, XMB_ECF_FILE_ID);
+        let mut ecf = EcfWriter::new(XMB_ECF_FILE_ID);
         if compress {
             match format {
                 XmbFormat::PC => ecf.add_chunk_compressed(XMX_PACKED_DATA_CHUNK_ID, packed_data)?,
@@ -142,13 +133,12 @@ impl XmbWriter {
             ecf.add_chunk(XMX_PACKED_DATA_CHUNK_ID, packed_data);
         }
 
-        ecf.finalize()?;
-        Ok(())
+        Ok(ecf.finalize()?)
     }
 
     /// Write an XMB document in its native format.
-    pub fn write_native<W: Write + Seek>(xmb: &XmbData, writer: W) -> Result<()> {
-        Self::write(xmb, writer, xmb.format())
+    pub fn write_native(xmb: &XmbData) -> Result<Vec<u8>> {
+        Self::write(xmb, xmb.format())
     }
 
     /// Build the packed XMB data in PC format.

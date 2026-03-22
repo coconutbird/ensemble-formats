@@ -3,7 +3,7 @@
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use byteorder::{LittleEndian, ReadBytesExt};
 use ecf::EcfReader;
-use std::io::{Cursor, Read, Seek};
+use std::io::Cursor;
 
 /// Parsed UAX animation data.
 #[derive(Debug, Clone)]
@@ -23,9 +23,9 @@ pub struct UaxAnimation {
 }
 
 impl UaxAnimation {
-    /// Parse a UAX animation from a reader.
-    pub fn from_reader<R: Read + Seek>(reader: R) -> Result<Self> {
-        let mut ecf = EcfReader::new(reader)?;
+    /// Parse a UAX animation from a byte slice.
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        let ecf = EcfReader::new(data)?;
 
         // Validate file ID
         let file_id = ecf.header().id;
@@ -40,7 +40,7 @@ impl UaxAnimation {
             .position(|c| c.id == UAX_CHUNK_ID)
             .ok_or(Error::ChunkNotFound)?;
 
-        let chunk_data = ecf.read_chunk_data(chunk_index)?;
+        let chunk_data = ecf.chunk_data(chunk_index)?;
 
         // The chunk data has a 32-byte Granny section header before file_info.
         // Skip it to get to the actual granny_file_info structure.
@@ -256,8 +256,7 @@ mod tests {
             }
 
             let data = std::fs::read(test_path).expect("Failed to read UAX file");
-            let cursor = std::io::Cursor::new(&data);
-            let anim = UaxAnimation::from_reader(cursor)
+            let anim = UaxAnimation::from_bytes(&data)
                 .unwrap_or_else(|e| panic!("Failed to parse {}: {:?}", test_path, e));
 
             // Verify parsed data

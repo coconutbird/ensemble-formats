@@ -7,7 +7,7 @@ use crate::types::{self, GRANNY_HEADER_SIZE, animation, file_info};
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use ecf::{EcfChunkHeader, EcfHeader, EcfReader};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Seek, SeekFrom, Write};
 
 /// A parsed UAX animation file.
 ///
@@ -24,9 +24,9 @@ pub struct UaxFile {
 }
 
 impl UaxFile {
-    /// Read a UAX file from a reader.
-    pub fn from_reader<R: Read + Seek>(reader: R) -> Result<Self> {
-        let mut ecf = EcfReader::new(reader)?;
+    /// Read a UAX file from a byte slice.
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        let ecf = EcfReader::new(data)?;
 
         // Validate file ID
         let file_id = ecf.header().id;
@@ -45,7 +45,7 @@ impl UaxFile {
         let ecf_header = ecf.header().clone();
         let chunk_header = ecf.chunks()[chunk_index].clone();
 
-        let chunk_data = ecf.read_chunk_data(chunk_index)?;
+        let chunk_data = ecf.chunk_data(chunk_index)?;
 
         if chunk_data.len() <= GRANNY_HEADER_SIZE {
             return Err(Error::ChunkTooSmall(
@@ -61,21 +61,16 @@ impl UaxFile {
         })
     }
 
-    /// Read a UAX file from bytes.
-    pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        Self::from_reader(Cursor::new(data))
-    }
-
     /// Write the UAX file to a writer, preserving original ECF structure.
     pub fn write<W: Write + Seek>(&self, mut writer: W) -> Result<()> {
         // Write the original ECF header
-        self.ecf_header.write(&mut writer)?;
+        writer.write_all(&self.ecf_header.to_bytes())?;
 
         // Write the original chunk header (with updated checksum if data changed)
         let mut chunk_header = self.chunk_header.clone();
         chunk_header.adler32 = ecf::adler32(&self.chunk_data);
         chunk_header.size = self.chunk_data.len() as u32;
-        chunk_header.write(&mut writer)?;
+        writer.write_all(&chunk_header.to_bytes())?;
 
         // Seek to the chunk data offset and write the data
         writer.seek(SeekFrom::Start(chunk_header.offset as u64))?;

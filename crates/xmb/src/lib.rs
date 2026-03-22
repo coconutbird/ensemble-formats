@@ -14,10 +14,9 @@
 //!
 //! ```no_run
 //! use xmb::{XmbReader, XmbData};
-//! use std::fs::File;
 //!
-//! let file = File::open("example.xmb").unwrap();
-//! let xmb = XmbReader::read(file).unwrap();
+//! let data = std::fs::read("example.xmb").unwrap();
+//! let xmb = XmbReader::read(&data).unwrap();
 //!
 //! // Convert to XML
 //! let xml = xmb.to_xml();
@@ -37,7 +36,6 @@ pub use xmb::{XMB_ECF_FILE_ID, XMB_SIGNATURE, XMX_PACKED_DATA_CHUNK_ID, XmbReade
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
     #[test]
     fn test_xmb_roundtrip_pc_format() {
@@ -46,12 +44,10 @@ mod tests {
         let xmb = XmbData::with_root(root);
 
         // Write
-        let mut buffer = Cursor::new(Vec::new());
-        XmbWriter::write(&xmb, &mut buffer, XmbFormat::PC).expect("Failed to write");
+        let bytes = XmbWriter::write(&xmb, XmbFormat::PC).expect("Failed to write");
 
         // Read
-        buffer.set_position(0);
-        let read_xmb = XmbReader::read(&mut buffer).expect("Failed to read");
+        let read_xmb = XmbReader::read(&bytes).expect("Failed to read");
 
         assert!(read_xmb.root().is_some());
         let read_root = read_xmb.root().unwrap();
@@ -68,12 +64,10 @@ mod tests {
         let xmb = XmbData::with_root(root);
 
         // Write
-        let mut buffer = Cursor::new(Vec::new());
-        XmbWriter::write(&xmb, &mut buffer, XmbFormat::Xbox360).expect("Failed to write");
+        let bytes = XmbWriter::write(&xmb, XmbFormat::Xbox360).expect("Failed to write");
 
         // Read
-        buffer.set_position(0);
-        let read_xmb = XmbReader::read(&mut buffer).expect("Failed to read");
+        let read_xmb = XmbReader::read(&bytes).expect("Failed to read");
 
         assert!(read_xmb.root().is_some());
         let read_root = read_xmb.root().unwrap();
@@ -94,12 +88,10 @@ mod tests {
         let xmb = XmbData::from_xml(xml).expect("Failed to parse XML");
 
         // Write to XMB
-        let mut buffer = Cursor::new(Vec::new());
-        XmbWriter::write(&xmb, &mut buffer, XmbFormat::PC).expect("Failed to write XMB");
+        let bytes = XmbWriter::write(&xmb, XmbFormat::PC).expect("Failed to write XMB");
 
         // Read back
-        buffer.set_position(0);
-        let read_xmb = XmbReader::read(&mut buffer).expect("Failed to read XMB");
+        let read_xmb = XmbReader::read(&bytes).expect("Failed to read XMB");
 
         // Convert back to XML
         let result_xml = read_xmb.to_xml();
@@ -119,12 +111,10 @@ mod tests {
         let xmb = XmbData::with_root(root);
 
         // Write
-        let mut buffer = Cursor::new(Vec::new());
-        XmbWriter::write(&xmb, &mut buffer, XmbFormat::PC).expect("Failed to write");
+        let bytes = XmbWriter::write(&xmb, XmbFormat::PC).expect("Failed to write");
 
         // Read
-        buffer.set_position(0);
-        let read_xmb = XmbReader::read(&mut buffer).expect("Failed to read");
+        let read_xmb = XmbReader::read(&bytes).expect("Failed to read");
 
         let read_root = read_xmb.root().unwrap();
         assert_eq!(read_root.attributes.len(), 2);
@@ -168,12 +158,10 @@ mod tests {
         );
 
         // Write
-        let mut buffer = Cursor::new(Vec::new());
-        XmbWriter::write(&xmb, &mut buffer, XmbFormat::PC).expect("Failed to write");
+        let bytes = XmbWriter::write(&xmb, XmbFormat::PC).expect("Failed to write");
 
         // Read back
-        buffer.set_position(0);
-        let read_xmb = XmbReader::read(&mut buffer).expect("Failed to read");
+        let read_xmb = XmbReader::read(&bytes).expect("Failed to read");
 
         let root = read_xmb.root().unwrap();
         assert_eq!(root.name, "level1");
@@ -229,12 +217,10 @@ mod tests {
         let xmb = XmbData::with_root(root);
 
         // Write uncompressed
-        let mut buffer = Cursor::new(Vec::new());
-        XmbWriter::write_uncompressed(&xmb, &mut buffer, XmbFormat::PC).expect("Failed to write");
+        let bytes = XmbWriter::write_uncompressed(&xmb, XmbFormat::PC).expect("Failed to write");
 
         // Read
-        buffer.set_position(0);
-        let read_xmb = XmbReader::read(&mut buffer).expect("Failed to read");
+        let read_xmb = XmbReader::read(&bytes).expect("Failed to read");
 
         let read_root = read_xmb.root().unwrap();
         assert_eq!(read_root.name, "data");

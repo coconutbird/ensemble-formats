@@ -7,7 +7,7 @@ use crate::{
 };
 use byteorder::{BigEndian, WriteBytesExt};
 use ecf::EcfWriter;
-use std::io::{Cursor, Seek, Write};
+use std::io::Cursor;
 
 /// XTT file writer.
 pub struct XttWriter;
@@ -15,14 +15,7 @@ pub struct XttWriter;
 impl XttWriter {
     /// Write an XTT file to a byte vector.
     pub fn write(file: &XttFile) -> Result<Vec<u8>> {
-        let mut buffer = Cursor::new(Vec::new());
-        Self::write_to(file, &mut buffer)?;
-        Ok(buffer.into_inner())
-    }
-
-    /// Write an XTT file to a writer.
-    pub fn write_to<W: Write + Seek>(file: &XttFile, writer: &mut W) -> Result<()> {
-        let mut ecf = EcfWriter::new(writer, file.ecf_file_id);
+        let mut ecf = EcfWriter::new(file.ecf_file_id);
 
         // Track indices for multi-instance chunk types
         let mut linker_idx = 0;
@@ -55,8 +48,7 @@ impl XttWriter {
             ecf.add_chunk_with_alignment(meta.id, data, meta.alignment_log2);
         }
 
-        ecf.finalize()?;
-        Ok(())
+        Ok(ecf.finalize()?)
     }
 
     fn write_header(header: &XttHeader) -> Result<Vec<u8>> {

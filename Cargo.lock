@@ -409,8 +409,7 @@ dependencies = [
 name = "ecf"
 version = "0.1.0"
 dependencies = [
- "byteorder",
- "flate2",
+ "miniz_oxide",
  "thiserror",
  "zerocopy",
 ]
