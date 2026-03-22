@@ -203,7 +203,7 @@ impl UgxGeom {
     /// Read UGX geometry from raw bytes (ECF container).
     pub fn read(data: &[u8]) -> Result<Self> {
         // Parse ECF container
-        let ecf = ecf::EcfReader::new(data)?;
+        let ecf = ecf::Reader::new(data)?;
 
         // Read cached data chunk (header, sections, bones, etc.)
         let cached_data = ecf
@@ -1157,7 +1157,7 @@ mod tests {
             }
         };
 
-        let ecf = ecf::EcfReader::new(&data).unwrap();
+        let ecf = ecf::Reader::new(&data).unwrap();
         let granny = ecf.chunk_data_by_id(ECF_GRANNY_CHUNK_ID).unwrap();
 
         // IB analysis
@@ -1417,7 +1417,7 @@ mod tests {
             };
 
             // Check if 0x704 chunk exists
-            let ecf = ecf::EcfReader::new(&data).unwrap();
+            let ecf = ecf::Reader::new(&data).unwrap();
             let has_mat_chunk = ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).is_ok();
 
             // Try direct BDT parse on the material chunk
@@ -1493,7 +1493,7 @@ mod tests {
             eprintln!("\n=== {} ({} bytes total) ===", label, data.len());
 
             // Dump ECF chunk info
-            if let Ok(ecf) = ecf::EcfReader::new(&data) {
+            if let Ok(ecf) = ecf::Reader::new(&data) {
                 eprintln!("  ECF chunks ({} total):", ecf.chunks().len());
                 for (i, chunk) in ecf.chunks().iter().enumerate() {
                     eprintln!(

@@ -6,7 +6,7 @@
 use crate::types::{self, GRANNY_HEADER_SIZE, animation, file_info};
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use ecf::{EcfChunkHeader, EcfHeader, EcfReader};
+use ecf::{EcfChunkHeader, EcfHeader, Reader};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 
 /// A parsed UAX animation file.
@@ -26,7 +26,7 @@ pub struct UaxFile {
 impl UaxFile {
     /// Read a UAX file from a byte slice.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let ecf = EcfReader::new(data)?;
+        let ecf = Reader::new(data)?;
 
         // Validate file ID
         let file_id = ecf.header().id;

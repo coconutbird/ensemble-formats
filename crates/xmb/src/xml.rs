@@ -1,86 +1,38 @@
-//! Core XMB data types.
+//! XML ↔ XMB conversion.
+//!
+//! Provides [`to_xml`] and [`from_xml`] conversions between [`Document`] and
+//! UTF-8 XML text. Uses [`quick_xml`] for streaming parse/write.
+//!
+//! # Reading XML
+//!
+//! ```
+//! use xmb::Document;
+//!
+//! let xml = r#"<config><setting name="volume" value="50"/></config>"#;
+//! let doc = Document::from_xml(xml).unwrap();
+//! assert_eq!(doc.root().unwrap().name, "config");
+//! ```
+//!
+//! # Writing XML
+//!
+//! ```
+//! use xmb::{Document, Node};
+//!
+//! let doc = Document::with_root(Node::new("root"));
+//! let xml = doc.to_xml();
+//! assert!(xml.contains("<root/>"));
+//! ```
 
-pub use bdt::{Attribute, Node};
-
-use crate::error::{Error, Result};
 use bdt::Variant;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 use std::io::{BufRead, Cursor, Write};
 
-/// XMB format variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum XmbFormat {
-    /// Xbox 360 format (big-endian, 28-byte nodes).
-    Xbox360,
-    /// PC format (little-endian, 48-byte nodes).
-    #[default]
-    PC,
-}
+use crate::document::{Attribute, Document, Format, Node};
+use crate::error::{Error, Result};
 
-impl XmbFormat {
-    pub fn is_xbox360(&self) -> bool {
-        matches!(self, XmbFormat::Xbox360)
-    }
-
-    pub fn is_pc(&self) -> bool {
-        matches!(self, XmbFormat::PC)
-    }
-}
-
-/// XMB document data.
-#[derive(Debug, Clone, Default)]
-pub struct XmbData {
-    pub root: Option<Node>,
-    pub format: XmbFormat,
-    pub source_file: Option<String>,
-}
-
-impl XmbData {
-    pub fn new() -> Self {
-        Self {
-            root: None,
-            format: XmbFormat::PC,
-            source_file: None,
-        }
-    }
-
-    pub fn with_root(root: Node) -> Self {
-        Self {
-            root: Some(root),
-            format: XmbFormat::PC,
-            source_file: None,
-        }
-    }
-
-    pub fn format(&self) -> XmbFormat {
-        self.format
-    }
-
-    pub fn set_format(&mut self, format: XmbFormat) {
-        self.format = format;
-    }
-
-    pub fn is_xbox360(&self) -> bool {
-        self.format.is_xbox360()
-    }
-
-    pub fn is_pc(&self) -> bool {
-        self.format.is_pc()
-    }
-
-    pub fn set_root(&mut self, root: Node) {
-        self.root = Some(root);
-    }
-
-    pub fn root(&self) -> Option<&Node> {
-        self.root.as_ref()
-    }
-
-    pub fn root_mut(&mut self) -> Option<&mut Node> {
-        self.root.as_mut()
-    }
-
+impl Document {
+    /// Serialize this document to an XML string.
     pub fn to_xml(&self) -> String {
         let mut buffer = Cursor::new(Vec::new());
         self.write_xml_to(&mut buffer)
@@ -88,6 +40,7 @@ impl XmbData {
         String::from_utf8(buffer.into_inner()).expect("Invalid UTF-8 in XML output")
     }
 
+    /// Write this document as XML to the given writer.
     pub fn write_xml_to<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut xml_writer = Writer::new_with_indent(writer, b' ', 4);
 
@@ -104,10 +57,12 @@ impl XmbData {
         Ok(())
     }
 
+    /// Parse an XML string into a [`Document`].
     pub fn from_xml(xml: &str) -> Result<Self> {
         Self::from_xml_reader(xml.as_bytes())
     }
 
+    /// Parse XML from any [`BufRead`] source into a [`Document`].
     pub fn from_xml_reader<R: BufRead>(reader: R) -> Result<Self> {
         let mut xml_reader = Reader::from_reader(reader);
 
@@ -178,17 +133,13 @@ impl XmbData {
             buf.clear();
         }
 
-        Ok(XmbData {
+        Ok(Document {
             root,
-            format: XmbFormat::PC,
+            format: Format::PC,
             source_file: None,
         })
     }
 }
-
-// ============================================================================
-// XML helpers
-// ============================================================================
 
 fn write_node_xml<W: Write>(node: &Node, writer: &mut Writer<W>) -> Result<()> {
     let has_text = !matches!(node.text, Variant::Null);

@@ -1440,7 +1440,6 @@ name = "xmb"
 version = "0.1.0"
 dependencies = [
  "bdt",
- "byteorder",
  "ecf",
  "quick-xml",
  "thiserror",

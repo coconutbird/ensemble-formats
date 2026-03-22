@@ -1,12 +1,12 @@
 //! ECF container reader — zero-copy, operates on a borrowed byte slice.
 //!
-//! [`EcfReader`] parses the file and chunk headers up-front, then provides
+//! [`Reader`] parses the file and chunk headers up-front, then provides
 //! indexed or ID-based access to chunk data. Compressed chunks (BDeflateStream)
-//! are decompressed transparently by [`EcfReader::chunk_data`].
+//! are decompressed transparently by [`Reader::chunk_data`].
 //!
 //! ```ignore
 //! let bytes = std::fs::read("model.ugx")?;
-//! let ecf = ecf::EcfReader::new(&bytes)?;
+//! let ecf = ecf::Reader::new(&bytes)?;
 //!
 //! for (i, hdr) in ecf.chunks().iter().enumerate() {
 //!     let data = ecf.chunk_data(i)?;
@@ -19,13 +19,13 @@ use alloc::vec::Vec;
 use crate::{EcfChunkHeader, EcfHeader, Error, Result, decompress, resource_flags};
 
 /// Zero-copy ECF reader backed by a byte slice.
-pub struct EcfReader<'a> {
+pub struct Reader<'a> {
     data: &'a [u8],
     header: EcfHeader,
     chunks: Vec<EcfChunkHeader>,
 }
 
-impl<'a> EcfReader<'a> {
+impl<'a> Reader<'a> {
     /// Parse an ECF container from a byte slice.
     pub fn new(data: &'a [u8]) -> Result<Self> {
         let header = EcfHeader::from_bytes(data)?;

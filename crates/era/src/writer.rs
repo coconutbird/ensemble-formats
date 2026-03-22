@@ -177,8 +177,8 @@ impl EraWriter {
         // Calculate layout
         let total_files = self.files.len() + self.precompressed.len();
         let num_chunks = 1 + total_files; // filename table + files
-        let total_header_size = 32 + 16; // EcfHeader + EraArchiveHeader
-        let chunk_header_size = 24 + 32; // EcfChunkHeader + EraChunkExtra
+        let total_header_size = 32 + 16; // Header + EraArchiveHeader
+        let chunk_header_size = 24 + 32; // ChunkHeader + EraChunkExtra
         let headers_size = total_header_size + chunk_header_size * num_chunks;
 
         let mut data_offset = align16(headers_size);
@@ -222,7 +222,7 @@ impl EraWriter {
         }
 
         // Build ECF header
-        let ecf_header = EcfHeaderData {
+        let ecf_header = HeaderData {
             header_size: total_header_size as u32,
             file_size: data_offset as u32,
             num_chunks: num_chunks as u16,
@@ -266,7 +266,7 @@ impl Default for EraWriter {
 }
 
 /// Internal ECF header data
-struct EcfHeaderData {
+struct HeaderData {
     header_size: u32,
     file_size: u32,
     num_chunks: u16,
@@ -314,7 +314,7 @@ pub fn compress_file_data(data: &[u8]) -> Result<CompressedData> {
 }
 
 /// Compute adler32 over header fields and chunk headers
-fn compute_header_adler32(header: &EcfHeaderData, chunks: &[ChunkData]) -> u32 {
+fn compute_header_adler32(header: &HeaderData, chunks: &[ChunkData]) -> u32 {
     let mut data = Vec::new();
 
     // Header bytes after adler32 field
@@ -341,7 +341,7 @@ fn compute_header_adler32(header: &EcfHeaderData, chunks: &[ChunkData]) -> u32 {
 }
 
 /// Write ECF header
-fn write_ecf_header<W: Write>(writer: &mut W, header: &EcfHeaderData, adler32: u32) -> Result<()> {
+fn write_ecf_header<W: Write>(writer: &mut W, header: &HeaderData, adler32: u32) -> Result<()> {
     writer.write_u32::<BigEndian>(0xDABA7737)?; // ECF magic
     writer.write_u32::<BigEndian>(header.header_size)?;
     writer.write_u32::<BigEndian>(adler32)?;
@@ -357,7 +357,7 @@ fn write_ecf_header<W: Write>(writer: &mut W, header: &EcfHeaderData, adler32: u
 
 /// Write a chunk header with extra data
 fn write_chunk_header<W: Write>(writer: &mut W, chunk: &ChunkData) -> Result<()> {
-    // EcfChunkHeader (24 bytes)
+    // ChunkHeader (24 bytes)
     writer.write_u64::<BigEndian>(chunk.id)?;
     writer.write_u32::<BigEndian>(chunk.offset)?;
     writer.write_u32::<BigEndian>(chunk.size)?;

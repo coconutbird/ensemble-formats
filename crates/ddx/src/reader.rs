@@ -216,7 +216,7 @@ impl DdxTexture {
 
     /// Parse an ECF-wrapped DDX file (Xbox 360 format).
     fn from_ecf(data: &[u8]) -> Result<Self> {
-        let ecf_reader = ecf::EcfReader::new(data)?;
+        let ecf_reader = ecf::Reader::new(data)?;
 
         // Verify ECF file ID
         if ecf_reader.header().id != DDX_ECF_FILE_ID {

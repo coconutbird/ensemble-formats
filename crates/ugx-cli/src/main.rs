@@ -1,7 +1,7 @@
 //! UGX CLI - Command-line tool for UGX model files.
 
 use clap::{Parser, Subcommand};
-use ecf::EcfReader;
+use ecf::Reader;
 use std::fs;
 use std::path::PathBuf;
 use ugx::{
@@ -435,7 +435,7 @@ fn cmd_from_gltf(
 
 fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let data = std::fs::read(input)?;
-    let ecf = EcfReader::new(&data)?;
+    let ecf = Reader::new(&data)?;
 
     println!("=== ECF Header ===");
     let header = ecf.header();

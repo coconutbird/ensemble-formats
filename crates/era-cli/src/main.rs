@@ -262,13 +262,13 @@ fn list_archive(path: &str, json: bool) -> i32 {
 #[derive(Serialize)]
 struct InfoOutput {
     archive: String,
-    ecf_header: EcfHeaderInfo,
+    ecf_header: HeaderInfo,
     archive_header: ArchiveHeaderInfo,
     total_entries: usize,
 }
 
 #[derive(Serialize)]
-struct EcfHeaderInfo {
+struct HeaderInfo {
     magic: String,
     header_size: u32,
     file_size: u32,
@@ -298,7 +298,7 @@ fn info_archive(path: &str, json: bool) -> i32 {
     if json {
         let output = InfoOutput {
             archive: path.to_string(),
-            ecf_header: EcfHeaderInfo {
+            ecf_header: HeaderInfo {
                 magic: format!("0x{:08X}", archive.ecf_header.magic),
                 header_size: archive.ecf_header.header_size,
                 file_size: archive.ecf_header.file_size,

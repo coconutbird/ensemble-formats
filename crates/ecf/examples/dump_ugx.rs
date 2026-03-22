@@ -1,6 +1,6 @@
 //! Dump UGX file structure for debugging.
 
-use ecf::EcfReader;
+use ecf::Reader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let data = std::fs::read(&args[1])?;
-    let ecf = EcfReader::new(&data)?;
+    let ecf = Reader::new(&data)?;
 
     println!("=== ECF Header ===");
     let header = ecf.header();

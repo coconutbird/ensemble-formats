@@ -1,11 +1,11 @@
 //! ECF container writer — assembles chunks into a `Vec<u8>`.
 //!
-//! [`EcfWriter`] collects chunk data (optionally compressing it with
-//! BDeflateStream), then [`EcfWriter::finalize`] lays out headers and data
+//! [`Writer`] collects chunk data (optionally compressing it with
+//! BDeflateStream), then [`Writer::finalize`] lays out headers and data
 //! with proper alignment and checksums.
 //!
 //! ```ignore
-//! let mut ecf = ecf::EcfWriter::new(0xAAC93746);
+//! let mut ecf = ecf::Writer::new(0xAAC93746);
 //! ecf.add_chunk(0x700, mesh_data);
 //! ecf.add_chunk_compressed(0x701, vertex_data)?;
 //! let bytes: Vec<u8> = ecf.finalize()?;
@@ -22,13 +22,13 @@ use crate::{
 pub const DEFAULT_ALIGNMENT_LOG2: u8 = 4;
 
 /// In-memory ECF builder that produces a `Vec<u8>`.
-pub struct EcfWriter {
+pub struct Writer {
     header: EcfHeader,
     chunks: Vec<(EcfChunkHeader, Vec<u8>)>,
     default_alignment_log2: u8,
 }
 
-impl EcfWriter {
+impl Writer {
     /// Create a new ECF writer with default 16-byte alignment.
     pub fn new(file_id: u32) -> Self {
         Self::with_alignment(file_id, DEFAULT_ALIGNMENT_LOG2)

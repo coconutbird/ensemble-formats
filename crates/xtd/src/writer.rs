@@ -5,7 +5,7 @@ use crate::{
     CHUNK_XTD_HEADER, Result, XtdFile, XtdHeader, XtdVisualChunk,
 };
 use byteorder::{BigEndian, WriteBytesExt};
-use ecf::EcfWriter;
+use ecf::Writer;
 use std::io::Cursor;
 
 /// XTD file writer.
@@ -14,7 +14,7 @@ pub struct XtdWriter;
 impl XtdWriter {
     /// Write an XTD file to a byte vector.
     pub fn write(file: &XtdFile) -> Result<Vec<u8>> {
-        let mut ecf = EcfWriter::new(file.ecf_file_id);
+        let mut ecf = Writer::new(file.ecf_file_id);
 
         // Track which visual chunk we're on
         let mut visual_chunk_idx = 0;

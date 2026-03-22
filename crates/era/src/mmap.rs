@@ -44,7 +44,7 @@ impl MmapEraArchive {
     fn from_mmap(mmap: Mmap, keys: TeaKeys) -> Result<Self> {
         // Decrypt and parse headers
         // Headers are at the start of the file, we need to decrypt them first
-        let base_header_size: usize = 32 + 16; // EcfHeader + EraArchiveHeader minimum
+        let base_header_size: usize = 32 + 16; // Header + EraArchiveHeader minimum
 
         // Read and decrypt header area (at least first block)
         let header_blocks = base_header_size.div_ceil(TEA_BLOCK_SIZE);
@@ -64,7 +64,7 @@ impl MmapEraArchive {
 
         // The chunk headers start at ecf_header.header_size (accounts for signature/padding)
         let chunk_headers_start = ecf_header.header_size as usize;
-        let chunk_header_size = 24 + ecf_header.chunk_extra_data_size as usize; // EcfChunkHeader + extra
+        let chunk_header_size = 24 + ecf_header.chunk_extra_data_size as usize; // ChunkHeader + extra
         let total_header_size =
             chunk_headers_start + chunk_header_size * ecf_header.num_chunks as usize;
 

@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
-use xmb::{Node, XmbData, XmbFormat, XmbReader, XmbWriter};
+use xmb::{Document, Format, Node, Reader, Writer};
 
 #[derive(Parser)]
 #[command(name = "xmb")]
@@ -72,11 +72,11 @@ enum FormatArg {
     Xbox360,
 }
 
-impl From<FormatArg> for XmbFormat {
+impl From<FormatArg> for Format {
     fn from(arg: FormatArg) -> Self {
         match arg {
-            FormatArg::Pc => XmbFormat::PC,
-            FormatArg::Xbox360 => XmbFormat::Xbox360,
+            FormatArg::Pc => Format::PC,
+            FormatArg::Xbox360 => Format::Xbox360,
         }
     }
 }
@@ -100,9 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Converting {} -> {}", input.display(), output.display());
 
             let data = std::fs::read(&input)?;
-            let xmb = XmbReader::read(&data)?;
+            let doc = Reader::read(&data)?;
 
-            let xml = xmb.to_xml();
+            let xml = doc.to_xml();
             std::fs::write(&output, xml)?;
 
             println!("Done!");
@@ -129,9 +129,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             let xml = std::fs::read_to_string(&input)?;
-            let xmb = XmbData::from_xml(&xml)?;
+            let doc = Document::from_xml(&xml)?;
 
-            let bytes = XmbWriter::write_with_options(&xmb, format.into(), compress)?;
+            let bytes = Writer::write_with_options(&doc, format.into(), compress)?;
             std::fs::write(&output, bytes)?;
 
             println!("Done!");
@@ -139,12 +139,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Some(Commands::Info { input }) => {
             let data = std::fs::read(&input)?;
-            let xmb = XmbReader::read(&data)?;
+            let doc = Reader::read(&data)?;
 
             println!("File: {}", input.display());
-            println!("Format: {:?}", xmb.format());
+            println!("Format: {:?}", doc.format());
 
-            if let Some(root) = xmb.root() {
+            if let Some(root) = doc.root() {
                 println!("Root element: <{}>", root.name);
                 println!("Attributes: {}", root.attributes.len());
                 println!("Children: {}", root.children.len());
@@ -250,9 +250,9 @@ fn convert_xml_to_xmb(
     let output = output_path(input, "xmb", overwrite);
 
     let xml = std::fs::read_to_string(input)?;
-    let xmb = XmbData::from_xml(&xml)?;
+    let doc = Document::from_xml(&xml)?;
 
-    let bytes = XmbWriter::write_with_options(&xmb, format.into(), compress)?;
+    let bytes = Writer::write_with_options(&doc, format.into(), compress)?;
     std::fs::write(&output, bytes)?;
 
     Ok(output)
@@ -266,9 +266,9 @@ fn convert_xmb_to_xml(
     let output = output_path(input, "xml", overwrite);
 
     let data = std::fs::read(input)?;
-    let xmb = XmbReader::read(&data)?;
+    let doc = Reader::read(&data)?;
 
-    let xml = xmb.to_xml();
+    let xml = doc.to_xml();
     std::fs::write(&output, xml)?;
 
     Ok(output)

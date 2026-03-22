@@ -2,7 +2,7 @@
 
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use byteorder::{LittleEndian, ReadBytesExt};
-use ecf::EcfReader;
+use ecf::Reader;
 use std::io::Cursor;
 
 /// Parsed UAX animation data.
@@ -25,7 +25,7 @@ pub struct UaxAnimation {
 impl UaxAnimation {
     /// Parse a UAX animation from a byte slice.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let ecf = EcfReader::new(data)?;
+        let ecf = Reader::new(data)?;
 
         // Validate file ID
         let file_id = ecf.header().id;

@@ -6,7 +6,7 @@ use crate::{
     FoliageQNChunk, FoliageSetInfo, Result, XTT_VERSION, XttFile, XttHeader, XttLinker,
 };
 use byteorder::{BigEndian, ReadBytesExt};
-use ecf::EcfReader;
+use ecf::Reader;
 use std::io::{Cursor, Read};
 
 /// Size of filename strings in XTT files.
@@ -18,7 +18,7 @@ pub struct XttReader;
 impl XttReader {
     /// Read an XTT file from a byte slice.
     pub fn read(data: &[u8]) -> Result<XttFile> {
-        let ecf = EcfReader::new(data)?;
+        let ecf = Reader::new(data)?;
 
         let mut file = XttFile {
             ecf_file_id: ecf.header().id,

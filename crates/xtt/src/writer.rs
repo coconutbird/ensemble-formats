@@ -6,7 +6,7 @@ use crate::{
     XttLinker,
 };
 use byteorder::{BigEndian, WriteBytesExt};
-use ecf::EcfWriter;
+use ecf::Writer;
 use std::io::Cursor;
 
 /// XTT file writer.
@@ -15,7 +15,7 @@ pub struct XttWriter;
 impl XttWriter {
     /// Write an XTT file to a byte vector.
     pub fn write(file: &XttFile) -> Result<Vec<u8>> {
-        let mut ecf = EcfWriter::new(file.ecf_file_id);
+        let mut ecf = Writer::new(file.ecf_file_id);
 
         // Track indices for multi-instance chunk types
         let mut linker_idx = 0;

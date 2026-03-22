@@ -23,14 +23,14 @@
 //! ```
 //!
 //! Chunk data may be stored raw or compressed with BDeflateStream (EA's
-//! custom wrapper around raw deflate). The [`EcfReader`] handles
+//! custom wrapper around raw deflate). The [`Reader`] handles
 //! decompression transparently.
 //!
 //! ## Reading
 //!
 //! ```ignore
 //! let bytes = std::fs::read("model.ugx")?;
-//! let ecf = ecf::EcfReader::new(&bytes)?;
+//! let ecf = ecf::Reader::new(&bytes)?;
 //!
 //! // Iterate chunks
 //! for (i, chunk) in ecf.chunks().iter().enumerate() {
@@ -45,7 +45,7 @@
 //! ## Writing
 //!
 //! ```ignore
-//! let mut ecf = ecf::EcfWriter::new(0xAAC93746);
+//! let mut ecf = ecf::Writer::new(0xAAC93746);
 //! ecf.add_chunk(0x700, cached_data);
 //! ecf.add_chunk(0x701, index_buffer);
 //! ecf.add_chunk_compressed(0x702, vertex_buffer)?;
@@ -66,10 +66,10 @@ pub mod deflate_stream;
 pub use deflate_stream::{compress, decompress};
 
 mod reader;
-pub use reader::EcfReader;
+pub use reader::Reader;
 
 mod writer;
-pub use writer::EcfWriter;
+pub use writer::Writer;
 
 mod checksum;
 pub use checksum::adler32;
@@ -85,7 +85,7 @@ pub const HEADER_MAGIC: u32 = 0xDABA7737;
 /// little-endian byte order (not standard, but handled for robustness).
 pub const HEADER_MAGIC_INVERTED: u32 = 0x3777BADA;
 
-/// Per-chunk resource flags stored in [`EcfChunkHeader::resource_flags`].
+/// Per-chunk resource flags stored in [`ChunkHeader::resource_flags`].
 pub mod resource_flags {
     /// Bit 0 — memory region is contiguous.
     pub const CONTIGUOUS: u16 = 1 << 0;
@@ -98,7 +98,7 @@ pub mod resource_flags {
 }
 
 /// Compression method for a chunk, derived from the low nibble of
-/// [`EcfChunkHeader::flags`].
+/// [`ChunkHeader::flags`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionMethod {
     /// No compression — data is stored verbatim.
@@ -140,11 +140,11 @@ mod tests {
         let file_id = 0x12345678;
         let chunk_id = 0xDEADBEEF;
 
-        let mut writer = EcfWriter::new(file_id);
+        let mut writer = Writer::new(file_id);
         writer.add_chunk(chunk_id, data.clone());
         let bytes = writer.finalize().expect("Failed to finalize");
 
-        let reader = EcfReader::new(&bytes).expect("Failed to read");
+        let reader = Reader::new(&bytes).expect("Failed to read");
         assert_eq!(reader.header().id, file_id);
         assert_eq!(reader.chunks().len(), 1);
         assert_eq!(reader.chunks()[0].id, chunk_id);
@@ -158,13 +158,13 @@ mod tests {
         let data3 = vec![0u8; 100];
         let file_id = 0xABCD1234;
 
-        let mut writer = EcfWriter::new(file_id);
+        let mut writer = Writer::new(file_id);
         writer.add_chunk(0x1111, data1.clone());
         writer.add_chunk(0x2222, data2.clone());
         writer.add_chunk(0x3333, data3.clone());
         let bytes = writer.finalize().expect("Failed to finalize");
 
-        let reader = EcfReader::new(&bytes).expect("Failed to read");
+        let reader = Reader::new(&bytes).expect("Failed to read");
         assert_eq!(reader.chunks().len(), 3);
         assert_eq!(reader.chunk_data(0).unwrap(), data1);
         assert_eq!(reader.chunk_data(1).unwrap(), data2);
@@ -178,11 +178,11 @@ mod tests {
         let file_id = 0x11111111;
         let chunk_id = 0x22222222;
 
-        let mut writer = EcfWriter::new(file_id);
+        let mut writer = Writer::new(file_id);
         writer.add_chunk_compressed(chunk_id, data.clone()).unwrap();
         let bytes = writer.finalize().expect("Failed to finalize");
 
-        let reader = EcfReader::new(&bytes).expect("Failed to read");
+        let reader = Reader::new(&bytes).expect("Failed to read");
         assert_eq!(reader.chunks().len(), 1);
         assert_eq!(reader.chunk_data(0).unwrap(), data);
     }

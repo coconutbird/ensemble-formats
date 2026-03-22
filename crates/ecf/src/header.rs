@@ -1,12 +1,12 @@
 //! ECF header structures.
 //!
-//! Each ECF file begins with a 32-byte file header ([`EcfHeader`]) followed
-//! by one or more 24-byte chunk headers ([`EcfChunkHeader`]). Both are
+//! Each ECF file begins with a 32-byte file header ([`Header`]) followed
+//! by one or more 24-byte chunk headers ([`ChunkHeader`]). Both are
 //! big-endian on disk.
 //!
 //! Parsing uses the zero-copy overlay types [`EcfHeaderRaw`] /
 //! [`EcfChunkHeaderRaw`] (via `zerocopy`) and then converts into the
-//! friendlier native-endian [`EcfHeader`] / [`EcfChunkHeader`].
+//! friendlier native-endian [`Header`] / [`ChunkHeader`].
 //!
 //! ## File header layout (32 bytes)
 //!
