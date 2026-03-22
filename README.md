@@ -33,8 +33,8 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 | **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented     |
 | **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ Implemented     |
 | **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented     |
-| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ❌ Not implemented |
-| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ❌ Not implemented |
+| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ✅ Implemented |
+| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented |
 
 ### XML-Based Formats
 
@@ -131,7 +131,7 @@ Terrain is split into two files:
 
 ## Architecture
 
-All core crates (`ecf`, `era`, `xmb`, `bdt`, `xml`) are `no_std + alloc` compatible. They use slice-based APIs (`&[u8]` in, `Vec<u8>` out) with zero-copy header parsing via `zerocopy`. The `era` crate gates `std` streaming I/O and `rayon` parallelism behind opt-in features.
+All core crates (`ecf`, `era`, `xmb`, `bdt`, `xml`, `xtd`, `xtt`) are `no_std + alloc` compatible. They use slice-based APIs (`&[u8]` in, `Vec<u8>` out) with zero-copy header parsing via `zerocopy`. The `era` crate gates `std` streaming I/O and `rayon` parallelism behind opt-in features.
 
 ## Usage
 
@@ -197,6 +197,21 @@ use ddx::DdxTexture;
 
 let texture = DdxTexture::from_bytes(&texture_data)?;
 println!("{}x{} {:?}", texture.info.width, texture.info.height, texture.info.data_format);
+```
+
+### Reading terrain data (XTD / XTT)
+
+```rust
+use xtd::Reader as XtdReader;
+use xtt::Reader as XttReader;
+
+// Parse terrain displacement
+let xtd = XtdReader::read(&xtd_bytes)?;
+println!("XTD version: 0x{:04X}", xtd.header.version);
+
+// Parse terrain textures
+let xtt = XttReader::read(&xtt_bytes)?;
+println!("Active textures: {}", xtt.header.num_active_textures);
 ```
 
 ## License
