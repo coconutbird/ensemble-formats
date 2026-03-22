@@ -512,3 +512,37 @@ fn write_chunk_header(buf: &mut [u8], chunk: &ChunkLayout) {
     let extra = EraChunkExtra::new(chunk.decomp_size, chunk.name_offset, chunk.comp_tiger128);
     buf[24..56].copy_from_slice(&extra.to_bytes());
 }
+
+#[cfg(feature = "std")]
+extern crate std;
+
+#[cfg(feature = "std")]
+impl Writer {
+    /// Stream the archive through an [`EncryptWriter`](crate::EncryptWriter),
+    /// encrypting on the fly.
+    ///
+    /// The destination must implement `Write + Seek + Read` (e.g. a `File`).
+    /// Returns the inner writer after finishing encryption.
+    pub fn write_to_encrypted<W: std::io::Write + std::io::Seek + std::io::Read>(
+        &self,
+        dest: W,
+        keys: crate::TeaKeys,
+    ) -> Result<W> {
+        self.write_to_encrypted_with_progress(dest, keys, None)
+    }
+
+    /// Stream the archive through an [`EncryptWriter`](crate::EncryptWriter)
+    /// with optional progress callback.
+    pub fn write_to_encrypted_with_progress<W: std::io::Write + std::io::Seek + std::io::Read>(
+        &self,
+        dest: W,
+        keys: crate::TeaKeys,
+        progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
+    ) -> Result<W> {
+        let mut encrypt = crate::EncryptWriter::new(dest, keys);
+        self.write_to_with_progress(&mut encrypt, progress)?;
+        encrypt
+            .finish()
+            .map_err(|_| crate::error::Error::UnexpectedEof)
+    }
+}

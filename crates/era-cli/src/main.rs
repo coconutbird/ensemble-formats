@@ -4,9 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
-use era::{DecryptReader, EncryptWriter, Reader, TeaKeys, Writer};
+use era::{DecryptReader, Reader, TeaKeys, Writer};
 use serde::Serialize;
-use std::io::Write;
 
 /// Exit codes for scripting
 pub mod exit_code {
@@ -615,38 +614,19 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
         println!("  Collected {} files", file_count);
     }
 
-    // Build archive bytes
-    let archive_bytes = match writer.finalize() {
-        Ok(b) => b,
-        Err(e) => {
-            if json {
-                let output = CreateOutput {
-                    archive: output_path.to_string(),
-                    input_dir: input_dir.to_string(),
-                    files_added: file_count,
-                    success: false,
-                    error: Some(format!("Error building archive: {}", e)),
-                };
-                println!("{}", serde_json::to_string(&output).unwrap());
-            } else {
-                eprintln!("Error building archive: {}", e);
-            }
-            return exit_code::IO_ERROR;
-        }
-    };
-
-    // Encrypt and write to file
-    let write_result = (|| -> std::io::Result<()> {
+    // Build, encrypt, and stream directly to file
+    let write_result: Result<(), String> = (|| {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(output_path)?;
+            .open(output_path)
+            .map_err(|e| format!("Failed to create {}: {}", output_path, e))?;
         let keys = TeaKeys::default_archive_keys();
-        let mut encrypt_writer = EncryptWriter::new(file, keys);
-        encrypt_writer.write_all(&archive_bytes)?;
-        encrypt_writer.finish()?;
+        writer
+            .write_to_encrypted(file, keys)
+            .map_err(|e| format!("Error writing archive: {}", e))?;
         Ok(())
     })();
 
@@ -657,11 +637,11 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
                 input_dir: input_dir.to_string(),
                 files_added: file_count,
                 success: false,
-                error: Some(format!("Error writing archive: {}", e)),
+                error: Some(e.clone()),
             };
             println!("{}", serde_json::to_string(&output).unwrap());
         } else {
-            eprintln!("Error writing archive: {}", e);
+            eprintln!("{}", e);
         }
         return exit_code::IO_ERROR;
     }
