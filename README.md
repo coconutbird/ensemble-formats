@@ -129,40 +129,74 @@ Terrain is split into two files:
 - **XTD**: Height field, visual chunks, lighting, ambient occlusion
 - **XTT**: Texture atlas, roads, foliage
 
+## Architecture
+
+All core crates (`ecf`, `era`, `xmb`, `bdt`, `xml`) are `no_std + alloc` compatible. They use slice-based APIs (`&[u8]` in, `Vec<u8>` out) with zero-copy header parsing via `zerocopy`. The `era` crate gates `std` streaming I/O and `rayon` parallelism behind opt-in features.
+
 ## Usage
 
-```rust
-use era::EraArchive;
-use xmb::Xmb;
+### Reading an ERA archive
 
-// Open an ERA archive
-let archive = EraArchive::open("root.era")?;
+```rust
+use std::io::Read;
+use era::{Reader, DecryptReader, TeaKeys};
+
+// Decrypt the ERA file
+let file = std::fs::File::open("root.era")?;
+let keys = TeaKeys::default_archive_keys();
+let mut decrypt = DecryptReader::new(file, keys);
+let mut data = Vec::new();
+decrypt.read_to_end(&mut data)?;
+
+// Parse the archive
+let archive = Reader::new(&data)?;
 
 // List files
-for entry in archive.entries() {
-    println!("{}", entry.name());
+for entry in archive.iter() {
+    if let Some(name) = &entry.filename {
+        println!("{}", name);
+    }
 }
 
-// Extract and parse an XMB file
-let data = archive.read("data/objects.xml.xmb")?;
-let xmb = Xmb::parse(&data)?;
-let xml = xmb.to_xml()?;
+// Extract a file by name
+if let Some(idx) = archive.find_by_name("data\\objects.xml.xmb") {
+    let file_data = archive.read_entry(idx)?;
+}
+```
 
-// Parse a DDX texture
+### Parsing XMB / XML
+
+```rust
+use xmb::{Reader, Writer, Document, Format};
+
+// XMB -> Document -> XML string
+let doc = Reader::read(&xmb_bytes)?;
+let xml_string = doc.to_xml();
+
+// XML string -> Document -> XMB bytes
+let doc = Document::from_xml(&xml_string)?;
+let xmb_bytes = Writer::write(&doc, Format::PC)?;
+```
+
+### Reading ECF containers
+
+```rust
+use ecf::Reader;
+
+let ecf = Reader::new(&data)?;
+for (i, chunk) in ecf.chunks().iter().enumerate() {
+    let decompressed = ecf.chunk_data(i)?;
+    println!("Chunk {:016X}: {} bytes", chunk.id, decompressed.len());
+}
+```
+
+### Parsing DDX textures
+
+```rust
 use ddx::DdxTexture;
-let texture_data = archive.read("art/system/default/defaultwhite.ddx")?;
+
 let texture = DdxTexture::from_bytes(&texture_data)?;
 println!("{}x{} {:?}", texture.info.width, texture.info.height, texture.info.data_format);
-
-// Write texture as standard DDS file
-let dds_bytes = texture.to_dds()?;
-std::fs::write("output.dds", dds_bytes)?;
-
-// Parse a UAX animation
-use uax::UaxAnimation;
-let anim_data = archive.read("art/campaign/npc/forge_01/shotgun_attack_01.uax")?;
-let anim = UaxAnimation::from_reader(std::io::Cursor::new(&anim_data))?;
-println!("Animation: {:?}, Duration: {}s", anim.name(), anim.duration());
 ```
 
 ## License
