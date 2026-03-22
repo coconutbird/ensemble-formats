@@ -1,165 +1,155 @@
-//! ERA archive reader.
+//! ERA archive reader — generic over any [`Read`] + [`Seek`] source.
+//!
+//! [`Reader`] parses headers and the filename table on construction, then
+//! reads individual entry data on demand via seek + read.
+//!
+//! # Streaming from a file (with decryption)
+//!
+//! ```ignore
+//! use era::{Reader, DecryptReader, TeaKeys};
+//!
+//! let file = std::fs::File::open("root.era")?;
+//! let decrypt = DecryptReader::new(file, TeaKeys::default_archive_keys());
+//! let mut reader = Reader::new(decrypt)?;
+//!
+//! if let Some(idx) = reader.find_by_name("scenario\\design\\mymap.scn") {
+//!     let data = reader.read_entry(idx)?;
+//! }
+//! ```
+//!
+//! # From an in-memory byte slice
+//!
+//! ```ignore
+//! let mut reader = era::Reader::from_bytes(&decrypted_bytes)?;
+//! for entry in reader.iter() {
+//!     println!("{}", entry.filename.as_deref().unwrap_or("<unnamed>"));
+//! }
+//! ```
 
-use alloc::borrow::Cow;
+use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::{EcfChunkHeader, EcfHeader, HEADER_MAGIC};
+use ecf::io::{Read, Seek, SeekFrom, SliceCursor};
+use ecf::{EcfChunkHeader, EcfHeader};
 
-use crate::crypto::{TeaKeys, tea_decrypt_data};
 use crate::error::{Error, Result};
 use crate::header::{EraArchiveHeader, EraChunkExtra, EraEntry, resolve_filename};
 
 /// Compressed entry data: (compressed_bytes, decompressed_size, tiger128_hash).
 pub type CompressedEntryData = (Vec<u8>, u32, [u8; 16]);
 
-/// Parse chunk headers from a byte slice at the given offset.
+/// An ERA archive reader backed by any [`Read`] + [`Seek`] source.
 ///
-/// Returns the parsed entries and the new offset after all headers.
-fn parse_chunk_headers(
-    data: &[u8],
-    offset: usize,
-    ecf_header: &EcfHeader,
-) -> Result<(Vec<EraEntry>, usize)> {
-    let mut entries = Vec::with_capacity(ecf_header.num_chunks as usize);
-    let mut pos = offset;
-    let stride = EcfChunkHeader::SIZE + ecf_header.chunk_extra_data_size as usize;
-
-    for _ in 0..ecf_header.num_chunks {
-        if pos + EcfChunkHeader::SIZE > data.len() {
-            return Err(Error::UnexpectedEof);
-        }
-        let chunk = EcfChunkHeader::from_bytes(&data[pos..pos + EcfChunkHeader::SIZE])?;
-        pos += EcfChunkHeader::SIZE;
-
-        let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
-            if pos + EraChunkExtra::SIZE > data.len() {
-                return Err(Error::UnexpectedEof);
-            }
-            let extra = EraChunkExtra::from_bytes(&data[pos..])?;
-            pos += ecf_header.chunk_extra_data_size as usize;
-            extra
-        } else {
-            pos += ecf_header.chunk_extra_data_size as usize;
-            EraChunkExtra {
-                date: 0,
-                decomp_size: chunk.size,
-                comp_tiger128: [0; 16],
-                name_offset: 0,
-            }
-        };
-
-        entries.push(EraEntry {
-            chunk,
-            extra,
-            filename: None,
-        });
-    }
-
-    // Verify we didn't skip past stride boundaries
-    let expected_end = offset + stride * ecf_header.num_chunks as usize;
-    Ok((entries, expected_end))
-}
-
-/// An ERA archive reader.
-///
-/// Holds either a borrowed slice (already decrypted) or an owned `Vec<u8>`
-/// (decrypted in-place during auto-detection).
-pub struct Reader<'a> {
-    data: Cow<'a, [u8]>,
+/// Headers and the filename table are parsed on construction.
+/// Entry data is read on demand.
+pub struct Reader<R> {
+    inner: R,
     /// ECF header.
     pub ecf_header: EcfHeader,
     /// Archive header extension.
     pub archive_header: EraArchiveHeader,
-    /// File entries.
+    /// File entries (with filenames resolved).
     pub entries: Vec<EraEntry>,
 }
 
-/// Check whether the first 4 bytes match the ECF magic.
-fn looks_decrypted(data: &[u8]) -> bool {
-    if data.len() < 4 {
-        return false;
-    }
-    let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-    magic == HEADER_MAGIC
-}
-
-impl<'a> Reader<'a> {
-    /// Parse an ERA archive from a decrypted byte slice (zero-copy).
-    pub fn from_decrypted(data: &'a [u8]) -> Result<Self> {
-        Self::parse(Cow::Borrowed(data))
-    }
-
-    /// Decrypt `data` in-place with the given keys, then parse.
+impl<R: Read + Seek> Reader<R> {
+    /// Parse an ERA archive from any [`Read`] + [`Seek`] source.
     ///
-    /// The `Vec` is consumed and owned by the returned `Reader`.
-    pub fn from_encrypted(mut data: Vec<u8>, keys: &TeaKeys) -> Result<Self> {
-        // Pad to TEA_BLOCK_SIZE boundary for in-place decrypt
-        let block = crate::crypto::TEA_BLOCK_SIZE;
-        let remainder = data.len() % block;
-        if remainder != 0 {
-            data.resize(data.len() + (block - remainder), 0);
+    /// Reads all headers and the filename table (chunk 0) up-front.
+    /// Entry data is **not** read until [`read_entry`](Self::read_entry) is called.
+    pub fn new(mut inner: R) -> Result<Self> {
+        // Read ECF header (32 bytes)
+        let mut hdr_buf = [0u8; EcfHeader::SIZE];
+        inner
+            .read_exact(&mut hdr_buf)
+            .map_err(|_| Error::UnexpectedEof)?;
+        let ecf_header = EcfHeader::from_bytes(&hdr_buf)?;
+
+        // Read ERA archive header extension (immediately after ECF header)
+        let mut archive_buf = [0u8; EraArchiveHeader::SIZE];
+        inner
+            .read_exact(&mut archive_buf)
+            .map_err(|_| Error::UnexpectedEof)?;
+        let archive_header = EraArchiveHeader::from_bytes(&archive_buf)?;
+
+        // Seek to chunk headers start
+        let chunk_start = ecf_header.header_size as u64;
+        inner
+            .seek(SeekFrom::Start(chunk_start))
+            .map_err(|_| Error::UnexpectedEof)?;
+
+        // Read all chunk headers (base + extra)
+        let chunk_stride = EcfChunkHeader::SIZE + ecf_header.chunk_extra_data_size as usize;
+        let total = chunk_stride * ecf_header.num_chunks as usize;
+        let mut chunk_buf = vec![0u8; total];
+        inner
+            .read_exact(&mut chunk_buf)
+            .map_err(|_| Error::UnexpectedEof)?;
+
+        // Parse entries
+        let mut entries = Vec::with_capacity(ecf_header.num_chunks as usize);
+        let mut pos = 0usize;
+        for _ in 0..ecf_header.num_chunks {
+            let chunk = EcfChunkHeader::from_bytes(&chunk_buf[pos..])?;
+            pos += EcfChunkHeader::SIZE;
+
+            let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
+                let extra = EraChunkExtra::from_bytes(&chunk_buf[pos..])?;
+                pos += ecf_header.chunk_extra_data_size as usize;
+                extra
+            } else {
+                pos += ecf_header.chunk_extra_data_size as usize;
+                EraChunkExtra {
+                    date: 0,
+                    decomp_size: chunk.size,
+                    comp_tiger128: [0; 16],
+                    name_offset: 0,
+                }
+            };
+
+            entries.push(EraEntry {
+                chunk,
+                extra,
+                filename: None,
+            });
         }
-        tea_decrypt_data(keys, &mut data, 0);
-        Self::parse(Cow::Owned(data))
-    }
 
-    /// Auto-detect: if the data starts with the ECF magic it is treated as
-    /// already decrypted (borrowed); otherwise it is decrypted in-place with
-    /// the supplied keys and owned by the reader.
-    pub fn new(data: &'a [u8], keys: &TeaKeys) -> Result<Self> {
-        if looks_decrypted(data) {
-            Self::from_decrypted(data)
-        } else {
-            Self::from_encrypted(data.to_vec(), keys)
-        }
-    }
-
-    /// Internal: parse from a `Cow` that already contains decrypted bytes.
-    fn parse(data: Cow<'a, [u8]>) -> Result<Self> {
-        if data.len() < EcfHeader::SIZE + EraArchiveHeader::SIZE {
-            return Err(Error::UnexpectedEof);
-        }
-
-        let ecf_header = EcfHeader::from_bytes(&data[..EcfHeader::SIZE])?;
-
-        let archive_header = EraArchiveHeader::from_bytes(
-            &data[EcfHeader::SIZE..EcfHeader::SIZE + EraArchiveHeader::SIZE],
-        )?;
-
-        let chunk_start = ecf_header.header_size as usize;
-        let (mut entries, _) = parse_chunk_headers(&data, chunk_start, &ecf_header)?;
-
-        // Read and decompress filename table (always at index 0)
+        // Read & decompress filename table (always chunk 0)
         let filename_table = if !entries.is_empty() {
             let e = &entries[0];
-            let start = e.chunk.offset as usize;
-            let end = start + e.chunk.size as usize;
-            if end > data.len() {
-                return Err(Error::UnexpectedEof);
-            }
-            entries[0].decompress(&data[start..end])?
+            let start = e.chunk.offset as u64;
+            let size = e.chunk.size as usize;
+            inner
+                .seek(SeekFrom::Start(start))
+                .map_err(|_| Error::UnexpectedEof)?;
+            let mut raw = vec![0u8; size];
+            inner
+                .read_exact(&mut raw)
+                .map_err(|_| Error::UnexpectedEof)?;
+            entries[0].decompress(&raw)?
         } else {
             Vec::new()
         };
 
+        // Resolve filenames
         for entry in entries.iter_mut().skip(1) {
             entry.filename = resolve_filename(&filename_table, entry.extra.name_offset);
         }
 
         Ok(Self {
-            data,
+            inner,
             ecf_header,
             archive_header,
             entries,
         })
     }
 
-    /// Get the number of entries in the archive.
+    /// Number of entries in the archive.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Check if the archive is empty.
+    /// Whether the archive is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -167,6 +157,11 @@ impl<'a> Reader<'a> {
     /// Get an entry by index.
     pub fn entry(&self, index: usize) -> Option<&EraEntry> {
         self.entries.get(index)
+    }
+
+    /// The parsed entries.
+    pub fn entries(&self) -> &[EraEntry] {
+        &self.entries
     }
 
     /// Iterate over all entries.
@@ -185,7 +180,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Read and decompress the data for an entry.
-    pub fn read_entry(&self, index: usize) -> Result<Vec<u8>> {
+    pub fn read_entry(&mut self, index: usize) -> Result<Vec<u8>> {
         let entry = self
             .entries
             .get(index)
@@ -194,19 +189,25 @@ impl<'a> Reader<'a> {
                 count: self.entries.len(),
             })?;
 
-        let start = entry.chunk.offset as usize;
-        let end = start + entry.chunk.size as usize;
-        if end > self.data.len() {
-            return Err(Error::UnexpectedEof);
-        }
+        let start = entry.chunk.offset as u64;
+        let size = entry.chunk.size as usize;
 
-        entry.decompress(&self.data[start..end])
+        self.inner
+            .seek(SeekFrom::Start(start))
+            .map_err(|_| Error::UnexpectedEof)?;
+
+        let mut raw = vec![0u8; size];
+        self.inner
+            .read_exact(&mut raw)
+            .map_err(|_| Error::UnexpectedEof)?;
+
+        self.entries[index].decompress(&raw)
     }
 
     /// Read compressed data for an entry WITHOUT decompressing.
     ///
     /// Returns: (compressed_data, decompressed_size, tiger128_hash).
-    pub fn read_entry_compressed(&self, index: usize) -> Result<CompressedEntryData> {
+    pub fn read_entry_compressed(&mut self, index: usize) -> Result<CompressedEntryData> {
         let entry = self
             .entries
             .get(index)
@@ -215,29 +216,71 @@ impl<'a> Reader<'a> {
                 count: self.entries.len(),
             })?;
 
-        let start = entry.chunk.offset as usize;
-        let end = start + entry.chunk.size as usize;
-        if end > self.data.len() {
-            return Err(Error::UnexpectedEof);
-        }
+        let start = entry.chunk.offset as u64;
+        let size = entry.chunk.size as usize;
+        let decomp_size = entry.extra.decomp_size;
+        let tiger128 = entry.extra.comp_tiger128;
 
-        Ok((
-            self.data[start..end].to_vec(),
-            entry.extra.decomp_size,
-            entry.extra.comp_tiger128,
-        ))
+        self.inner
+            .seek(SeekFrom::Start(start))
+            .map_err(|_| Error::UnexpectedEof)?;
+
+        let mut raw = vec![0u8; size];
+        self.inner
+            .read_exact(&mut raw)
+            .map_err(|_| Error::UnexpectedEof)?;
+
+        Ok((raw, decomp_size, tiger128))
     }
 
     /// Read multiple entries sequentially.
-    pub fn read_entries(&self, indices: &[usize]) -> Result<Vec<Vec<u8>>> {
-        indices.iter().map(|&idx| self.read_entry(idx)).collect()
+    pub fn read_entries(&mut self, indices: &[usize]) -> Result<Vec<Vec<u8>>> {
+        let mut results = Vec::with_capacity(indices.len());
+        for &idx in indices {
+            results.push(self.read_entry(idx)?);
+        }
+        Ok(results)
     }
 
     /// Read compressed data for multiple entries sequentially.
-    pub fn read_entries_compressed(&self, indices: &[usize]) -> Result<Vec<CompressedEntryData>> {
-        indices
-            .iter()
-            .map(|&idx| self.read_entry_compressed(idx))
-            .collect()
+    pub fn read_entries_compressed(
+        &mut self,
+        indices: &[usize],
+    ) -> Result<Vec<CompressedEntryData>> {
+        let mut results = Vec::with_capacity(indices.len());
+        for &idx in indices {
+            results.push(self.read_entry_compressed(idx)?);
+        }
+        Ok(results)
+    }
+
+    /// Consume the reader and return the underlying source.
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
+
+    /// Get a mutable reference to the underlying source.
+    pub fn inner_mut(&mut self) -> &mut R {
+        &mut self.inner
+    }
+}
+
+impl<'a> Reader<SliceCursor<'a>> {
+    /// Parse an ERA archive from a decrypted byte slice.
+    ///
+    /// This wraps the slice in a [`SliceCursor`] so no copy is made.
+    pub fn from_bytes(data: &'a [u8]) -> Result<Self> {
+        Self::new(SliceCursor::new(data))
+    }
+}
+
+impl<R: Read + Seek> Reader<crate::DecryptReader<R>> {
+    /// Parse an encrypted ERA archive, decrypting on the fly.
+    ///
+    /// Wraps the source in a [`DecryptReader`](crate::DecryptReader) so data
+    /// is decrypted block-by-block as it is read — the full archive is never
+    /// materialised in memory.
+    pub fn from_encrypted(inner: R, keys: crate::TeaKeys) -> Result<Self> {
+        Self::new(crate::DecryptReader::new(inner, keys))
     }
 }

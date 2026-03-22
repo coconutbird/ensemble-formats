@@ -6,7 +6,7 @@ use std::path::Path;
 use clap::{Parser, Subcommand};
 use era::{DecryptReader, EncryptWriter, Reader, TeaKeys, Writer};
 use serde::Serialize;
-use std::io::{Read, Write};
+use std::io::Write;
 
 /// Exit codes for scripting
 pub mod exit_code {
@@ -142,21 +142,18 @@ struct ListEntry {
 }
 
 /// Read and decrypt an ERA file into a byte buffer.
-fn read_and_decrypt(path: &str) -> Result<Vec<u8>, String> {
+fn open_archive(
+    path: &str,
+) -> Result<Reader<DecryptReader<std::io::BufReader<std::fs::File>>>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
-    let reader = std::io::BufReader::new(file);
-    let keys = TeaKeys::default_archive_keys();
-    let mut decrypt = DecryptReader::new(reader, keys);
-    let mut buf = Vec::new();
-    decrypt
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("Failed to read {}: {}", path, e))?;
-    Ok(buf)
+    let buf = std::io::BufReader::new(file);
+    Reader::from_encrypted(buf, TeaKeys::default_archive_keys())
+        .map_err(|e| format!("Failed to parse archive: {}", e))
 }
 
 fn list_archive(path: &str, json: bool) -> i32 {
-    let data = match read_and_decrypt(path) {
-        Ok(d) => d,
+    let archive = match open_archive(path) {
+        Ok(a) => a,
         Err(e) => {
             if json {
                 eprintln!(r#"{{"error": "{}"}}"#, e);
@@ -164,17 +161,6 @@ fn list_archive(path: &str, json: bool) -> i32 {
                 eprintln!("Error opening archive: {}", e);
             }
             return exit_code::FILE_NOT_FOUND;
-        }
-    };
-    let archive = match Reader::from_decrypted(&data) {
-        Ok(a) => a,
-        Err(e) => {
-            if json {
-                eprintln!(r#"{{"error": "{}"}}"#, e);
-            } else {
-                eprintln!("Error parsing archive: {}", e);
-            }
-            return exit_code::INVALID_FORMAT;
         }
     };
 
@@ -308,8 +294,8 @@ struct ArchiveHeaderInfo {
 }
 
 fn info_archive(path: &str, json: bool) -> i32 {
-    let data = match read_and_decrypt(path) {
-        Ok(d) => d,
+    let archive = match open_archive(path) {
+        Ok(a) => a,
         Err(e) => {
             if json {
                 eprintln!(r#"{{"error": "{}"}}"#, e);
@@ -317,17 +303,6 @@ fn info_archive(path: &str, json: bool) -> i32 {
                 eprintln!("Error opening archive: {}", e);
             }
             return exit_code::FILE_NOT_FOUND;
-        }
-    };
-    let archive = match Reader::from_decrypted(&data) {
-        Ok(a) => a,
-        Err(e) => {
-            if json {
-                eprintln!(r#"{{"error": "{}"}}"#, e);
-            } else {
-                eprintln!("Error parsing archive: {}", e);
-            }
-            return exit_code::INVALID_FORMAT;
         }
     };
 
@@ -423,8 +398,8 @@ fn extract_archive(
     json: bool,
     quiet: bool,
 ) -> i32 {
-    let data = match read_and_decrypt(path) {
-        Ok(d) => d,
+    let mut archive = match open_archive(path) {
+        Ok(a) => a,
         Err(e) => {
             if json {
                 eprintln!(r#"{{"error": "{}"}}"#, e);
@@ -432,17 +407,6 @@ fn extract_archive(
                 eprintln!("Error opening archive: {}", e);
             }
             return exit_code::FILE_NOT_FOUND;
-        }
-    };
-    let archive = match Reader::from_decrypted(&data) {
-        Ok(a) => a,
-        Err(e) => {
-            if json {
-                eprintln!(r#"{{"error": "{}"}}"#, e);
-            } else {
-                eprintln!("Error parsing archive: {}", e);
-            }
-            return exit_code::INVALID_FORMAT;
         }
     };
 

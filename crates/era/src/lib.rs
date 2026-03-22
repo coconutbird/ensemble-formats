@@ -6,7 +6,7 @@
 //! # Reading ERA archives
 //!
 //! ```ignore
-//! let reader = era::Reader::from_decrypted(decrypted_bytes).unwrap();
+//! let mut reader = era::Reader::from_bytes(decrypted_bytes).unwrap();
 //! for entry in reader.iter() {
 //!     println!("{}", entry.filename.as_deref().unwrap_or("<unnamed>"));
 //! }
@@ -28,7 +28,6 @@ pub mod crypto;
 mod error;
 mod header;
 mod reader;
-mod streaming_reader;
 mod writer;
 
 mod decrypt_reader;
@@ -45,8 +44,12 @@ pub use encrypt_writer::EncryptWriter;
 pub use error::*;
 pub use header::*;
 pub use reader::*;
-pub use streaming_reader::StreamingReader;
 pub use writer::{CompressedData, Writer, compress_file_data};
+
+/// Convenience alias used by the `sevenzip-era` plugin.
+pub type EraArchive<R> = Reader<R>;
+/// Convenience alias used by the `sevenzip-era` plugin.
+pub type EraWriter = Writer;
 
 #[cfg(test)]
 mod tests {
@@ -64,7 +67,7 @@ mod tests {
         writer.add_file("test/hello.txt", b"Hello, World!".to_vec());
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::from_decrypted(&data).expect("Failed to read");
+        let mut archive = Reader::from_bytes(&data).expect("Failed to read");
 
         assert_eq!(archive.len(), 2); // filename chunk + 1 file
         let entry = archive.entry(1).unwrap();
@@ -82,7 +85,7 @@ mod tests {
         writer.add_file("empty.txt", vec![]);
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::from_decrypted(&data).expect("Failed to read");
+        let mut archive = Reader::from_bytes(&data).expect("Failed to read");
 
         assert_eq!(archive.len(), 4); // filename chunk + 3 files
 
@@ -106,14 +109,14 @@ mod tests {
         let data1 = writer.finalize().expect("Failed to write");
 
         // Read back and collect hashes
-        let archive = Reader::from_decrypted(&data1).expect("Failed to read");
+        let mut archive = Reader::from_bytes(&data1).expect("Failed to read");
         let hashes1: Vec<_> = archive.iter().map(|e| e.extra.comp_tiger128).collect();
 
         // Create new writer from extracted files
         let mut writer2 = Writer::new();
         for i in 1..archive.len() {
             let entry = archive.entry(i).unwrap();
-            let filename = entry.filename.as_ref().unwrap();
+            let filename = entry.filename.as_ref().unwrap().clone();
             let content = archive.read_entry(i).expect("Failed to read entry");
             writer2.add_file(filename, content);
         }
@@ -122,7 +125,7 @@ mod tests {
         let data2 = writer2.finalize().expect("Failed to write second time");
 
         // Read second archive and collect hashes
-        let archive2 = Reader::from_decrypted(&data2).expect("Failed to read second");
+        let archive2 = Reader::from_bytes(&data2).expect("Failed to read second");
         let hashes2: Vec<_> = archive2.iter().map(|e| e.extra.comp_tiger128).collect();
 
         // Verify identical bytes and hashes
@@ -141,7 +144,7 @@ mod tests {
         writer.add_file("large.bin", large_data.clone());
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::from_decrypted(&data).expect("Failed to read");
+        let mut archive = Reader::from_bytes(&data).expect("Failed to read");
 
         let content = archive.read_entry(1).expect("Failed to read entry");
         assert_eq!(content, large_data);
@@ -197,7 +200,7 @@ mod tests {
         );
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::from_decrypted(&data).expect("Failed to read");
+        let mut archive = Reader::from_bytes(&data).expect("Failed to read");
 
         assert_eq!(archive.len(), 3);
 
@@ -214,7 +217,7 @@ mod tests {
         writer.add_file("test.txt", b"Test content for compression".to_vec());
 
         let data = writer.finalize().expect("Failed to write");
-        let archive = Reader::from_decrypted(&data).expect("Failed to read");
+        let mut archive = Reader::from_bytes(&data).expect("Failed to read");
 
         let (compressed, decomp_size, tiger128) =
             archive.read_entry_compressed(1).expect("Failed to read");
@@ -254,7 +257,7 @@ mod tests {
         let (last_written, last_total) = progress_calls.last().unwrap();
         assert_eq!(last_written, last_total);
 
-        let archive = Reader::from_decrypted(&data).expect("Failed to read");
+        let mut archive = Reader::from_bytes(&data).expect("Failed to read");
         assert_eq!(archive.len(), 4);
         let content = archive.read_entry(1).expect("Failed to read entry");
         assert_eq!(content, b"Hello, World!");
@@ -273,5 +276,50 @@ mod tests {
         }));
 
         assert!(matches!(result, Err(Error::Cancelled)));
+    }
+
+    #[test]
+    fn test_write_to_matches_finalize() {
+        let mut writer = Writer::new();
+        writer.add_file("test/hello.txt", b"Hello, World!".to_vec());
+        writer.add_file("data/numbers.bin", vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // finalize path
+        let finalized = writer.finalize().expect("finalize failed");
+
+        // write_to path
+        let mut streamed = Vec::new();
+        writer.write_to(&mut streamed).expect("write_to failed");
+
+        assert_eq!(
+            finalized, streamed,
+            "write_to must produce identical bytes to finalize"
+        );
+
+        // Verify the streamed output is a valid archive
+        let mut archive = Reader::from_bytes(&streamed).expect("Failed to read streamed");
+        assert_eq!(archive.len(), 3);
+        assert_eq!(archive.read_entry(1).unwrap(), b"Hello, World!");
+        assert_eq!(archive.read_entry(2).unwrap(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_write_to_with_precompressed() {
+        let mut writer = Writer::new();
+        writer.add_file("regular.txt", b"Regular file".to_vec());
+
+        let compressed = compress_file_data(b"Pre-compressed data");
+        writer.add_compressed_file(
+            "precomp.txt",
+            compressed.data.clone(),
+            compressed.decompressed_size,
+            compressed.tiger128,
+        );
+
+        let finalized = writer.finalize().expect("finalize failed");
+        let mut streamed = Vec::new();
+        writer.write_to(&mut streamed).expect("write_to failed");
+
+        assert_eq!(finalized, streamed);
     }
 }

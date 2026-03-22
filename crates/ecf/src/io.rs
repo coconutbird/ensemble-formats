@@ -15,7 +15,7 @@
 extern crate std;
 
 #[cfg(feature = "std")]
-pub use std::io::{Error as IoError, Read, Seek, SeekFrom};
+pub use std::io::{Error as IoError, Read, Seek, SeekFrom, Write};
 
 /// Seek position (no_std replacement for `std::io::SeekFrom`).
 #[cfg(not(feature = "std"))]
@@ -75,6 +75,27 @@ pub trait Read {
 pub trait Seek {
     /// Seek to a position in the stream.
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError>;
+}
+
+/// Minimal write trait (no_std replacement for `std::io::Write`).
+#[cfg(not(feature = "std"))]
+pub trait Write {
+    /// Write a buffer into this writer, returning how many bytes were written.
+    fn write(&mut self, buf: &[u8]) -> Result<usize, IoError>;
+
+    /// Flush this output stream.
+    fn flush(&mut self) -> Result<(), IoError>;
+
+    /// Write all bytes from `buf`, returning an error if not all could be written.
+    fn write_all(&mut self, mut buf: &[u8]) -> Result<(), IoError> {
+        while !buf.is_empty() {
+            match self.write(buf)? {
+                0 => return Err(IoError::UnexpectedEof),
+                n => buf = &buf[n..],
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Create an "unexpected EOF" error.

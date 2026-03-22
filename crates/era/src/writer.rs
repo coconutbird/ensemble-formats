@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use ecf::io::Write;
 use tiger::{Digest, Tiger};
 
 use crate::error::Result;
@@ -45,6 +46,15 @@ pub struct Writer {
     precompressed: Vec<PreCompressedFile>,
 }
 
+/// Pre-computed archive layout (shared between finalize and write_to).
+struct ComputedLayout {
+    ecf_header: HeaderLayout,
+    chunks: Vec<ChunkLayout>,
+    compressed_names: CompressedData,
+    compressed_files: Vec<CompressedData>,
+    total_data_bytes: u64,
+}
+
 impl Writer {
     /// Create a new ERA writer.
     pub fn new() -> Self {
@@ -77,19 +87,8 @@ impl Writer {
         });
     }
 
-    /// Build the archive into a `Vec<u8>`.
-    pub fn finalize(&self) -> Result<Vec<u8>> {
-        self.finalize_with_progress(None)
-    }
-
-    /// Build the archive into a `Vec<u8>` with optional progress callback.
-    ///
-    /// The progress callback receives `(bytes_written, total_bytes)` and should
-    /// return `true` to continue or `false` to cancel.
-    pub fn finalize_with_progress(
-        &self,
-        mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
-    ) -> Result<Vec<u8>> {
+    /// Compress all pending files and compute the archive layout.
+    fn compute_layout(&self) -> ComputedLayout {
         // Build filename table
         let mut filename_table = Vec::new();
         let mut name_offsets = Vec::new();
@@ -107,10 +106,8 @@ impl Writer {
             filename_table.push(0);
         }
 
-        // Compress filename table
+        let filename_table_raw_len = filename_table.len();
         let compressed_names = compress_data(&filename_table);
-
-        // Compress all file data
         let compressed_files: Vec<CompressedData> =
             self.files.iter().map(|f| compress_data(&f.data)).collect();
 
@@ -129,7 +126,7 @@ impl Writer {
             id: ERA_CHUNK_ID,
             offset: data_offset as u32,
             size: compressed_names.data.len() as u32,
-            decomp_size: filename_table.len() as u32,
+            decomp_size: filename_table_raw_len as u32,
             name_offset: 0,
             comp_tiger128: compressed_names.tiger128,
         });
@@ -161,35 +158,7 @@ impl Writer {
             data_offset = align16(data_offset + file.compressed_data.len());
         }
 
-        let ecf_header = HeaderLayout {
-            header_size: total_header_size as u32,
-            file_size: data_offset as u32,
-            num_chunks: num_chunks as u16,
-            id: ERA_FILE_ID,
-            chunk_extra_data_size: 32,
-        };
-
-        let adler32 = compute_header_adler32(&ecf_header, &chunks);
-
-        // Allocate output buffer
-        let mut out = vec![0u8; data_offset];
-
-        // Write ECF header (32 bytes)
-        write_ecf_header(&mut out[..ecf::EcfHeader::SIZE], &ecf_header, adler32);
-
-        // Write ERA archive header
-        out[ecf::EcfHeader::SIZE..ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE]
-            .copy_from_slice(&EraArchiveHeader::new().to_bytes());
-
-        // Write chunk headers
-        let mut pos = total_header_size;
-        for chunk in &chunks {
-            write_chunk_header(&mut out[pos..], chunk);
-            pos += chunk_header_size;
-        }
-
-        // Write chunk data with progress
-        let total_bytes: u64 = compressed_names.data.len() as u64
+        let total_data_bytes: u64 = compressed_names.data.len() as u64
             + compressed_files
                 .iter()
                 .map(|f| f.data.len() as u64)
@@ -199,12 +168,178 @@ impl Writer {
                 .iter()
                 .map(|f| f.compressed_data.len() as u64)
                 .sum::<u64>();
+
+        let ecf_header = HeaderLayout {
+            header_size: total_header_size as u32,
+            file_size: data_offset as u32,
+            num_chunks: num_chunks as u16,
+            id: ERA_FILE_ID,
+            chunk_extra_data_size: 32,
+        };
+
+        ComputedLayout {
+            ecf_header,
+            chunks,
+            compressed_names,
+            compressed_files,
+            total_data_bytes,
+        }
+    }
+
+    /// Build the archive into a `Vec<u8>`.
+    pub fn finalize(&self) -> Result<Vec<u8>> {
+        self.finalize_with_progress(None)
+    }
+
+    /// Build the archive into a `Vec<u8>` with optional progress callback.
+    ///
+    /// The progress callback receives `(bytes_written, total_bytes)` and should
+    /// return `true` to continue or `false` to cancel.
+    pub fn finalize_with_progress(
+        &self,
+        mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
+    ) -> Result<Vec<u8>> {
+        let layout = self.compute_layout();
+        let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
+
+        let total_header_size = layout.ecf_header.header_size as usize;
+        let chunk_header_size = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
+        let data_offset = layout.ecf_header.file_size as usize;
+
+        // Allocate output buffer
+        let mut out = vec![0u8; data_offset];
+
+        // Write ECF header (32 bytes)
+        write_ecf_header(
+            &mut out[..ecf::EcfHeader::SIZE],
+            &layout.ecf_header,
+            adler32,
+        );
+
+        // Write ERA archive header
+        out[ecf::EcfHeader::SIZE..ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE]
+            .copy_from_slice(&EraArchiveHeader::new().to_bytes());
+
+        // Write chunk headers
+        let mut pos = total_header_size;
+        for chunk in &layout.chunks {
+            write_chunk_header(&mut out[pos..], chunk);
+            pos += chunk_header_size;
+        }
+
+        // Write chunk data with progress
         let mut bytes_written: u64 = 0;
 
         // Filename table
-        let off = chunks[0].offset as usize;
-        out[off..off + compressed_names.data.len()].copy_from_slice(&compressed_names.data);
-        bytes_written += compressed_names.data.len() as u64;
+        let off = layout.chunks[0].offset as usize;
+        out[off..off + layout.compressed_names.data.len()]
+            .copy_from_slice(&layout.compressed_names.data);
+        bytes_written += layout.compressed_names.data.len() as u64;
+        if let Some(cb) = &mut progress
+            && !cb(bytes_written, layout.total_data_bytes)
+        {
+            return Err(crate::error::Error::Cancelled);
+        }
+
+        // Regular files
+        let regular_count = layout.compressed_files.len();
+        for (chunk, file) in layout.chunks[1..=regular_count]
+            .iter()
+            .zip(&layout.compressed_files)
+        {
+            let off = chunk.offset as usize;
+            out[off..off + file.data.len()].copy_from_slice(&file.data);
+            bytes_written += file.data.len() as u64;
+            if let Some(cb) = &mut progress
+                && !cb(bytes_written, layout.total_data_bytes)
+            {
+                return Err(crate::error::Error::Cancelled);
+            }
+        }
+
+        // Pre-compressed files
+        for (chunk, file) in layout.chunks[regular_count + 1..]
+            .iter()
+            .zip(&self.precompressed)
+        {
+            let off = chunk.offset as usize;
+            out[off..off + file.compressed_data.len()].copy_from_slice(&file.compressed_data);
+            bytes_written += file.compressed_data.len() as u64;
+            if let Some(cb) = &mut progress
+                && !cb(bytes_written, layout.total_data_bytes)
+            {
+                return Err(crate::error::Error::Cancelled);
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// Stream the archive to a writer.
+    ///
+    /// Unlike [`finalize`](Self::finalize) which materialises the entire archive
+    /// in memory, this writes headers and chunk data sequentially to the
+    /// provided writer. Ideal for piping directly through an encryption writer
+    /// to disk.
+    pub fn write_to(&self, writer: impl Write) -> Result<u64> {
+        self.write_to_with_progress(writer, None)
+    }
+
+    /// Stream the archive to a writer with optional progress callback.
+    ///
+    /// The progress callback receives `(bytes_written, total_bytes)` and should
+    /// return `true` to continue or `false` to cancel.
+    pub fn write_to_with_progress(
+        &self,
+        mut writer: impl Write,
+        mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
+    ) -> Result<u64> {
+        let layout = self.compute_layout();
+
+        // Write ECF header (32 bytes)
+        let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
+        let mut hdr_buf = [0u8; ecf::EcfHeader::SIZE];
+        write_ecf_header(&mut hdr_buf, &layout.ecf_header, adler32);
+        writer
+            .write_all(&hdr_buf)
+            .map_err(|_| crate::error::Error::UnexpectedEof)?;
+
+        // Write ERA archive header
+        let archive_hdr = EraArchiveHeader::new().to_bytes();
+        writer
+            .write_all(&archive_hdr)
+            .map_err(|_| crate::error::Error::UnexpectedEof)?;
+
+        // Write chunk headers
+        let chunk_header_size = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
+        for chunk in &layout.chunks {
+            let mut buf = [0u8; 56]; // 24 + 32
+            write_chunk_header(&mut buf[..chunk_header_size], chunk);
+            writer
+                .write_all(&buf[..chunk_header_size])
+                .map_err(|_| crate::error::Error::UnexpectedEof)?;
+        }
+
+        // Write alignment padding between headers and first chunk data
+        let headers_end =
+            layout.ecf_header.header_size as usize + chunk_header_size * layout.chunks.len();
+        let first_data_offset = layout.chunks[0].offset as usize;
+        if first_data_offset > headers_end {
+            let pad = vec![0u8; first_data_offset - headers_end];
+            writer
+                .write_all(&pad)
+                .map_err(|_| crate::error::Error::UnexpectedEof)?;
+        }
+
+        // Write chunk data sequentially with alignment padding
+        let mut bytes_written: u64 = 0;
+        let total_bytes = layout.total_data_bytes;
+
+        // Filename table (chunk 0)
+        writer
+            .write_all(&layout.compressed_names.data)
+            .map_err(|_| crate::error::Error::UnexpectedEof)?;
+        bytes_written += layout.compressed_names.data.len() as u64;
         if let Some(cb) = &mut progress
             && !cb(bytes_written, total_bytes)
         {
@@ -212,11 +347,20 @@ impl Writer {
         }
 
         // Regular files
-        let regular_count = compressed_files.len();
-        for (chunk, file) in chunks[1..=regular_count].iter().zip(&compressed_files) {
-            let off = chunk.offset as usize;
-            out[off..off + file.data.len()].copy_from_slice(&file.data);
-            bytes_written += file.data.len() as u64;
+        for (i, compressed) in layout.compressed_files.iter().enumerate() {
+            // Alignment padding between previous chunk and this one
+            let prev_end = layout.chunks[i].offset as usize + layout.chunks[i].size as usize;
+            let next_start = layout.chunks[i + 1].offset as usize;
+            if next_start > prev_end {
+                let pad = vec![0u8; next_start - prev_end];
+                writer
+                    .write_all(&pad)
+                    .map_err(|_| crate::error::Error::UnexpectedEof)?;
+            }
+            writer
+                .write_all(&compressed.data)
+                .map_err(|_| crate::error::Error::UnexpectedEof)?;
+            bytes_written += compressed.data.len() as u64;
             if let Some(cb) = &mut progress
                 && !cb(bytes_written, total_bytes)
             {
@@ -225,9 +369,22 @@ impl Writer {
         }
 
         // Pre-compressed files
-        for (chunk, file) in chunks[regular_count + 1..].iter().zip(&self.precompressed) {
-            let off = chunk.offset as usize;
-            out[off..off + file.compressed_data.len()].copy_from_slice(&file.compressed_data);
+        let regular_count = layout.compressed_files.len();
+        for (i, file) in self.precompressed.iter().enumerate() {
+            let chunk_idx = 1 + regular_count + i;
+            let prev_idx = chunk_idx - 1;
+            let prev_end =
+                layout.chunks[prev_idx].offset as usize + layout.chunks[prev_idx].size as usize;
+            let next_start = layout.chunks[chunk_idx].offset as usize;
+            if next_start > prev_end {
+                let pad = vec![0u8; next_start - prev_end];
+                writer
+                    .write_all(&pad)
+                    .map_err(|_| crate::error::Error::UnexpectedEof)?;
+            }
+            writer
+                .write_all(&file.compressed_data)
+                .map_err(|_| crate::error::Error::UnexpectedEof)?;
             bytes_written += file.compressed_data.len() as u64;
             if let Some(cb) = &mut progress
                 && !cb(bytes_written, total_bytes)
@@ -236,7 +393,17 @@ impl Writer {
             }
         }
 
-        Ok(out)
+        // Final padding to reach file_size
+        let current_pos = layout.chunks.last().map_or(0, |c| c.offset + c.size) as usize;
+        let file_size = layout.ecf_header.file_size as usize;
+        if file_size > current_pos {
+            let pad = vec![0u8; file_size - current_pos];
+            writer
+                .write_all(&pad)
+                .map_err(|_| crate::error::Error::UnexpectedEof)?;
+        }
+
+        Ok(layout.ecf_header.file_size as u64)
     }
 }
 

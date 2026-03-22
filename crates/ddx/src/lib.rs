@@ -77,7 +77,7 @@ mod tests {
     #[ignore] // Requires root.era to be present
     fn test_parse_ddx_from_era() {
         let era_data = read_and_decrypt_era(&find_era_path());
-        let archive = era::Reader::from_decrypted(&era_data).expect("Failed to read ERA");
+        let mut archive = era::Reader::from_bytes(&era_data).expect("Failed to read ERA");
 
         let ddx_idx = archive
             .iter()
@@ -112,7 +112,7 @@ mod tests {
     #[ignore] // Requires root.era to be present
     fn test_parse_all_ddx_from_era() {
         let era_data = read_and_decrypt_era(&find_era_path());
-        let archive = era::Reader::from_decrypted(&era_data).expect("Failed to read ERA");
+        let mut archive = era::Reader::from_bytes(&era_data).expect("Failed to read ERA");
 
         let ddx_indices: Vec<usize> = archive
             .iter()
@@ -162,7 +162,7 @@ mod tests {
     #[ignore] // Requires root.era to be present
     fn test_roundtrip_ddx() {
         let era_data = read_and_decrypt_era(&find_era_path());
-        let archive = era::Reader::from_decrypted(&era_data).expect("Failed to read ERA");
+        let mut archive = era::Reader::from_bytes(&era_data).expect("Failed to read ERA");
 
         let ddx_indices: Vec<usize> = archive
             .iter()
