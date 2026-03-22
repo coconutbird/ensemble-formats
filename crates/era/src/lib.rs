@@ -44,11 +44,6 @@ pub use header::*;
 pub use reader::*;
 pub use writer::{CompressedData, Writer, compress_file_data};
 
-/// Convenience alias used by the `sevenzip-era` plugin.
-pub type EraArchive<R> = Reader<R>;
-/// Convenience alias used by the `sevenzip-era` plugin.
-pub type EraWriter = Writer;
-
 #[cfg(test)]
 mod tests {
     extern crate alloc;
