@@ -81,10 +81,10 @@ impl Writer {
         self.buf.push('"');
     }
 
-    /// Close the open tag with `>` and increase indentation depth.
+    /// Close the open tag with `>\n` and increase indentation depth.
     pub fn close(&mut self) {
         debug_assert!(self.in_open_tag, "close() called without a matching open()");
-        self.buf.push('>');
+        self.buf.push_str(">\n");
         self.in_open_tag = false;
         self.depth += 1;
     }
@@ -105,8 +105,15 @@ impl Writer {
         self.close_empty();
     }
 
-    /// Write escaped text content inside the current element.
+    /// Write escaped text content inline inside the current element.
+    ///
+    /// Removes the trailing newline from `close()` so the text appears on the
+    /// same line as the opening tag: `<tag>text</tag>`.
     pub fn text(&mut self, text: &str) {
+        // Remove the newline that close() appended so text is inline.
+        if self.buf.ends_with('\n') {
+            self.buf.pop();
+        }
         self.has_content = true;
         escape_into(&mut self.buf, text);
     }
