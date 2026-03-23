@@ -139,6 +139,9 @@ pub enum Variant {
     UString(String),
     /// Vector of 2–4 floats (e.g. position, color).
     FloatVec(Vec<f32>),
+    /// 24-bit fixed-point fraction, stored as the pre-formatted string
+    /// (e.g. `"1.0500"`) to match the game's `"%u.%04u"` output exactly.
+    Fract24(String),
 }
 
 impl Variant {
@@ -155,7 +158,7 @@ impl Variant {
             Variant::Int(v) => v.to_string(),
             Variant::UInt(v) => v.to_string(),
             Variant::Bool(v) => if *v { "true" } else { "false" }.to_string(),
-            Variant::String(s) | Variant::UString(s) => s.clone(),
+            Variant::String(s) | Variant::UString(s) | Variant::Fract24(s) => s.clone(),
             Variant::FloatVec(v) => v
                 .iter()
                 .map(|f| f.to_string())
@@ -174,6 +177,7 @@ impl Variant {
             Variant::Double(v) => Some(*v as f32),
             Variant::Int(v) => Some(*v as f32),
             Variant::UInt(v) => Some(*v as f32),
+            Variant::Fract24(s) => s.parse().ok(),
             _ => None,
         }
     }
@@ -228,17 +232,24 @@ pub fn pack_float24(value: f32) -> u32 {
 }
 
 /// Unpack a 24-bit float representation to a 32-bit float.
+///
+/// Layout: bit 23 = sign, bits 17-22 = exponent (6-bit, biased by +96 relative
+/// to IEEE 754's bias of 127), bits 0-16 = mantissa (17-bit).
+///
+/// When the exponent field is zero the game returns ±0.0 regardless of the
+/// mantissa, so we do the same.
 pub fn unpack_float24(packed: u32) -> f32 {
-    if packed == 0 {
-        return 0.0;
-    }
-
     let sign = (packed >> 23) & 1;
     let exp = (packed >> 17) & 0x3F;
     let mantissa = packed & 0x1FFFF;
 
-    // Convert exponent bias back: from 31 to 127
-    let new_exp = (exp as i32 - 31 + 127) as u32;
+    if exp == 0 {
+        // Game returns ±0.0 when exponent is zero.
+        return if sign != 0 { -0.0 } else { 0.0 };
+    }
+
+    // Convert exponent bias: stored + 96 = IEEE exponent (same as stored - 31 + 127)
+    let new_exp = exp + 96;
 
     // Extend mantissa from 17 to 23 bits
     let new_mantissa = mantissa << 6;
@@ -247,7 +258,7 @@ pub fn unpack_float24(packed: u32) -> f32 {
     f32::from_bits(bits)
 }
 
-/// Pack a float as a 24-bit fixed-point fraction (value * 10,000).
+/// Pack a float as a 24-bit fixed-point fraction (value × 10 000, sign-magnitude).
 #[allow(dead_code)]
 pub fn pack_fract24(value: f32) -> u32 {
     let scaled = (value * 10000.0).round() as i32;
@@ -258,28 +269,74 @@ pub fn pack_fract24(value: f32) -> u32 {
     }
 }
 
-/// Unpack a 24-bit fixed-point fraction to a float.
-pub fn unpack_fract24(packed: u32) -> f32 {
-    let is_negative = (packed & 0x800000) != 0;
-    let magnitude = (packed & 0x7FFFFF) as f32;
-    let value = magnitude / 10000.0;
-    if is_negative { -value } else { value }
-}
-
-/// Pack a 24-bit signed integer.
-pub fn pack_int24(value: i32) -> u32 {
-    if value >= 0 {
-        (value as u32) & 0x7FFFFF
+/// Pack a Fract24 string (as produced by [`unpack_fract24`]) back to 24 bits.
+///
+/// Accepts `"integer.fract"` or `"-integer.fract"` where `fract` is up to 4
+/// digits.  Falls back to float parsing → `pack_fract24` for other formats.
+#[allow(dead_code)]
+pub fn pack_fract24_str(s: &str) -> u32 {
+    let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest)
     } else {
-        ((-value) as u32 & 0x7FFFFF) | 0x800000
+        (false, s)
+    };
+    if let Some((int_str, frac_str)) = s.split_once('.') {
+        let int_part: u32 = int_str.parse().unwrap_or(0);
+        // Pad or truncate fractional part to exactly 4 digits
+        let frac_str = if frac_str.len() > 4 {
+            &frac_str[..4]
+        } else {
+            frac_str
+        };
+        let frac_part: u32 =
+            frac_str.parse().unwrap_or(0) * 10u32.pow(4u32.saturating_sub(frac_str.len() as u32));
+        let magnitude = (int_part * 10000 + frac_part) & 0x7FFFFF;
+        if negative {
+            magnitude | 0x800000
+        } else {
+            magnitude
+        }
+    } else {
+        // Fallback: parse as float
+        let v: f32 = s.parse().unwrap_or(0.0);
+        pack_fract24(if negative { -v } else { v })
     }
 }
 
-/// Unpack a 24-bit signed integer.
-pub fn unpack_int24(packed: u32) -> i32 {
+/// Unpack a 24-bit fixed-point fraction to a string.
+///
+/// The game formats Fract24 as `"%u.%04u"` (or `"-%u.%04u"` when negative)
+/// using integer division/modulo by 10 000.  Bit 23 is a sign flag
+/// (sign-magnitude), bits 0-22 hold the magnitude.
+///
+/// We return the formatted string directly to match the game's output exactly,
+/// preserving trailing zeros (e.g. `"1.0500"` instead of `"1.05"`).
+pub fn unpack_fract24(packed: u32) -> String {
     let is_negative = (packed & 0x800000) != 0;
-    let magnitude = (packed & 0x7FFFFF) as i32;
-    if is_negative { -magnitude } else { magnitude }
+    let magnitude = packed & 0x7FFFFF;
+    let integer_part = magnitude / 10000;
+    let fract_part = magnitude % 10000;
+    if is_negative {
+        alloc::format!("-{}.{:04}", integer_part, fract_part)
+    } else {
+        alloc::format!("{}.{:04}", integer_part, fract_part)
+    }
+}
+
+/// Pack a 24-bit signed integer (two's complement).
+pub fn pack_int24(value: i32) -> u32 {
+    (value as u32) & 0xFFFFFF
+}
+
+/// Unpack a 24-bit signed integer (two's complement, sign-extended to 32 bits).
+pub fn unpack_int24(packed: u32) -> i32 {
+    let val = packed & 0xFFFFFF;
+    // Sign-extend from 24-bit to 32-bit
+    if val & 0x800000 != 0 {
+        (val | 0xFF000000) as i32
+    } else {
+        val as i32
+    }
 }
 
 /// Pack a 24-bit unsigned integer.
@@ -314,11 +371,74 @@ mod tests {
 
     #[test]
     fn test_int24_roundtrip() {
-        let values = [0i32, 1, -1, 1000, -1000, 8388607];
+        // Two's complement 24-bit range: -8388608 to 8388607
+        let values = [0i32, 1, -1, 1000, -1000, 8388607, -8388608];
         for value in values {
             let packed = pack_int24(value);
             let unpacked = unpack_int24(packed);
             assert_eq!(value, unpacked, "Int24 roundtrip failed for {}", value);
+        }
+    }
+
+    #[test]
+    fn test_int24_twos_complement() {
+        // -1 should pack as 0xFFFFFF (all 24 bits set)
+        assert_eq!(pack_int24(-1), 0xFFFFFF);
+        assert_eq!(unpack_int24(0xFFFFFF), -1);
+
+        // -2 should pack as 0xFFFFFE
+        assert_eq!(pack_int24(-2), 0xFFFFFE);
+        assert_eq!(unpack_int24(0xFFFFFE), -2);
+
+        // 1 should pack as 0x000001
+        assert_eq!(pack_int24(1), 0x000001);
+        assert_eq!(unpack_int24(0x000001), 1);
+    }
+
+    #[test]
+    fn test_float24_zero_denorm() {
+        // exp==0 should return ±0.0 regardless of mantissa (matches game)
+        assert_eq!(unpack_float24(0), 0.0);
+        assert!(unpack_float24(0).is_sign_positive());
+
+        // sign=1, exp=0, mantissa=0 → -0.0
+        assert!(unpack_float24(0x800000).is_sign_negative());
+        assert_eq!(unpack_float24(0x800000), -0.0);
+
+        // sign=0, exp=0, mantissa=nonzero → still 0.0
+        assert_eq!(unpack_float24(0x00001), 0.0);
+    }
+
+    #[test]
+    fn test_fract24_formatting() {
+        // Game uses "%u.%04u" format: integer_part.fractional_part(4 digits)
+        assert_eq!(unpack_fract24(10500), "1.0500");
+        assert_eq!(unpack_fract24(0), "0.0000");
+        assert_eq!(unpack_fract24(1), "0.0001");
+        assert_eq!(unpack_fract24(10000), "1.0000");
+        // Negative: bit 23 set
+        assert_eq!(unpack_fract24(0x800000 | 10500), "-1.0500");
+        assert_eq!(unpack_fract24(0x800000), "-0.0000");
+    }
+
+    #[test]
+    fn test_fract24_str_roundtrip() {
+        let cases: &[(u32, &str)] = &[
+            (10500, "1.0500"),
+            (0, "0.0000"),
+            (1, "0.0001"),
+            (10000, "1.0000"),
+            (0x800000 | 10500, "-1.0500"),
+        ];
+        for &(packed, expected_str) in cases {
+            let s = unpack_fract24(packed);
+            assert_eq!(s, expected_str);
+            let repacked = pack_fract24_str(&s);
+            assert_eq!(
+                repacked, packed,
+                "Fract24 roundtrip failed for {}",
+                expected_str
+            );
         }
     }
 }

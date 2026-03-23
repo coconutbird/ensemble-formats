@@ -27,7 +27,8 @@ use crate::util::{
     assemble_tree, decode_direct_string, read_null_terminated_string, read_null_terminated_wstring,
 };
 use crate::variant::{
-    OFFSET_FLAG, UNSIGNED_FLAG, Variant, unpack_float24, unpack_fract24, unpack_int24,
+    OFFSET_FLAG, TYPE_MASK, UNSIGNED_FLAG, Variant, VariantType, unpack_float24, unpack_fract24,
+    unpack_int24,
 };
 
 /// Packed document reader for BBinaryDataTree format (`BPackedReader`).
@@ -266,12 +267,11 @@ fn build_tree(
 fn decode_variant_string(variant_value: u32, variant_data: &[u8]) -> Result<String> {
     let type_bits = (variant_value >> 24) as u8;
     let data_bits = variant_value & 0xFFFFFF;
-    let variant_type = type_bits & 0x0F;
-    let is_offset = (type_bits & 0x80) != 0;
+    let is_offset = (type_bits & OFFSET_FLAG) != 0;
 
-    match variant_type {
-        0 => Ok(String::new()),
-        8 => {
+    match VariantType::from_byte(type_bits) {
+        Ok(VariantType::Null) => Ok(String::new()),
+        Ok(VariantType::String) => {
             if is_offset {
                 let offset = data_bits as usize;
                 read_null_terminated_string(variant_data, offset)
@@ -279,7 +279,8 @@ fn decode_variant_string(variant_value: u32, variant_data: &[u8]) -> Result<Stri
                 decode_direct_string(data_bits)
             }
         }
-        _ => Ok(format!("<type:{}>", variant_type)),
+        Ok(vt) => Ok(format!("<type:{:?}>", vt)),
+        Err(_) => Ok(format!("<type:{}>", type_bits & TYPE_MASK)),
     }
 }
 
@@ -290,14 +291,18 @@ fn decode_variant_to_variant(
 ) -> Result<Variant> {
     let type_bits = (variant_value >> 24) as u8;
     let data_bits = variant_value & 0xFFFFFF;
-    let variant_type = type_bits & 0x0F;
     let is_offset = (type_bits & OFFSET_FLAG) != 0;
     let is_unsigned = (type_bits & UNSIGNED_FLAG) != 0;
 
-    match variant_type {
-        0 => Ok(Variant::Null),
-        1 => Ok(Variant::Float(unpack_float24(data_bits))),
-        2 => {
+    let vt = match VariantType::from_byte(type_bits) {
+        Ok(vt) => vt,
+        Err(_) => return Ok(Variant::Null),
+    };
+
+    match vt {
+        VariantType::Null => Ok(Variant::Null),
+        VariantType::Float24 => Ok(Variant::Float(unpack_float24(data_bits))),
+        VariantType::Float => {
             if is_offset && data_bits as usize + 4 <= variant_data.len() {
                 let bytes = &variant_data[data_bits as usize..data_bits as usize + 4];
                 let v = if big_endian {
@@ -310,14 +315,14 @@ fn decode_variant_to_variant(
                 Ok(Variant::Float(0.0))
             }
         }
-        3 => {
+        VariantType::Int24 => {
             if is_unsigned {
                 Ok(Variant::UInt(data_bits))
             } else {
                 Ok(Variant::Int(unpack_int24(data_bits)))
             }
         }
-        4 => {
+        VariantType::Int32 => {
             if is_offset && data_bits as usize + 4 <= variant_data.len() {
                 let bytes = &variant_data[data_bits as usize..data_bits as usize + 4];
                 let v = if big_endian {
@@ -330,8 +335,8 @@ fn decode_variant_to_variant(
                 Ok(Variant::Int(0))
             }
         }
-        5 => Ok(Variant::Float(unpack_fract24(data_bits))),
-        6 => {
+        VariantType::Fract24 => Ok(Variant::Fract24(unpack_fract24(data_bits))),
+        VariantType::Double => {
             if is_offset && data_bits as usize + 8 <= variant_data.len() {
                 let bytes = &variant_data[data_bits as usize..data_bits as usize + 8];
                 let v = if big_endian {
@@ -350,8 +355,8 @@ fn decode_variant_to_variant(
                 Ok(Variant::Double(0.0))
             }
         }
-        7 => Ok(Variant::Bool(data_bits != 0)),
-        8 => {
+        VariantType::Bool => Ok(Variant::Bool(data_bits != 0)),
+        VariantType::String => {
             if is_offset {
                 Ok(Variant::String(read_null_terminated_string(
                     variant_data,
@@ -361,18 +366,18 @@ fn decode_variant_to_variant(
                 Ok(Variant::String(decode_direct_string(data_bits)?))
             }
         }
-        9 => {
+        VariantType::UString => {
             if is_offset {
-                Ok(Variant::String(read_null_terminated_wstring(
+                Ok(Variant::UString(read_null_terminated_wstring(
                     variant_data,
                     data_bits as usize,
                     big_endian,
                 )?))
             } else {
-                Ok(Variant::String(String::new()))
+                Ok(Variant::UString(String::new()))
             }
         }
-        10 => {
+        VariantType::FloatVec => {
             let vec_size = 1 + ((type_bits >> 4) & 0x03);
             if is_offset && data_bits as usize + (vec_size as usize * 4) <= variant_data.len() {
                 let offset = data_bits as usize;
@@ -391,6 +396,5 @@ fn decode_variant_to_variant(
                 Ok(Variant::FloatVec(alloc::vec![0.0; vec_size as usize]))
             }
         }
-        _ => Ok(Variant::Null),
     }
 }
