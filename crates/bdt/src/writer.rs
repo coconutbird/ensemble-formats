@@ -20,8 +20,8 @@ use crate::Endian;
 use crate::error::Result;
 use crate::node::Node;
 use crate::variant::{
-    OFFSET_FLAG, UNSIGNED_FLAG, Variant, VariantType, pack_float24, pack_fract24, pack_fract24_str,
-    pack_int24, pack_uint24, unpack_float24, unpack_fract24,
+    OFFSET_FLAG, UNSIGNED_FLAG, Variant, VariantType, pack_float24, pack_fract24, pack_int24,
+    pack_uint24, unpack_float24, unpack_fract24,
 };
 
 /// Packed document writer for BBinaryDataTree format (`BPackedWriter`).
@@ -289,7 +289,7 @@ fn pack_variant(variant: &Variant, buf: &mut VariantBuffer) -> u32 {
                 buf.add_int32(*v as i32)
             }
         }
-        Variant::Float(v) => {
+        Variant::Float(v) | Variant::Fract24(v) => {
             // Try Fract24 first: value × 10000, rounded, must fit in 23 bits
             // (magnitude ≤ 0x7FFFFF = 8388607, i.e. |value| ≤ 838.8607).
             // Use tolerance for IEEE 754 imprecision (e.g. 1.05f32 = 1.04999995...).
@@ -297,9 +297,8 @@ fn pack_variant(variant: &Variant, buf: &mut VariantBuffer) -> u32 {
             let diff = (scaled - *v * 10000.0).abs();
             if diff < 0.5 && scaled.abs() <= 8_388_607.0 {
                 let packed = pack_fract24(*v);
-                // Verify roundtrip: the string → f32 must match the original
-                let rt = unpack_fract24(packed);
-                let rt_val: f32 = rt.parse().unwrap_or(f32::NAN);
+                // Verify roundtrip: decode must match the original
+                let rt_val = unpack_fract24(packed);
                 if (rt_val - *v).abs() < 1e-4 {
                     return ((VariantType::Fract24 as u32) << 24) | packed;
                 }
@@ -314,7 +313,6 @@ fn pack_variant(variant: &Variant, buf: &mut VariantBuffer) -> u32 {
                 buf.add_float(*v)
             }
         }
-        Variant::Fract24(s) => ((VariantType::Fract24 as u32) << 24) | pack_fract24_str(s),
         Variant::Double(v) => buf.add_double(*v),
         Variant::String(s) => buf.add_string(s),
         Variant::UString(s) => buf.add_ustring(s),

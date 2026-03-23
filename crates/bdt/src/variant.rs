@@ -139,9 +139,11 @@ pub enum Variant {
     UString(String),
     /// Vector of 2–4 floats (e.g. position, color).
     FloatVec(Vec<f32>),
-    /// 24-bit fixed-point fraction, stored as the pre-formatted string
-    /// (e.g. `"1.0500"`) to match the game's `"%u.%04u"` output exactly.
-    Fract24(String),
+    /// 24-bit fixed-point fraction (value × 10 000, sign-magnitude).
+    ///
+    /// Stored as `f32` like other numeric types.  The `"%u.%04u"` formatting
+    /// is applied in [`Variant::to_string_value`].
+    Fract24(f32),
 }
 
 impl Variant {
@@ -158,7 +160,19 @@ impl Variant {
             Variant::Int(v) => v.to_string(),
             Variant::UInt(v) => v.to_string(),
             Variant::Bool(v) => if *v { "true" } else { "false" }.to_string(),
-            Variant::String(s) | Variant::UString(s) | Variant::Fract24(s) => s.clone(),
+            Variant::Fract24(v) => {
+                let packed = pack_fract24(*v);
+                let is_negative = (packed & 0x800000) != 0;
+                let magnitude = packed & 0x7FFFFF;
+                let integer_part = magnitude / 10000;
+                let fract_part = magnitude % 10000;
+                if is_negative {
+                    alloc::format!("-{}.{:04}", integer_part, fract_part)
+                } else {
+                    alloc::format!("{}.{:04}", integer_part, fract_part)
+                }
+            }
+            Variant::String(s) | Variant::UString(s) => s.clone(),
             Variant::FloatVec(v) => v
                 .iter()
                 .map(|f| f.to_string())
@@ -177,7 +191,7 @@ impl Variant {
             Variant::Double(v) => Some(*v as f32),
             Variant::Int(v) => Some(*v as f32),
             Variant::UInt(v) => Some(*v as f32),
-            Variant::Fract24(s) => s.parse().ok(),
+            Variant::Fract24(v) => Some(*v),
             _ => None,
         }
     }
@@ -269,58 +283,15 @@ pub fn pack_fract24(value: f32) -> u32 {
     }
 }
 
-/// Pack a Fract24 string (as produced by [`unpack_fract24`]) back to 24 bits.
+/// Unpack a 24-bit fixed-point fraction to `f32`.
 ///
-/// Accepts `"integer.fract"` or `"-integer.fract"` where `fract` is up to 4
-/// digits.  Falls back to float parsing → `pack_fract24` for other formats.
-#[allow(dead_code)]
-pub fn pack_fract24_str(s: &str) -> u32 {
-    let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
-        (true, rest)
-    } else {
-        (false, s)
-    };
-    if let Some((int_str, frac_str)) = s.split_once('.') {
-        let int_part: u32 = int_str.parse().unwrap_or(0);
-        // Pad or truncate fractional part to exactly 4 digits
-        let frac_str = if frac_str.len() > 4 {
-            &frac_str[..4]
-        } else {
-            frac_str
-        };
-        let frac_part: u32 =
-            frac_str.parse().unwrap_or(0) * 10u32.pow(4u32.saturating_sub(frac_str.len() as u32));
-        let magnitude = (int_part * 10000 + frac_part) & 0x7FFFFF;
-        if negative {
-            magnitude | 0x800000
-        } else {
-            magnitude
-        }
-    } else {
-        // Fallback: parse as float
-        let v: f32 = s.parse().unwrap_or(0.0);
-        pack_fract24(if negative { -v } else { v })
-    }
-}
-
-/// Unpack a 24-bit fixed-point fraction to a string.
-///
-/// The game formats Fract24 as `"%u.%04u"` (or `"-%u.%04u"` when negative)
-/// using integer division/modulo by 10 000.  Bit 23 is a sign flag
-/// (sign-magnitude), bits 0-22 hold the magnitude.
-///
-/// We return the formatted string directly to match the game's output exactly,
-/// preserving trailing zeros (e.g. `"1.0500"` instead of `"1.05"`).
-pub fn unpack_fract24(packed: u32) -> String {
+/// Bit 23 is a sign flag (sign-magnitude), bits 0-22 hold the magnitude.
+/// The value is `magnitude / 10 000`.
+pub fn unpack_fract24(packed: u32) -> f32 {
     let is_negative = (packed & 0x800000) != 0;
-    let magnitude = packed & 0x7FFFFF;
-    let integer_part = magnitude / 10000;
-    let fract_part = magnitude % 10000;
-    if is_negative {
-        alloc::format!("-{}.{:04}", integer_part, fract_part)
-    } else {
-        alloc::format!("{}.{:04}", integer_part, fract_part)
-    }
+    let magnitude = (packed & 0x7FFFFF) as f32;
+    let value = magnitude / 10000.0;
+    if is_negative { -value } else { value }
 }
 
 /// Pack a 24-bit signed integer (two's complement).
@@ -410,35 +381,39 @@ mod tests {
     }
 
     #[test]
-    fn test_fract24_formatting() {
-        // Game uses "%u.%04u" format: integer_part.fractional_part(4 digits)
-        assert_eq!(unpack_fract24(10500), "1.0500");
-        assert_eq!(unpack_fract24(0), "0.0000");
-        assert_eq!(unpack_fract24(1), "0.0001");
-        assert_eq!(unpack_fract24(10000), "1.0000");
-        // Negative: bit 23 set
-        assert_eq!(unpack_fract24(0x800000 | 10500), "-1.0500");
-        assert_eq!(unpack_fract24(0x800000), "-0.0000");
-    }
-
-    #[test]
-    fn test_fract24_str_roundtrip() {
-        let cases: &[(u32, &str)] = &[
-            (10500, "1.0500"),
-            (0, "0.0000"),
-            (1, "0.0001"),
-            (10000, "1.0000"),
-            (0x800000 | 10500, "-1.0500"),
+    fn test_fract24_roundtrip() {
+        let cases: &[(u32, f32)] = &[
+            (10500, 1.05),
+            (0, 0.0),
+            (1, 0.0001),
+            (10000, 1.0),
+            (0x800000 | 10500, -1.05),
         ];
-        for &(packed, expected_str) in cases {
-            let s = unpack_fract24(packed);
-            assert_eq!(s, expected_str);
-            let repacked = pack_fract24_str(&s);
+        for &(packed, expected) in cases {
+            let v = unpack_fract24(packed);
+            assert!(
+                (v - expected).abs() < 1e-5,
+                "unpack_fract24({}) = {}, expected {}",
+                packed,
+                v,
+                expected
+            );
+            let repacked = pack_fract24(v);
             assert_eq!(
                 repacked, packed,
                 "Fract24 roundtrip failed for {}",
-                expected_str
+                expected
             );
         }
+    }
+
+    #[test]
+    fn test_fract24_formatting() {
+        // to_string_value uses "%u.%04u" format matching the game
+        assert_eq!(Variant::Fract24(1.05).to_string_value(), "1.0500");
+        assert_eq!(Variant::Fract24(0.0).to_string_value(), "0.0000");
+        assert_eq!(Variant::Fract24(0.0001).to_string_value(), "0.0001");
+        assert_eq!(Variant::Fract24(1.0).to_string_value(), "1.0000");
+        assert_eq!(Variant::Fract24(-1.05).to_string_value(), "-1.0500");
     }
 }

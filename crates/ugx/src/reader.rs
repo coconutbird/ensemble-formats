@@ -1108,7 +1108,7 @@ fn variant_to_f32(v: &bdt::Variant) -> f32 {
         bdt::Variant::Double(d) => *d as f32,
         bdt::Variant::Int(i) => *i as f32,
         bdt::Variant::UInt(u) => *u as f32,
-        bdt::Variant::Fract24(s) => s.parse().unwrap_or(0.0),
+        bdt::Variant::Fract24(f) => *f,
         _ => 0.0,
     }
 }
