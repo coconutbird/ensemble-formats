@@ -29,20 +29,24 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use bdt::Variant;
+use xml::escape::escape_into;
 use xml::reader::Event;
 
 use crate::document::{Attribute, Document, Format, Node};
 use crate::error::{Error, Result};
 
 impl Document {
-    /// Serialize this document to an XML string.
+    /// Serialize this document to a pretty-printed XML string.
+    ///
+    /// Uses a direct recursive tree-walker instead of the streaming
+    /// [`xml::Writer`] so formatting decisions (newlines, indentation) are
+    /// driven by each node's structure rather than by buffered state.
     pub fn to_xml(&self) -> String {
-        let mut w = xml::Writer::new();
-        w.declaration();
+        let mut buf = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
         if let Some(root) = &self.root {
-            write_node_xml(root, &mut w);
+            serialize_node(root, &mut buf, 0);
         }
-        w.finish()
+        buf
     }
 
     /// Parse an XML string into a [`Document`].
@@ -132,30 +136,51 @@ impl Document {
     }
 }
 
-fn write_node_xml(node: &Node, w: &mut xml::Writer) {
+/// Recursively serialize a node into `buf` with `depth`-level indentation.
+///
+/// Three cases:
+/// - **Empty** (`<tag/>`) — no text, no children.
+/// - **Text-only** (`<tag>text</tag>`) — inline, single line.
+/// - **Children** — opening tag on its own line, children indented, closing
+///   tag on its own line.
+fn serialize_node(node: &Node, buf: &mut String, depth: usize) {
+    let indent = "    ".repeat(depth);
+
+    // Opening tag + attributes
+    buf.push_str(&indent);
+    buf.push('<');
+    buf.push_str(&node.name);
+    for attr in &node.attributes {
+        buf.push(' ');
+        buf.push_str(&attr.name);
+        buf.push_str("=\"");
+        escape_into(buf, &attr.value.to_string_value());
+        buf.push('"');
+    }
+
     let has_text = !matches!(node.text, Variant::Null);
     let has_children = !node.children.is_empty();
 
-    w.open(&node.name);
-    for attr in &node.attributes {
-        w.attr(&attr.name, &attr.value.to_string_value());
-    }
-
     if !has_text && !has_children {
-        w.close_empty();
-    } else {
-        w.close();
-
-        if has_text {
-            let text = node.text.to_string_value();
-            w.text(&text);
-        }
-
+        // <tag/>
+        buf.push_str("/>\n");
+    } else if has_children {
+        // <tag>\n  children \n</tag>
+        buf.push_str(">\n");
         for child in &node.children {
-            write_node_xml(child, w);
+            serialize_node(child, buf, depth + 1);
         }
-
-        w.end(&node.name);
+        buf.push_str(&indent);
+        buf.push_str("</");
+        buf.push_str(&node.name);
+        buf.push_str(">\n");
+    } else {
+        // <tag>text</tag>  (inline, single line)
+        buf.push('>');
+        escape_into(buf, &node.text.to_string_value());
+        buf.push_str("</");
+        buf.push_str(&node.name);
+        buf.push_str(">\n");
     }
 }
 
