@@ -27,6 +27,7 @@ pub mod buffer_pool;
 pub mod crypto;
 mod error;
 mod header;
+pub mod merkle;
 mod reader;
 mod writer;
 

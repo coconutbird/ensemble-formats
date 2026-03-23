@@ -32,4 +32,20 @@ pub enum Error {
     /// Operation was cancelled by the progress callback.
     #[error("operation cancelled")]
     Cancelled,
+
+    /// Invalid signature magic.
+    #[error("invalid signature magic: expected 0x{expected:08X}, found 0x{found:08X}")]
+    InvalidSignatureMagic { expected: u32, found: u32 },
+
+    /// Invalid signature tree depth.
+    #[error("invalid signature tree depth: {depth} (must be 2..=32)")]
+    InvalidTreeDepth { depth: u8 },
+
+    /// Signature verification failed.
+    #[error("signature verification failed")]
+    SignatureVerifyFailed,
+
+    /// Signature data truncated.
+    #[error("signature data truncated")]
+    SignatureTruncated,
 }

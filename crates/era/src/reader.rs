@@ -50,6 +50,10 @@ pub struct Reader<R> {
     pub archive_header: EraArchiveHeader,
     /// File entries (with filenames resolved).
     pub entries: Vec<EraEntry>,
+    /// Raw chunk header bytes (big-endian, as on disk) for signature hashing.
+    chunk_headers_raw: Vec<u8>,
+    /// Signature block bytes (empty if unsigned).
+    signature: Vec<u8>,
 }
 
 impl<R: Read + Seek> Reader<R> {
@@ -136,11 +140,32 @@ impl<R: Read + Seek> Reader<R> {
             entry.filename = resolve_filename(&filename_table, entry.extra.name_offset);
         }
 
+        // Read signature block from the header region if present.
+        // The signature sits at offset 48 (immediately after the 32-byte ECF
+        // header and 16-byte ERA archive header extension) and spans
+        // `signature_size` bytes.
+        let signature = if archive_header.signature_size > 0 {
+            let sig_size = archive_header.signature_size as usize;
+            let sig_offset = EcfHeader::SIZE as u64 + EraArchiveHeader::SIZE as u64; // 32 + 16 = 48
+            inner
+                .seek(SeekFrom::Start(sig_offset))
+                .map_err(|_| Error::UnexpectedEof)?;
+            let mut sig_buf = vec![0u8; sig_size];
+            inner
+                .read_exact(&mut sig_buf)
+                .map_err(|_| Error::UnexpectedEof)?;
+            sig_buf
+        } else {
+            Vec::new()
+        };
+
         Ok(Self {
             inner,
             ecf_header,
             archive_header,
             entries,
+            chunk_headers_raw: chunk_buf,
+            signature,
         })
     }
 
@@ -252,6 +277,42 @@ impl<R: Read + Seek> Reader<R> {
             results.push(self.read_entry_compressed(idx)?);
         }
         Ok(results)
+    }
+
+    /// Whether this archive has a digital signature.
+    pub fn has_signature(&self) -> bool {
+        !self.signature.is_empty()
+    }
+
+    /// Get the raw signature bytes (empty if unsigned).
+    pub fn signature(&self) -> &[u8] {
+        &self.signature
+    }
+
+    /// Compute the header hash used for signature verification.
+    ///
+    /// This hashes the ECF header fields and all chunk headers exactly as
+    /// the game does in `ERA_LoadArchiveHeaders`.
+    pub fn header_hash(&self) -> [u8; 20] {
+        crate::merkle::compute_header_hash(
+            self.ecf_header.header_size,
+            self.ecf_header.num_chunks,
+            self.ecf_header.chunk_extra_data_size,
+            self.ecf_header.file_size,
+            &self.chunk_headers_raw,
+        )
+    }
+
+    /// Verify the archive's Merkle signature against a public key.
+    ///
+    /// Returns `Ok(true)` if valid, `Ok(false)` if verification fails,
+    /// or `Err` if the signature is malformed or missing.
+    pub fn verify_signature(&self, public_key: &[u8; 20]) -> Result<bool> {
+        if self.signature.is_empty() {
+            return Ok(false);
+        }
+        let hash = self.header_hash();
+        crate::merkle::verify(public_key, &hash, &self.signature)
     }
 
     /// Consume the reader and return the underlying source.

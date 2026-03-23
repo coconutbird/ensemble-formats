@@ -94,6 +94,14 @@ enum Commands {
         /// Input directory containing files to archive
         input: String,
     },
+    /// Verify the Merkle signature of an ERA archive
+    Verify {
+        /// Path to the ERA archive
+        file: String,
+        /// Public key as 40-char hex string (20 bytes)
+        #[arg(short, long)]
+        key: String,
+    },
 }
 
 fn main() {
@@ -116,6 +124,7 @@ fn main() {
             cli.quiet,
         ),
         Commands::Create { output, input } => create_archive(output, input, cli.json, cli.quiet),
+        Commands::Verify { file, key } => verify_archive(file, key, cli.json),
     };
 
     std::process::exit(exit_code);
@@ -688,4 +697,77 @@ fn collect_files(
         }
     }
     Ok(())
+}
+
+fn verify_archive(path: &str, key_hex: &str, json: bool) -> i32 {
+    // Parse hex key
+    let key_bytes = match hex::decode(key_hex) {
+        Ok(b) if b.len() == 20 => {
+            let mut key = [0u8; 20];
+            key.copy_from_slice(&b);
+            key
+        }
+        Ok(b) => {
+            eprintln!(
+                "Error: key must be 20 bytes (40 hex chars), got {} bytes",
+                b.len()
+            );
+            return exit_code::ERROR;
+        }
+        Err(e) => {
+            eprintln!("Error: invalid hex key: {e}");
+            return exit_code::ERROR;
+        }
+    };
+
+    let archive = match open_archive(path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return exit_code::FILE_NOT_FOUND;
+        }
+    };
+
+    if !archive.has_signature() {
+        if json {
+            println!(r#"{{"file": "{path}", "signed": false}}"#);
+        } else {
+            println!("Archive is not signed.");
+        }
+        return exit_code::ERROR;
+    }
+
+    let hash = archive.header_hash();
+
+    match archive.verify_signature(&key_bytes) {
+        Ok(true) => {
+            if json {
+                println!(
+                    r#"{{"file": "{path}", "signed": true, "valid": true, "header_hash": "{}"}}"#,
+                    hex::encode(hash)
+                );
+            } else {
+                println!("Signature VALID");
+                println!("  Header hash: {}", hex::encode(hash));
+                println!("  Signature:   {} bytes", archive.signature().len());
+            }
+            exit_code::SUCCESS
+        }
+        Ok(false) => {
+            if json {
+                println!(
+                    r#"{{"file": "{path}", "signed": true, "valid": false, "header_hash": "{}"}}"#,
+                    hex::encode(hash)
+                );
+            } else {
+                println!("Signature INVALID");
+                println!("  Header hash: {}", hex::encode(hash));
+            }
+            exit_code::ERROR
+        }
+        Err(e) => {
+            eprintln!("Error verifying signature: {e}");
+            exit_code::ERROR
+        }
+    }
 }
