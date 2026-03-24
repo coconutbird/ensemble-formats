@@ -1281,14 +1281,10 @@ dependencies = [
 name = "ugx"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
  "bdt",
  "byteorder",
  "ecf",
- "gltf",
- "gltf-json",
  "half",
- "serde_json",
  "thiserror",
  "zerocopy",
 ]
@@ -1299,6 +1295,21 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ecf",
+ "serde_json",
+ "thiserror",
+ "ugx",
+ "ugx-gltf",
+]
+
+[[package]]
+name = "ugx-gltf"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "byteorder",
+ "gltf",
+ "gltf-json",
+ "half",
  "serde_json",
  "thiserror",
  "ugx",

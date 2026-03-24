@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use zerocopy::{FromBytes, Immutable, KnownLayout};
 
 use crate::error::{Error, Result};
-use crate::univert_packer::UnivertPacker;
+use crate::univert_packer::{UnivertPacker, UnpackedVertex};
 
 // ============================================================================
 // Zerocopy raw overlays
@@ -647,4 +647,107 @@ impl Keyframe {
         *pos = verts_end;
         Ok(Self { time, verts })
     }
+}
+
+// ============================================================================
+// Core geometry types (UgxGeom, GrannyBone, GrannyMesh)
+// ============================================================================
+
+/// Parsed UGX geometry data.
+#[derive(Debug, Clone)]
+pub struct UgxGeom {
+    /// Bounding sphere.
+    pub bounding_sphere: Sphere,
+    /// Axis-aligned bounding box.
+    pub bounds: AABB,
+    /// Materials.
+    pub materials: Vec<Material>,
+    /// Bones (from cached data chunk 0x700).
+    pub bones: Vec<Bone>,
+    /// Granny bone data (from granny chunk 0x703) - contains inverse world matrices.
+    pub granny_bones: Vec<GrannyBone>,
+    /// Granny mesh data (from granny chunk 0x703) - contains mesh names and bone bindings.
+    pub granny_meshes: Vec<GrannyMesh>,
+    /// Per-bone bounding boxes.
+    pub bone_bounds: Vec<AABB>,
+    /// Mesh sections.
+    pub sections: Vec<Section>,
+    /// Raw vertex buffer.
+    pub vertex_buffer: Vec<u8>,
+    /// Raw index buffer (u16 indices).
+    pub index_buffer: Vec<u16>,
+    /// Is the entire mesh rigid (single bone)?
+    pub rigid_only: bool,
+    /// Rigid bone index (if rigid_only).
+    pub rigid_bone_index: i32,
+    /// Are all sections rigid (multi-bone rigid)?
+    pub all_sections_rigid: bool,
+    /// Are all sections skinned?
+    pub all_sections_skinned: bool,
+    /// Use global bones?
+    pub global_bones: bool,
+}
+
+impl UgxGeom {
+    /// Get unpacked vertices for a section.
+    pub fn unpack_section_vertices(&self, section_idx: usize) -> Result<Vec<UnpackedVertex>> {
+        let section = &self.sections[section_idx];
+        let packer = &section.base_vert_packer;
+
+        let vb_start = section.vb_offset as usize;
+        let vb_end = vb_start + section.vb_bytes as usize;
+        let vb_slice = &self.vertex_buffer[vb_start..vb_end];
+
+        let mut vb_pos = 0usize;
+        let mut vertices = Vec::with_capacity(section.num_verts as usize);
+
+        for _ in 0..section.num_verts {
+            let vert = packer.unpack_vertex(vb_slice, &mut vb_pos)?;
+            vertices.push(vert);
+        }
+
+        Ok(vertices)
+    }
+
+    /// Get indices for a section.
+    pub fn get_section_indices(&self, section_idx: usize) -> Vec<u16> {
+        let section = &self.sections[section_idx];
+        let start = section.ib_offset as usize;
+        let count = section.num_tris as usize * 3;
+        self.index_buffer[start..start + count].to_vec()
+    }
+
+    /// Get total vertex count across all sections.
+    pub fn total_vertices(&self) -> usize {
+        self.sections.iter().map(|s| s.num_verts as usize).sum()
+    }
+
+    /// Get total triangle count across all sections.
+    pub fn total_triangles(&self) -> usize {
+        self.sections.iter().map(|s| s.num_tris as usize).sum()
+    }
+}
+
+/// Bone data from granny chunk (0x703).
+/// This has the correct inverse world matrix for positioning bones.
+#[derive(Debug, Clone, Default)]
+pub struct GrannyBone {
+    /// Bone name.
+    pub name: String,
+    /// Parent bone index (-1 for root).
+    pub parent_index: i32,
+    /// Inverse world matrix (4x4) - read from offset 80 in granny bone struct.
+    /// To get world matrix: invert then transpose this matrix.
+    pub inverse_world_matrix: Matrix4x4,
+}
+
+/// Mesh data from granny chunk (0x703).
+/// Each mesh has a name and a list of bone bindings for skinning.
+#[derive(Debug, Clone, Default)]
+pub struct GrannyMesh {
+    /// Mesh name (e.g., "marine_01", "optionalAssaultRifle").
+    pub name: String,
+    /// Bone names that this mesh is bound to (for skinning).
+    /// Each entry is the name of a bone in the skeleton.
+    pub bone_bindings: Vec<String>,
 }

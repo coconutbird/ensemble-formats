@@ -4,9 +4,9 @@ use clap::{Parser, Subcommand};
 use ecf::Reader as EcfReader;
 use std::fs;
 use std::path::PathBuf;
-use ugx::{
-    GltfExportOptions, GltfImportOptions, Reader as UgxReader, Writer as UgxWriter,
-    export_to_gltf_with_buffer_name, import_from_gltf,
+use ugx::{Reader as UgxReader, Writer as UgxWriter};
+use ugx_gltf::{
+    GltfExportOptions, GltfImportOptions, export_to_gltf_with_buffer_name, import_from_gltf,
 };
 
 #[derive(Parser)]

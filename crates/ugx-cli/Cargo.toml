@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 ugx = { workspace = true }
+ugx-gltf = { workspace = true }
 ecf = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }

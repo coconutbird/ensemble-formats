@@ -9,6 +9,7 @@ members = [
     "crates/xml",
     "crates/xmb",
     "crates/ugx",
+    "crates/ugx-gltf",
     "crates/xtd",
     "crates/xtt",
     "crates/era-cli",
@@ -32,6 +33,7 @@ era = { path = "crates/era" }
 uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
 ugx = { path = "crates/ugx" }
+ugx-gltf = { path = "crates/ugx-gltf" }
 xtd = { path = "crates/xtd" }
 xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }

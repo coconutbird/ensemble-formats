@@ -32,25 +32,13 @@ mod vertex_element;
 pub use vertex_element::VertexElementType;
 
 mod univert_packer;
-pub use univert_packer::{UnivertPacker, UnpackedVertex};
+pub use univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
 
 mod types;
 pub use types::*;
 
 mod reader;
-pub use reader::{GrannyBone, GrannyMesh, Reader, UgxGeom};
-
-#[cfg(feature = "std")]
-mod gltf_export;
-#[cfg(feature = "std")]
-pub use gltf_export::{
-    GltfExport, GltfExportOptions, export_to_gltf, export_to_gltf_with_buffer_name,
-};
-
-#[cfg(feature = "std")]
-mod gltf_import;
-#[cfg(feature = "std")]
-pub use gltf_import::{GltfImportOptions, import_from_gltf};
+pub use reader::Reader;
 
 #[cfg(feature = "std")]
 mod writer;

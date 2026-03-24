@@ -13,8 +13,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{Cursor, Seek, Write};
 
 use crate::error::Result;
-use crate::reader::UgxGeom;
-use crate::types::{MapType, Material};
+use crate::types::{MapType, Material, Matrix4x4, UgxGeom};
 
 /// ECF chunk IDs for UGX.
 const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
@@ -137,8 +136,6 @@ const GRANNY_HAS_SCALE_SHEAR: u32 = 0x4;
 /// Local transforms are computed from inverse world matrices: for each bone,
 /// `local = parent_world_inverse * world` where `world = inverse(inverse_world)`.
 fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
-    use crate::types::Matrix4x4;
-
     let bone_count = geom.granny_bones.len();
     let section_count = geom.sections.len();
 
@@ -348,10 +345,12 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let total_bone_bindings: usize = mesh_bone_bindings.iter().map(|v| v.len()).sum();
 
     // Calculate offsets for all structures
-    let header_size: usize = 0x70; // file_info header
+    let header_size: usize = 0x94; // GrannyFileInfo: full 148-byte struct
+    // (13 fields: ArtToolInfo..ExtendedData)
+    // Must match engine's type descriptor at off_14145C7D0
 
     // Skeleton pointer array (1 entry)
-    let skeleton_ptr_array_offset = header_size; // 0x70
+    let skeleton_ptr_array_offset = header_size;
     let skeleton_ptr_array_size = 8;
 
     // Skeleton struct
@@ -393,7 +392,11 @@ fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; strings_start];
     let mut cursor = Cursor::new(&mut buf);
 
-    // ---- File info header [0x00..0x70] ----
+    // ---- File info header [0x00..0x94] ----
+    // Fields not written (zero = count 0 / NULL pointer) are skipped by RebasePointers:
+    //   +0x00 ArtToolInfo, +0x08 ExporterInfo, +0x18 Textures, +0x24 Materials,
+    //   +0x3C VertexDatas, +0x48 TriTopologies, +0x6C TrackGroups, +0x78 Animations,
+    //   +0x84 ExtendedData
     // [0x10]: u64 "gr2ugx" string offset (will be fixed up later via string_fixups)
 
     // [0x30]: u32 SkeletonCount = 1
@@ -1083,7 +1086,6 @@ fn build_material_node(mat: &Material) -> bdt::Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reader::GrannyBone;
     use crate::types::*;
     use crate::univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
     use crate::vertex_element::VertexElementType;

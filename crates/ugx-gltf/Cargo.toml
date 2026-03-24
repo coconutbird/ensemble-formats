@@ -1,0 +1,18 @@
+[package]
+name = "ugx-gltf"
+description = "glTF import/export for UGX (Unit Graphics) models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ugx = { workspace = true }
+thiserror = { workspace = true }
+half = { workspace = true }
+byteorder = { workspace = true }
+gltf-json = { version = "1.4", features = ["names", "extras"] }
+gltf = "1.4"
+serde_json = "1.0"
+base64 = "0.22"
