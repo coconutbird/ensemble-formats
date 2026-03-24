@@ -510,6 +510,9 @@ fn compress_data(data: &[u8]) -> CompressedData {
     let hash = Tiger::digest(&compressed);
     let mut tiger128 = [0u8; 16];
     tiger128.copy_from_slice(&hash[..16]);
+    // Tiger outputs 64-bit words in little-endian; the game stores them big-endian.
+    tiger128[0..8].reverse();
+    tiger128[8..16].reverse();
 
     CompressedData {
         data: compressed,
