@@ -8,8 +8,7 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use byteorder::{LittleEndian, WriteBytesExt};
-use std::io::{Cursor, Seek};
+use ecf::io::{MutCursor, Seek, SeekFrom, WriteLe};
 
 use crate::error::Result;
 use crate::raw::{
@@ -205,72 +204,64 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let strings_start = bone_bindings_start + total_bone_bindings * GRANNY_BONE_BINDING_SIZE;
 
     let mut buf = vec![0u8; strings_start];
-    let mut cursor = Cursor::new(&mut buf);
+    let mut cursor = MutCursor::new(&mut buf);
 
     // ---- File info header [0x00..0x94] ----
-    cursor.seek(std::io::SeekFrom::Start(0x30))?;
-    cursor.write_u32::<LittleEndian>(1)?; // SkeletonCount
-    cursor.write_u64::<LittleEndian>(skeleton_ptr_array_offset as u64)?;
+    cursor.seek(SeekFrom::Start(0x30))?;
+    cursor.write_u32_le(1)?; // SkeletonCount
+    cursor.write_u64_le(skeleton_ptr_array_offset as u64)?;
 
-    cursor.seek(std::io::SeekFrom::Start(0x54))?;
-    cursor.write_u32::<LittleEndian>(mesh_count as u32)?;
-    cursor.write_u64::<LittleEndian>(mesh_ptrs_start as u64)?;
+    cursor.seek(SeekFrom::Start(0x54))?;
+    cursor.write_u32_le(mesh_count as u32)?;
+    cursor.write_u64_le(mesh_ptrs_start as u64)?;
 
-    cursor.seek(std::io::SeekFrom::Start(0x60))?;
-    cursor.write_u32::<LittleEndian>(1)?; // ModelCount
-    cursor.write_u64::<LittleEndian>(model_ptr_array_offset as u64)?;
+    cursor.seek(SeekFrom::Start(0x60))?;
+    cursor.write_u32_le(1)?; // ModelCount
+    cursor.write_u64_le(model_ptr_array_offset as u64)?;
 
     // ---- Skeleton pointer array ----
-    cursor.seek(std::io::SeekFrom::Start(skeleton_ptr_array_offset as u64))?;
-    cursor.write_u64::<LittleEndian>(skeleton_struct_offset as u64)?;
+    cursor.seek(SeekFrom::Start(skeleton_ptr_array_offset as u64))?;
+    cursor.write_u64_le(skeleton_struct_offset as u64)?;
 
     // ---- Skeleton struct ----
-    cursor.seek(std::io::SeekFrom::Start(
-        (skeleton_struct_offset + 0x08) as u64,
-    ))?;
-    cursor.write_u32::<LittleEndian>(bone_count as u32)?;
-    cursor.write_u64::<LittleEndian>(bones_start as u64)?;
-    cursor.write_u32::<LittleEndian>(0)?; // LODType
+    cursor.seek(SeekFrom::Start((skeleton_struct_offset + 0x08) as u64))?;
+    cursor.write_u32_le(bone_count as u32)?;
+    cursor.write_u64_le(bones_start as u64)?;
+    cursor.write_u32_le(0)?; // LODType
 
     // ---- Model pointer array ----
-    cursor.seek(std::io::SeekFrom::Start(model_ptr_array_offset as u64))?;
-    cursor.write_u64::<LittleEndian>(model_struct_offset as u64)?;
+    cursor.seek(SeekFrom::Start(model_ptr_array_offset as u64))?;
+    cursor.write_u64_le(model_struct_offset as u64)?;
 
     // ---- Model struct ----
-    cursor.seek(std::io::SeekFrom::Start(
-        (model_struct_offset + 0x08) as u64,
-    ))?;
-    cursor.write_u64::<LittleEndian>(skeleton_struct_offset as u64)?;
+    cursor.seek(SeekFrom::Start((model_struct_offset + 0x08) as u64))?;
+    cursor.write_u64_le(skeleton_struct_offset as u64)?;
 
     // InitialPlacement (identity transform)
-    cursor.seek(std::io::SeekFrom::Start(
-        (model_struct_offset + 0x10) as u64,
-    ))?;
-    cursor.write_u32::<LittleEndian>(0)?; // Flags
+    cursor.seek(SeekFrom::Start((model_struct_offset + 0x10) as u64))?;
+    cursor.write_u32_le(0)?; // Flags
     for _ in 0..3 {
-        cursor.write_f32::<LittleEndian>(0.0)?;
+        cursor.write_f32_le(0.0)?;
     } // Position
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(1.0)?; // Orientation w=1
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(1.0)?; // Orientation w=1
     // ScaleShear identity 3x3
-    cursor.write_f32::<LittleEndian>(1.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(1.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(0.0)?;
-    cursor.write_f32::<LittleEndian>(1.0)?;
+    cursor.write_f32_le(1.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(1.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(0.0)?;
+    cursor.write_f32_le(1.0)?;
 
     // MeshBindingCount + MeshBindings
-    cursor.seek(std::io::SeekFrom::Start(
-        (model_struct_offset + 0x54) as u64,
-    ))?;
-    cursor.write_u32::<LittleEndian>(mesh_count as u32)?;
-    cursor.write_u64::<LittleEndian>(mesh_bindings_start as u64)?;
+    cursor.seek(SeekFrom::Start((model_struct_offset + 0x54) as u64))?;
+    cursor.write_u32_le(mesh_count as u32)?;
+    cursor.write_u64_le(mesh_bindings_start as u64)?;
 
     // ---- Bone array ----
     let mut strings = super::string_table::StringTable::new();
@@ -281,42 +272,42 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
         strings.add(base, bone.name.clone());
 
-        cursor.seek(std::io::SeekFrom::Start((base + 0x08) as u64))?;
-        cursor.write_i32::<LittleEndian>(bone.parent_index)?;
-        cursor.write_u32::<LittleEndian>(lt.flags)?;
+        cursor.seek(SeekFrom::Start((base + 0x08) as u64))?;
+        cursor.write_i32_le(bone.parent_index)?;
+        cursor.write_u32_le(lt.flags)?;
         for &v in &lt.position {
-            cursor.write_f32::<LittleEndian>(v)?;
+            cursor.write_f32_le(v)?;
         }
         for &v in &lt.orientation {
-            cursor.write_f32::<LittleEndian>(v)?;
+            cursor.write_f32_le(v)?;
         }
         for row in &lt.scale_shear {
             for &v in row {
-                cursor.write_f32::<LittleEndian>(v)?;
+                cursor.write_f32_le(v)?;
             }
         }
         for row in &bone.inverse_world_matrix.rows {
             for &val in row {
-                cursor.write_f32::<LittleEndian>(val)?;
+                cursor.write_f32_le(val)?;
             }
         }
-        cursor.write_f32::<LittleEndian>(geom.bounding_sphere.radius)?;
+        cursor.write_f32_le(geom.bounding_sphere.radius)?;
     }
 
     // ---- Model mesh bindings (for Model->MeshBindings) ----
     for i in 0..mesh_count {
         let binding_pos = mesh_bindings_start + i * 8;
         let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
-        cursor.seek(std::io::SeekFrom::Start(binding_pos as u64))?;
-        cursor.write_u64::<LittleEndian>(mesh_struct_pos as u64)?;
+        cursor.seek(SeekFrom::Start(binding_pos as u64))?;
+        cursor.write_u64_le(mesh_struct_pos as u64)?;
     }
 
     // ---- Mesh pointer array (for file_info->Meshes) ----
     for i in 0..mesh_count {
         let ptr_pos = mesh_ptrs_start + i * 8;
         let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
-        cursor.seek(std::io::SeekFrom::Start(ptr_pos as u64))?;
-        cursor.write_u64::<LittleEndian>(mesh_struct_pos as u64)?;
+        cursor.seek(SeekFrom::Start(ptr_pos as u64))?;
+        cursor.write_u64_le(mesh_struct_pos as u64)?;
     }
 
     // ---- Full mesh structs (0x4C bytes each) ----
@@ -328,12 +319,12 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         strings.add(mesh_struct_pos, mesh_names[i].clone());
 
         // +0x30: BoneBindingCount
-        cursor.seek(std::io::SeekFrom::Start((mesh_struct_pos + 0x30) as u64))?;
-        cursor.write_u32::<LittleEndian>(bone_binding_count as u32)?;
+        cursor.seek(SeekFrom::Start((mesh_struct_pos + 0x30) as u64))?;
+        cursor.write_u32_le(bone_binding_count as u32)?;
 
         // +0x34: BoneBindings pointer
         if bone_binding_count > 0 {
-            cursor.write_u64::<LittleEndian>(current_bone_binding_offset as u64)?;
+            cursor.write_u64_le(current_bone_binding_offset as u64)?;
         }
 
         current_bone_binding_offset += bone_binding_count * GRANNY_BONE_BINDING_SIZE;

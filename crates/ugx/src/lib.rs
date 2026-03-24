@@ -42,7 +42,5 @@ mod reader;
 mod rebuild;
 pub use reader::Reader;
 
-#[cfg(feature = "std")]
 mod writer;
-#[cfg(feature = "std")]
 pub use writer::Writer;

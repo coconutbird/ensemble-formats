@@ -39,42 +39,33 @@ impl StringTable {
     /// need alignment (e.g. cached data uses 2-byte alignment) should pad the buffer
     /// before calling this, or use [`Self::write_aligned`].
     pub fn write(self, buf: &mut Vec<u8>) {
-        let mut offsets = std::collections::HashMap::<String, usize>::new();
-
-        for fixup in &self.fixups {
-            if !offsets.contains_key(&fixup.string) {
-                let offset = buf.len();
-                offsets.insert(fixup.string.clone(), offset);
-                buf.extend_from_slice(fixup.string.as_bytes());
-                buf.push(0);
-            }
-        }
-
-        for fixup in &self.fixups {
-            let offset = offsets[&fixup.string] as u64;
-            buf[fixup.position..fixup.position + 8].copy_from_slice(&offset.to_le_bytes());
-        }
+        self.write_inner(buf, 1);
     }
 
     /// Like [`Self::write`], but pads each string entry to `align`-byte boundaries.
     pub fn write_aligned(self, buf: &mut Vec<u8>, align: usize) {
-        let mut offsets = std::collections::HashMap::<String, usize>::new();
+        self.write_inner(buf, align);
+    }
+
+    fn write_inner(self, buf: &mut Vec<u8>, align: usize) {
+        let mut offsets: Vec<(String, usize)> = Vec::new();
 
         for fixup in &self.fixups {
-            if !offsets.contains_key(&fixup.string) {
+            if offsets.iter().all(|(s, _)| s != &fixup.string) {
                 let offset = buf.len();
-                offsets.insert(fixup.string.clone(), offset);
+                offsets.push((fixup.string.clone(), offset));
                 buf.extend_from_slice(fixup.string.as_bytes());
                 buf.push(0);
-                // Pad to alignment.
-                while !buf.len().is_multiple_of(align) {
-                    buf.push(0);
+                if align > 1 {
+                    while !buf.len().is_multiple_of(align) {
+                        buf.push(0);
+                    }
                 }
             }
         }
 
         for fixup in &self.fixups {
-            let offset = offsets[&fixup.string] as u64;
+            let offset = offsets.iter().find(|(s, _)| s == &fixup.string).unwrap().1 as u64;
             buf[fixup.position..fixup.position + 8].copy_from_slice(&offset.to_le_bytes());
         }
     }

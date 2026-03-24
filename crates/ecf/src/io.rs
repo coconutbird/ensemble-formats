@@ -49,6 +49,9 @@ impl core::fmt::Display for IoError {
     }
 }
 
+#[cfg(not(feature = "std"))]
+impl core::error::Error for IoError {}
+
 /// Minimal read trait (no_std replacement for `std::io::Read`).
 #[cfg(not(feature = "std"))]
 pub trait Read {
@@ -75,6 +78,11 @@ pub trait Read {
 pub trait Seek {
     /// Seek to a position in the stream.
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError>;
+
+    /// Return the current stream position.
+    fn stream_position(&mut self) -> Result<u64, IoError> {
+        self.seek(SeekFrom::Current(0))
+    }
 }
 
 /// Minimal write trait (no_std replacement for `std::io::Write`).
@@ -236,3 +244,97 @@ impl Seek for SliceCursor<'_> {
         Ok(new_pos as u64)
     }
 }
+
+/// A seekable, growable cursor over a `&mut Vec<u8>` — `no_std` replacement
+/// for `std::io::Cursor<&mut Vec<u8>>`.
+///
+/// Writes at the current position overwrite existing bytes. Writes past the
+/// end extend the vector with zeroes as needed.
+pub struct MutCursor<'a> {
+    buf: &'a mut alloc::vec::Vec<u8>,
+    pos: usize,
+}
+
+impl<'a> MutCursor<'a> {
+    /// Create a new cursor at position 0.
+    pub fn new(buf: &'a mut alloc::vec::Vec<u8>) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    /// Current byte offset.
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+
+    /// Current stream position as `u64` (mirrors `std::io::Cursor::stream_position`).
+    pub fn stream_position(&self) -> Result<u64, IoError> {
+        Ok(self.pos as u64)
+    }
+}
+
+impl Write for MutCursor<'_> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, IoError> {
+        let end = self.pos + buf.len();
+        if end > self.buf.len() {
+            self.buf.resize(end, 0);
+        }
+        self.buf[self.pos..end].copy_from_slice(buf);
+        self.pos = end;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), IoError> {
+        Ok(())
+    }
+}
+
+impl Seek for MutCursor<'_> {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError> {
+        let new_pos = match pos {
+            SeekFrom::Start(n) => n as usize,
+            SeekFrom::Current(n) => if n >= 0 {
+                self.pos.checked_add(n as usize)
+            } else {
+                self.pos.checked_sub((-n) as usize)
+            }
+            .ok_or(invalid_seek())?,
+            SeekFrom::End(n) => if n >= 0 {
+                self.buf.len().checked_add(n as usize)
+            } else {
+                self.buf.len().checked_sub((-n) as usize)
+            }
+            .ok_or(invalid_seek())?,
+        };
+        self.pos = new_pos;
+        Ok(new_pos as u64)
+    }
+}
+
+/// Extension trait for writing little-endian primitives.
+///
+/// Provided for any type implementing [`Write`], replacing the need for
+/// the `byteorder` crate.
+pub trait WriteLe: Write {
+    /// Write a `u8`.
+    fn write_u8(&mut self, v: u8) -> Result<(), IoError> {
+        self.write_all(&[v])
+    }
+    /// Write a little-endian `u32`.
+    fn write_u32_le(&mut self, v: u32) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+    /// Write a little-endian `i32`.
+    fn write_i32_le(&mut self, v: i32) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+    /// Write a little-endian `u64`.
+    fn write_u64_le(&mut self, v: u64) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+    /// Write a little-endian `f32`.
+    fn write_f32_le(&mut self, v: f32) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+}
+
+impl<T: Write + ?Sized> WriteLe for T {}

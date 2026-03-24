@@ -50,10 +50,9 @@ pub enum Error {
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
 
-    /// I/O error (std feature only).
-    #[cfg(feature = "std")]
+    /// I/O error.
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] ecf::io::IoError),
 }
 
 /// Result type for UGX operations.

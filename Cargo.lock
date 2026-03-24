@@ -1282,7 +1282,6 @@ name = "ugx"
 version = "0.1.0"
 dependencies = [
  "bdt",
- "byteorder",
  "ecf",
  "half",
  "thiserror",

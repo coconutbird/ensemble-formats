@@ -9,7 +9,7 @@ authors.workspace = true
 
 [features]
 default = ["std"]
-std = ["dep:byteorder"]
+std = ["ecf/std"]
 
 [dependencies]
 bdt = { workspace = true }
@@ -17,8 +17,5 @@ ecf = { workspace = true }
 thiserror = { workspace = true }
 half = { workspace = true }
 zerocopy.workspace = true
-
-# std-only deps (writer)
-byteorder = { workspace = true, optional = true }
 
 [dev-dependencies]

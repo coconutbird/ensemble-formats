@@ -11,8 +11,7 @@
 
 use alloc::vec::Vec;
 
-use byteorder::{LittleEndian, WriteBytesExt};
-use std::io::{Cursor, Seek, Write};
+use ecf::io::{MutCursor, Seek, SeekFrom, Write, WriteLe};
 use zerocopy::IntoBytes;
 
 use crate::chunk_ids::GEOM_HEADER_SIGNATURE;
@@ -23,7 +22,7 @@ use crate::types::{Accessory, UgxGeom};
 /// Build the cached data chunk (0x700).
 pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
-    let mut cursor = Cursor::new(&mut buf);
+    let mut cursor = MutCursor::new(&mut buf);
 
     // ---- Geometry header via zerocopy struct ----
     let header = GeomHeaderRaw {
@@ -118,28 +117,28 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         // UnivertPacker (84 bytes)
         let packer = &section.base_vert_packer;
         let pack_order_fixup_pos = cursor.stream_position()?;
-        cursor.write_u64::<LittleEndian>(0)?;
+        cursor.write_u64_le(0)?;
         strings.add(pack_order_fixup_pos as usize, packer.pack_order.clone());
         let decl_order_fixup_pos = cursor.stream_position()?;
-        cursor.write_u64::<LittleEndian>(0)?;
+        cursor.write_u64_le(0)?;
         strings.add(decl_order_fixup_pos as usize, packer.decl_order.clone());
 
-        cursor.write_u32::<LittleEndian>(packer.pos_type as u32)?;
-        cursor.write_u32::<LittleEndian>(packer.basis_type as u32)?;
-        cursor.write_u32::<LittleEndian>(packer.basis_scale_type as u32)?;
-        cursor.write_u32::<LittleEndian>(packer.tangent_type as u32)?;
-        cursor.write_u32::<LittleEndian>(packer.normal_type as u32)?;
+        cursor.write_u32_le(packer.pos_type as u32)?;
+        cursor.write_u32_le(packer.basis_type as u32)?;
+        cursor.write_u32_le(packer.basis_scale_type as u32)?;
+        cursor.write_u32_le(packer.tangent_type as u32)?;
+        cursor.write_u32_le(packer.normal_type as u32)?;
         for i in 0..8 {
-            cursor.write_u32::<LittleEndian>(packer.uv_types[i] as u32)?;
+            cursor.write_u32_le(packer.uv_types[i] as u32)?;
         }
-        cursor.write_u32::<LittleEndian>(packer.indices_type as u32)?;
-        cursor.write_u32::<LittleEndian>(packer.weights_type as u32)?;
-        cursor.write_u32::<LittleEndian>(packer.diffuse_type as u32)?;
-        cursor.write_u32::<LittleEndian>(packer.index_type as u32)?;
+        cursor.write_u32_le(packer.indices_type as u32)?;
+        cursor.write_u32_le(packer.weights_type as u32)?;
+        cursor.write_u32_le(packer.diffuse_type as u32)?;
+        cursor.write_u32_le(packer.index_type as u32)?;
 
-        cursor.write_i32::<LittleEndian>(if section.rigid_only { 1 } else { 0 })?;
-        cursor.write_i32::<LittleEndian>(if section.global_bones { 1 } else { 0 })?;
-        cursor.write_i32::<LittleEndian>(0)?; // padding
+        cursor.write_i32_le(if section.rigid_only { 1 } else { 0 })?;
+        cursor.write_i32_le(if section.global_bones { 1 } else { 0 })?;
+        cursor.write_i32_le(0)?; // padding
     }
 
     // ---- Bone remap data ----
@@ -148,9 +147,9 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         let remap_offset = cursor.stream_position()?;
         cursor.write_all(&geom.sections[section_idx].bone_remap)?;
         let saved_pos = cursor.stream_position()?;
-        cursor.seek(std::io::SeekFrom::Start((header_pos + 8) as u64))?;
-        cursor.write_u64::<LittleEndian>(remap_offset)?;
-        cursor.seek(std::io::SeekFrom::Start(saved_pos))?;
+        cursor.seek(SeekFrom::Start((header_pos + 8) as u64))?;
+        cursor.write_u64_le(remap_offset)?;
+        cursor.seek(SeekFrom::Start(saved_pos))?;
     }
 
     // ---- Bone data ----
@@ -192,7 +191,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let num_bone_bounds = geom.bone_bounds.len() as u32;
     for bb in &geom.bone_bounds {
         for &v in &bb.min {
-            cursor.write_f32::<LittleEndian>(v)?;
+            cursor.write_f32_le(v)?;
         }
     }
 
@@ -200,7 +199,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let bounds_high_offset = cursor.stream_position()?;
     for bb in &geom.bone_bounds {
         for &v in &bb.max {
-            cursor.write_f32::<LittleEndian>(v)?;
+            cursor.write_f32_le(v)?;
         }
     }
 
@@ -221,7 +220,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     strings.write_aligned(&mut buf, 2);
 
     // ---- Fix up packed array headers ----
-    let mut cursor = Cursor::new(&mut buf);
+    let mut cursor = MutCursor::new(&mut buf);
     fixup_packed_array_header(
         &mut cursor,
         sections_header_pos,
@@ -272,7 +271,7 @@ fn pad_to_alignment<W: Write + Seek>(writer: &mut W, alignment: u64) -> Result<(
 
 /// Fix up a packed array header at the given position using zerocopy.
 fn fixup_packed_array_header(
-    cursor: &mut Cursor<&mut Vec<u8>>,
+    cursor: &mut MutCursor<'_>,
     header_pos: usize,
     count: u32,
     offset: u64,
@@ -283,7 +282,7 @@ fn fixup_packed_array_header(
         _padding: [0; 4],
         offset: final_offset.to_le_bytes(),
     };
-    cursor.seek(std::io::SeekFrom::Start(header_pos as u64))?;
+    cursor.seek(SeekFrom::Start(header_pos as u64))?;
     cursor.write_all(arr.as_bytes())?;
     Ok(())
 }
@@ -293,7 +292,7 @@ fn fixup_packed_array_header(
 /// Each accessory's `mObjectIndices` packed array offset is written as a placeholder (0)
 /// and recorded in `inner_fixups` for later patching by `write_accessory_indices`.
 fn write_accessories(
-    cursor: &mut Cursor<&mut Vec<u8>>,
+    cursor: &mut MutCursor<'_>,
     accessories: &[Accessory],
 ) -> Result<(u64, u32, Vec<usize>)> {
     let count = accessories.len() as u32;
@@ -337,7 +336,7 @@ fn write_accessories(
 
 /// Write the actual i32 index data for each accessory and fix up the inner offsets.
 fn write_accessory_indices(
-    cursor: &mut Cursor<&mut Vec<u8>>,
+    cursor: &mut MutCursor<'_>,
     accessories: &[Accessory],
     inner_fixups: &[usize],
 ) -> Result<()> {
@@ -351,14 +350,14 @@ fn write_accessory_indices(
         let data_offset = cursor.stream_position()?;
 
         for &idx in &acc.object_indices {
-            cursor.write_i32::<LittleEndian>(idx)?;
+            cursor.write_i32_le(idx)?;
         }
 
         // Patch the inner packed array offset
         let saved = cursor.stream_position()?;
-        cursor.seek(std::io::SeekFrom::Start(inner_fixups[fixup_idx] as u64))?;
-        cursor.write_u64::<LittleEndian>(data_offset)?;
-        cursor.seek(std::io::SeekFrom::Start(saved))?;
+        cursor.seek(SeekFrom::Start(inner_fixups[fixup_idx] as u64))?;
+        cursor.write_u64_le(data_offset)?;
+        cursor.seek(SeekFrom::Start(saved))?;
 
         fixup_idx += 1;
     }
