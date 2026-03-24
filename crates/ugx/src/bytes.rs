@@ -75,3 +75,12 @@ pub(crate) fn read_u64_le(data: &[u8], pos: &mut usize) -> Result<u64> {
 pub(crate) fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32> {
     Ok(f32::from_bits(read_u32_le(data, pos)?))
 }
+
+/// Read a null-terminated string from `data`.
+///
+/// Returns the string up to (but not including) the first NUL byte,
+/// or the entire slice if no NUL is found.
+pub(crate) fn read_null_terminated_string(data: &[u8]) -> Result<String> {
+    let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+    Ok(String::from_utf8(data[..end].to_vec())?)
+}

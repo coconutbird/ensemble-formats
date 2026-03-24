@@ -14,9 +14,11 @@ use alloc::vec::Vec;
 
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{Cursor, Seek, Write};
+use zerocopy::IntoBytes;
 
 use crate::chunk_ids::GEOM_HEADER_SIGNATURE;
 use crate::error::Result;
+use crate::raw::{GeomHeaderRaw, PackedArrayRaw};
 use crate::types::UgxGeom;
 
 /// Build the cached data chunk (0x700).
@@ -24,20 +26,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut cursor = Cursor::new(&mut buf);
 
-    // ---- Geometry header (BUGXGeomHeader, 60 bytes) ----
-    cursor.write_u32::<LittleEndian>(GEOM_HEADER_SIGNATURE)?;
-    cursor.write_i32::<LittleEndian>(geom.rigid_bone_index)?;
-    for &v in &geom.bounding_sphere.center {
-        cursor.write_f32::<LittleEndian>(v)?;
-    }
-    cursor.write_f32::<LittleEndian>(geom.bounding_sphere.radius)?;
-    for &v in &geom.bounds.min {
-        cursor.write_f32::<LittleEndian>(v)?;
-    }
-    for &v in &geom.bounds.max {
-        cursor.write_f32::<LittleEndian>(v)?;
-    }
-    cursor.write_i16::<LittleEndian>(1)?; // mMaxInstances
+    // ---- Geometry header via zerocopy struct ----
     let max_vertex_index = geom
         .sections
         .iter()
@@ -45,28 +34,56 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         .max()
         .unwrap_or(1);
     let instance_index_multiplier = (max_vertex_index).next_power_of_two() as i16;
-    cursor.write_i16::<LittleEndian>(instance_index_multiplier)?;
-    cursor.write_i16::<LittleEndian>(i16::MAX)?; // mLargeGeomBoneIndex
-    cursor.write_u8(if geom.all_sections_rigid { 1 } else { 0 })?;
-    cursor.write_u8(if geom.global_bones { 1 } else { 0 })?;
-    cursor.write_u8(if geom.all_sections_skinned { 1 } else { 0 })?;
-    cursor.write_u8(if geom.rigid_only { 1 } else { 0 })?;
-    cursor.write_u16::<LittleEndian>(0)?; // padding
-    cursor.write_u32::<LittleEndian>(0)?; // padding
 
-    // ---- Packed array headers ----
+    let header = GeomHeaderRaw {
+        signature: GEOM_HEADER_SIGNATURE.to_le_bytes(),
+        rigid_bone_index: geom.rigid_bone_index.to_le_bytes(),
+        sphere_center: [
+            geom.bounding_sphere.center[0].to_le_bytes(),
+            geom.bounding_sphere.center[1].to_le_bytes(),
+            geom.bounding_sphere.center[2].to_le_bytes(),
+        ],
+        sphere_radius: geom.bounding_sphere.radius.to_le_bytes(),
+        aabb_min: [
+            geom.bounds.min[0].to_le_bytes(),
+            geom.bounds.min[1].to_le_bytes(),
+            geom.bounds.min[2].to_le_bytes(),
+        ],
+        aabb_max: [
+            geom.bounds.max[0].to_le_bytes(),
+            geom.bounds.max[1].to_le_bytes(),
+            geom.bounds.max[2].to_le_bytes(),
+        ],
+        max_instances: 1i16.to_le_bytes(),
+        instance_index_multiplier: instance_index_multiplier.to_le_bytes(),
+        large_geom_bone_index: i16::MAX.to_le_bytes(),
+        all_sections_rigid: if geom.all_sections_rigid { 1 } else { 0 },
+        global_bones: if geom.global_bones { 1 } else { 0 },
+        all_sections_skinned: if geom.all_sections_skinned { 1 } else { 0 },
+        rigid_only: if geom.rigid_only { 1 } else { 0 },
+        _padding: [0; 2],
+        _padding2: [0; 4],
+    };
+    cursor.write_all(header.as_bytes())?;
+
+    // ---- Packed array headers (6 × 16 bytes, placeholders) ----
+    let empty_arr = PackedArrayRaw {
+        count: [0; 4],
+        _padding: [0; 4],
+        offset: [0; 8],
+    };
     let sections_header_pos = cursor.stream_position()? as usize;
-    write_packed_array_header_placeholder(&mut cursor)?;
+    cursor.write_all(empty_arr.as_bytes())?;
     let bones_header_pos = cursor.stream_position()? as usize;
-    write_packed_array_header_placeholder(&mut cursor)?;
+    cursor.write_all(empty_arr.as_bytes())?;
     let accessories_header_pos = cursor.stream_position()? as usize;
-    write_packed_array_header_placeholder(&mut cursor)?;
+    cursor.write_all(empty_arr.as_bytes())?;
     let valid_acc_header_pos = cursor.stream_position()? as usize;
-    write_packed_array_header_placeholder(&mut cursor)?;
+    cursor.write_all(empty_arr.as_bytes())?;
     let bounds_low_header_pos = cursor.stream_position()? as usize;
-    write_packed_array_header_placeholder(&mut cursor)?;
+    cursor.write_all(empty_arr.as_bytes())?;
     let bounds_high_header_pos = cursor.stream_position()? as usize;
-    write_packed_array_header_placeholder(&mut cursor)?;
+    cursor.write_all(empty_arr.as_bytes())?;
 
     // ---- Section data ----
     let sections_offset = cursor.stream_position()?;
@@ -80,25 +97,34 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let mut bone_remap_fixups: Vec<(usize, usize)> = Vec::new();
 
     for (section_idx, section) in geom.sections.iter().enumerate() {
-        cursor.write_i32::<LittleEndian>(section.material_index)?;
-        cursor.write_i32::<LittleEndian>(section.accessory_index)?;
-        cursor.write_i32::<LittleEndian>(section.max_bones)?;
-        cursor.write_i32::<LittleEndian>(section.rigid_bone_index)?;
-        cursor.write_i32::<LittleEndian>(section.ib_offset)?;
-        cursor.write_i32::<LittleEndian>(section.num_tris)?;
-        cursor.write_i32::<LittleEndian>(section.vb_offset)?;
-        cursor.write_i32::<LittleEndian>(section.vb_bytes)?;
-        cursor.write_i32::<LittleEndian>(section.vert_size)?;
-        cursor.write_i32::<LittleEndian>(section.num_verts)?;
+        // Fixed section fields via zerocopy struct
+        let section_fixed = crate::raw::PackedSectionFixedRaw {
+            material_index: section.material_index.to_le_bytes(),
+            accessory_index: section.accessory_index.to_le_bytes(),
+            max_bones: section.max_bones.to_le_bytes(),
+            rigid_bone_index: section.rigid_bone_index.to_le_bytes(),
+            ib_offset: section.ib_offset.to_le_bytes(),
+            num_tris: section.num_tris.to_le_bytes(),
+            vb_offset: section.vb_offset.to_le_bytes(),
+            vb_bytes: section.vb_bytes.to_le_bytes(),
+            vert_size: section.vert_size.to_le_bytes(),
+            num_verts: section.num_verts.to_le_bytes(),
+        };
+        cursor.write_all(section_fixed.as_bytes())?;
 
         // BoneRemap packed array (16 bytes)
         let bone_remap_header_pos = cursor.stream_position()? as usize;
-        cursor.write_u32::<LittleEndian>(section.bone_remap.len() as u32)?;
-        cursor.write_u32::<LittleEndian>(0)?;
-        if section.bone_remap.is_empty() {
-            cursor.write_u64::<LittleEndian>(0xFFFFFFFF)?;
-        } else {
-            cursor.write_u64::<LittleEndian>(0)?;
+        let bone_remap_arr = PackedArrayRaw {
+            count: (section.bone_remap.len() as u32).to_le_bytes(),
+            _padding: [0; 4],
+            offset: if section.bone_remap.is_empty() {
+                0xFFFF_FFFFu64.to_le_bytes()
+            } else {
+                0u64.to_le_bytes()
+            },
+        };
+        cursor.write_all(bone_remap_arr.as_bytes())?;
+        if !section.bone_remap.is_empty() {
             bone_remap_fixups.push((bone_remap_header_pos, section_idx));
         }
 
@@ -153,20 +179,27 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     for bone in &geom.bones {
         let name_fixup_pos = cursor.stream_position()?;
-        cursor.write_u64::<LittleEndian>(0)?;
+
+        // Build model_to_bone as 16 × [u8; 4] from 4×4 row-major matrix
+        let mut mtb = [[0u8; 4]; 16];
+        for (r, row) in bone.model_to_bone.rows.iter().enumerate() {
+            for (c, &val) in row.iter().enumerate() {
+                mtb[r * 4 + c] = val.to_le_bytes();
+            }
+        }
+
+        let packed_bone = crate::raw::PackedBoneRaw {
+            name_offset: 0u64.to_le_bytes(), // placeholder, fixed up later
+            model_to_bone: mtb,
+            parent_index: bone.parent_index.to_le_bytes(),
+            _padding: [0; 4],
+        };
+        cursor.write_all(packed_bone.as_bytes())?;
+
         string_fixups.push(StringFixup {
             position: name_fixup_pos,
             string: bone.name.clone(),
         });
-
-        for row in &bone.model_to_bone.rows {
-            for &val in row {
-                cursor.write_f32::<LittleEndian>(val)?;
-            }
-        }
-
-        cursor.write_i32::<LittleEndian>(bone.parent_index)?;
-        cursor.write_u32::<LittleEndian>(0)?; // padding
     }
 
     // ---- Bone bounds data ----
@@ -247,25 +280,20 @@ fn pad_to_alignment<W: Write + Seek>(writer: &mut W, alignment: u64) -> Result<(
     Ok(())
 }
 
-/// Write a placeholder packed array header (16 bytes: u32 count, u32 pad, u64 offset).
-fn write_packed_array_header_placeholder<W: Write>(writer: &mut W) -> Result<()> {
-    writer.write_u32::<LittleEndian>(0)?;
-    writer.write_u32::<LittleEndian>(0)?;
-    writer.write_u64::<LittleEndian>(0)?;
-    Ok(())
-}
-
-/// Fix up a packed array header at the given position.
+/// Fix up a packed array header at the given position using zerocopy.
 fn fixup_packed_array_header(
     cursor: &mut Cursor<&mut Vec<u8>>,
     header_pos: usize,
     count: u32,
     offset: u64,
 ) -> Result<()> {
+    let final_offset = if count == 0 { 0xFFFF_FFFF } else { offset };
+    let arr = PackedArrayRaw {
+        count: count.to_le_bytes(),
+        _padding: [0; 4],
+        offset: final_offset.to_le_bytes(),
+    };
     cursor.seek(std::io::SeekFrom::Start(header_pos as u64))?;
-    cursor.write_u32::<LittleEndian>(count)?;
-    cursor.write_u32::<LittleEndian>(0)?;
-    let final_offset = if count == 0 { 0xFFFFFFFF } else { offset };
-    cursor.write_u64::<LittleEndian>(final_offset)?;
+    cursor.write_all(arr.as_bytes())?;
     Ok(())
 }

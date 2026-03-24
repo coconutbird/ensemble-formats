@@ -29,6 +29,7 @@ mod bytes;
 mod chunk_ids;
 mod error;
 pub mod math;
+mod raw;
 pub use error::{Error, Result};
 
 mod vertex_element;

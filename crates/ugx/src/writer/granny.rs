@@ -12,54 +12,11 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{Cursor, Seek};
 
 use crate::error::Result;
+use crate::raw::{
+    GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_SIZE, GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION,
+    GRANNY_HAS_SCALE_SHEAR, GRANNY_MESH_SIZE,
+};
 use crate::types::{Matrix4x4, UgxGeom};
-
-/// Granny bone size in bytes.
-///
-/// Per-bone layout (164 bytes = 0xA4):
-/// - `+0x00` (8 bytes): u64 name string offset
-/// - `+0x08` (4 bytes): i32 parent index
-/// - `+0x0C` (4 bytes): u32 local transform flags (bit 0=position, 1=orientation, 2=scale_shear)
-/// - `+0x10` (12 bytes): f32×3 local position
-/// - `+0x1C` (16 bytes): f32×4 local orientation (quaternion xyzw)
-/// - `+0x2C` (36 bytes): f32×9 local scale_shear (3×3 row-major)
-/// - `+0x50` (64 bytes): f32×16 inverse world matrix (4×4 row-major)
-/// - `+0x90` (4 bytes): f32 LOD error
-/// - `+0x94` (16 bytes): extended data (zeros)
-const GRANNY_BONE_SIZE: usize = 164;
-
-/// Granny mesh struct size in bytes (76 bytes = 0x4C).
-/// Verified from IDA: BoneBindingCount at +0x30, BoneBindings at +0x34.
-/// Granny uses packed structures without x64 natural alignment.
-///
-/// Layout:
-/// - `+0x00` (8 bytes): Name pointer
-/// - `+0x08` (8 bytes): PrimaryVertexData pointer (NULL)
-/// - `+0x10` (4 bytes): MorphTargetCount (0)
-/// - `+0x14` (8 bytes): MorphTargets pointer (NULL)
-/// - `+0x1C` (8 bytes): PrimaryTopology pointer (NULL)
-/// - `+0x24` (4 bytes): MaterialBindingCount (0)
-/// - `+0x28` (8 bytes): MaterialBindings pointer (NULL)
-/// - `+0x30` (4 bytes): BoneBindingCount
-/// - `+0x34` (8 bytes): BoneBindings pointer
-/// - `+0x3C` (16 bytes): ExtendedData variant (NULL, NULL)
-const GRANNY_MESH_SIZE: usize = 0x4C; // 76 bytes
-
-/// Granny bone_binding struct size in bytes (44 bytes = 0x2C).
-/// Verified from IDA: loop stride is 44 bytes in NewMeshBinding.
-///
-/// Layout:
-/// - `+0x00` (8 bytes): BoneName pointer
-/// - `+0x08` (12 bytes): OBBMin triple (3x f32)
-/// - `+0x14` (12 bytes): OBBMax triple (3x f32)
-/// - `+0x20` (4 bytes): TriangleCount (0)
-/// - `+0x24` (8 bytes): TriangleIndices pointer (NULL)
-const GRANNY_BONE_BINDING_SIZE: usize = 0x2C; // 44 bytes
-
-/// Granny local transform flags.
-const GRANNY_HAS_POSITION: u32 = 0x1;
-const GRANNY_HAS_ORIENTATION: u32 = 0x2;
-const GRANNY_HAS_SCALE_SHEAR: u32 = 0x4;
 
 /// Build the granny bones chunk (0x703).
 ///
