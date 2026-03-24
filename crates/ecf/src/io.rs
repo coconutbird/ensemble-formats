@@ -319,28 +319,49 @@ pub trait WriteLe: Write {
     fn write_u8(&mut self, v: u8) -> Result<(), IoError> {
         self.write_all(&[v])
     }
+
+    /// Write an `i8`.
+    fn write_i8(&mut self, v: i8) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+
     /// Write a little-endian `u16`.
     fn write_u16_le(&mut self, v: u16) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
     }
+
     /// Write a little-endian `i16`.
     fn write_i16_le(&mut self, v: i16) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
     }
+
     /// Write a little-endian `u32`.
     fn write_u32_le(&mut self, v: u32) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
     }
+
     /// Write a little-endian `i32`.
     fn write_i32_le(&mut self, v: i32) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
     }
+
     /// Write a little-endian `u64`.
     fn write_u64_le(&mut self, v: u64) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
     }
+
+    /// Write a little-endian `i64`.
+    fn write_i64_le(&mut self, v: i64) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+
     /// Write a little-endian `f32`.
     fn write_f32_le(&mut self, v: f32) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+
+    /// Write a little-endian `f64`.
+    fn write_f64_le(&mut self, v: f64) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
     }
 }
@@ -356,28 +377,49 @@ pub trait WriteBe: Write {
     fn write_u8_be(&mut self, v: u8) -> Result<(), IoError> {
         self.write_all(&[v])
     }
+
+    /// Write an `i8`.
+    fn write_i8_be(&mut self, v: i8) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+
     /// Write a big-endian `u16`.
     fn write_u16_be(&mut self, v: u16) -> Result<(), IoError> {
         self.write_all(&v.to_be_bytes())
     }
+
     /// Write a big-endian `i16`.
     fn write_i16_be(&mut self, v: i16) -> Result<(), IoError> {
         self.write_all(&v.to_be_bytes())
     }
+
     /// Write a big-endian `u32`.
     fn write_u32_be(&mut self, v: u32) -> Result<(), IoError> {
         self.write_all(&v.to_be_bytes())
     }
+
     /// Write a big-endian `i32`.
     fn write_i32_be(&mut self, v: i32) -> Result<(), IoError> {
         self.write_all(&v.to_be_bytes())
     }
+
     /// Write a big-endian `u64`.
     fn write_u64_be(&mut self, v: u64) -> Result<(), IoError> {
         self.write_all(&v.to_be_bytes())
     }
+
+    /// Write a big-endian `i64`.
+    fn write_i64_be(&mut self, v: i64) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+
     /// Write a big-endian `f32`.
     fn write_f32_be(&mut self, v: f32) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+
+    /// Write a big-endian `f64`.
+    fn write_f64_be(&mut self, v: f64) -> Result<(), IoError> {
         self.write_all(&v.to_be_bytes())
     }
 }
