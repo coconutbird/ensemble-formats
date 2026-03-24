@@ -6,7 +6,7 @@ use crate::vertex::packer::UnivertPacker;
 
 /// Mesh section - a submesh with its own material and vertex format.
 ///
-/// DE packed format is 152 bytes (0x98):
+/// ## DE packed format (152 bytes / 0x98):
 /// - +0x00: mMaterialIndex (i32)
 /// - +0x04: mAccessoryIndex (i32)
 /// - +0x08: mMaxBones (i32)
@@ -22,6 +22,15 @@ use crate::vertex::packer::UnivertPacker;
 /// - +0x8C: mRigidOnly (i32)
 /// - +0x90: mGlobalBones (i32) - not in 2008 source!
 /// - +0x94: mPadding (i32)
+///
+/// ## HW2 packed format (72 bytes / 0x48):
+/// - +0x00: same 40 bytes of fixed fields as DE
+/// - +0x28: i32 flags (rigid_only / global_bones)
+/// - +0x2C: i32 flags2
+/// - +0x30: i32 unknown
+/// - +0x34: i32 unknown2
+/// - +0x38: BoneRemap packed array (16 bytes)
+/// - No UnivertPacker (vertex format determined externally).
 #[derive(Debug, Clone)]
 pub struct Section {
     /// Material index.
@@ -44,8 +53,8 @@ pub struct Section {
     pub vert_size: i32,
     /// Number of vertices.
     pub num_verts: i32,
-    /// Base vertex packer.
-    pub base_vert_packer: UnivertPacker,
+    /// Base vertex packer (DE only; `None` in HW2 where vertex format is external).
+    pub base_vert_packer: Option<UnivertPacker>,
     /// Local-to-global bone remap table.
     /// Maps section-local bone indices to global skeleton indices.
     /// TODO: Entry size assumed u8 — may be u16/u32 for large skeletons. See ugx.rs.

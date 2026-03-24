@@ -163,7 +163,7 @@ mod tests {
             vb_bytes,
             vert_size,
             num_verts: 3,
-            base_vert_packer: packer,
+            base_vert_packer: Some(packer),
             bone_remap: Vec::new(),
             rigid_only: true,
             global_bones: false,
@@ -258,8 +258,8 @@ mod tests {
         assert_eq!(s_read.vb_bytes, s_orig.vb_bytes);
         assert_eq!(s_read.ib_offset, s_orig.ib_offset);
         assert_eq!(
-            s_read.base_vert_packer.pack_order,
-            s_orig.base_vert_packer.pack_order
+            s_read.base_vert_packer.as_ref().map(|p| &p.pack_order),
+            s_orig.base_vert_packer.as_ref().map(|p| &p.pack_order)
         );
 
         assert_eq!(read_back.bones.len(), original.bones.len());

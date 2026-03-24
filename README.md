@@ -1,6 +1,6 @@
 # ensemble-rs
 
-A Rust library for parsing Halo Wars Definitive Edition file formats.
+A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file formats.
 
 ## Crates
 
@@ -8,12 +8,14 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 | --------- | --------------------------------------- |
 | `ecf`     | ECF container format parser             |
 | `era`     | ERA archive format (encrypted ECF)      |
+| `pkg`     | PKG archive format (HW2 capack)         |
 | `xmb`     | XMB binary XML parser                   |
 | `ugx`     | UGX 3D model geometry parser            |
 | `uax`     | UAX animation format parser             |
 | `ddx`     | DDX/DDS texture format reader/writer    |
 | `bdt`     | BDT binary data tree (packed documents) |
 | `era-cli` | CLI tool for ERA archives               |
+| `pkg-cli` | CLI tool for PKG archives               |
 | `xmb-cli` | CLI tool for XMB files                  |
 | `ugx-cli` | CLI tool for UGX models                 |
 
@@ -25,16 +27,17 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 | ------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | **ECF** | (container) | Ensemble Common Format - base container wrapping various file types. Uses big-endian byte order. Header magic: `0xDABA7737` | ✅ Implemented |
 | **ERA** | `.era`      | Encrypted Resource Archive. ECF container with TEA encryption. Header ID: `0x17FDBA9C`                                      | ✅ Implemented |
+| **PKG** | `.pkg`      | Packed File Archive (HW2 "capack"). Unencrypted archive with FNV-1a hashed filenames                                        | ✅ Implemented |
 
 ### Binary Data Formats
 
-| Format  | Extension | ECF File ID  | Description                                                                                           | Status         |
-| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | -------------- |
-| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented |
-| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ Implemented |
-| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented |
-| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ✅ Implemented |
-| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented |
+| Format  | Extension | ECF File ID  | Description                                                                                           | Status                    |
+| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------------- |
+| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented            |
+| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ⚠️ Untested (see below)  |
+| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented            |
+| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ⚠️ Untested (see below)  |
+| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented            |
 
 ### XML-Based Formats
 
@@ -54,6 +57,12 @@ Most game data files are XML stored as XMB with specific schemas:
 | Physics        | `.physics.xmb`   | Physics simulation parameters           |
 | Blueprint      | `.blueprint.xmb` | Object blueprints                       |
 | Shape          | `.shp.xmb`       | Collision shapes                        |
+
+### HW2 Compatibility Notes
+
+The **UAX** and **XTD** crates have been implemented but never tested against real game data from either Halo Wars 1 or Halo Wars 2. They may not work correctly and should be considered experimental.
+
+All other formats (ECF, ERA, PKG, XMB, UGX, DDX, XTT, BDT) have been tested and confirmed working with both HW1 DE and HW2 data where applicable.
 
 ### Third-Party Formats
 

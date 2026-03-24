@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use ecf::io::{MutCursor, Seek, SeekFrom, Write, WriteLe};
 use zerocopy::IntoBytes;
 
-use crate::chunk_ids::GEOM_HEADER_SIGNATURE;
+use crate::chunk_ids::GEOM_HEADER_SIGNATURE_HW1;
 use crate::error::Result;
 use crate::raw::{AccessoryRaw, GeomHeaderRaw, PackedArrayRaw};
 use crate::types::{Accessory, UgxGeom};
@@ -26,7 +26,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // ---- Geometry header via zerocopy struct ----
     let header = GeomHeaderRaw {
-        signature: GEOM_HEADER_SIGNATURE.to_le_bytes(),
+        signature: GEOM_HEADER_SIGNATURE_HW1.to_le_bytes(),
         rigid_bone_index: geom.rigid_bone_index.to_le_bytes(),
         sphere_center: [
             geom.bounding_sphere.center[0].to_le_bytes(),
@@ -114,8 +114,11 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
             bone_remap_fixups.push((bone_remap_header_pos, section_idx));
         }
 
-        // UnivertPacker (84 bytes)
-        let packer = &section.base_vert_packer;
+        // UnivertPacker (84 bytes) — only present in DE format
+        let packer = section
+            .base_vert_packer
+            .as_ref()
+            .expect("Writer only supports DE format sections (with UnivertPacker)");
         let pack_order_fixup_pos = cursor.stream_position()?;
         cursor.write_u64_le(0)?;
         strings.add(pack_order_fixup_pos as usize, packer.pack_order.clone());

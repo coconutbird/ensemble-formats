@@ -25,5 +25,13 @@ pub(crate) const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 /// Streamed format: version + node_count + nodes (variable-length) + sentinel.
 pub(crate) const ECF_AABB_TREE_CHUNK_ID: u64 = 0x00000705;
 
-/// BCachedData header signature (verified from IDA: only 0xC2340004 is used).
-pub(crate) const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
+/// BCachedData header signature for Halo Wars: Definitive Edition (version 4).
+pub(crate) const GEOM_HEADER_SIGNATURE_HW1: u32 = 0xC2340004;
+
+/// BCachedData header signature for Halo Wars 2 (version 6).
+///
+/// Key differences from DE:
+/// - Sections are 72 bytes (no UnivertPacker) instead of 152 bytes.
+/// - Valid accessories are stored as 4-byte indices instead of 24-byte structs.
+/// - AABB tree chunk (0x705) is absent from all HW2 UGX files.
+pub(crate) const GEOM_HEADER_SIGNATURE_HW2: u32 = 0xC2340006;

@@ -100,8 +100,14 @@ impl UgxGeom {
             let section = &self.sections[section_idx];
             let rigid_bone = section.rigid_bone_index as usize;
             let bone_remap = section.bone_remap.clone();
-            // Check if the vertex format includes skin data ('S' in pack order)
-            let has_skin = section.base_vert_packer.pack_order.contains('S');
+            // Check if the vertex format includes skin data.
+            // DE: check pack_order for 'S'. HW2 (no packer): infer from vert_size.
+            let has_skin = section
+                .base_vert_packer
+                .as_ref()
+                .map_or(!section.rigid_only && section.vert_size >= 28, |p| {
+                    p.pack_order.contains('S')
+                });
             // Use rigid path when: no skin data, OR explicitly rigid with valid bone
             let use_rigid = (!has_skin || section.rigid_only) && rigid_bone < bone_count;
 
@@ -278,7 +284,12 @@ impl UgxGeom {
             group_sections[gi].push(si as i32);
 
             let rigid_bone = section.rigid_bone_index as usize;
-            let has_skin = section.base_vert_packer.pack_order.contains('S');
+            let has_skin = section
+                .base_vert_packer
+                .as_ref()
+                .map_or(!section.rigid_only && section.vert_size >= 28, |p| {
+                    p.pack_order.contains('S')
+                });
             let use_rigid = (!has_skin || section.rigid_only) && rigid_bone < bone_count;
 
             if use_rigid {

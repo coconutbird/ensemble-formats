@@ -168,32 +168,20 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             "       MaxBones={}, RigidBoneIdx={}, RigidOnly={}, GlobalBones={}",
             section.max_bones, section.rigid_bone_index, section.rigid_only, section.global_bones
         );
-        println!("       PackOrder: {}", section.base_vert_packer.pack_order);
-        println!("       PosType: {:?}", section.base_vert_packer.pos_type);
-        println!(
-            "       NormType: {:?}",
-            section.base_vert_packer.normal_type
-        );
-        println!(
-            "       TangentType: {:?}",
-            section.base_vert_packer.tangent_type
-        );
-        println!(
-            "       UV[0]Type: {:?}",
-            section.base_vert_packer.uv_types[0]
-        );
-        println!(
-            "       IndicesType: {:?}",
-            section.base_vert_packer.indices_type
-        );
-        println!(
-            "       WeightsType: {:?}",
-            section.base_vert_packer.weights_type
-        );
+        if let Some(ref packer) = section.base_vert_packer {
+            println!("       PackOrder: {}", packer.pack_order);
+            println!("       PosType: {:?}", packer.pos_type);
+            println!("       NormType: {:?}", packer.normal_type);
+            println!("       TangentType: {:?}", packer.tangent_type);
+            println!("       UV[0]Type: {:?}", packer.uv_types[0]);
+            println!("       IndicesType: {:?}", packer.indices_type);
+            println!("       WeightsType: {:?}", packer.weights_type);
+        } else {
+            println!("       (HW2 format — no UnivertPacker)");
+        }
 
         // Print first 3 unpacked vertices for debugging
         if section.num_verts > 0
-            && !section.base_vert_packer.pack_order.is_empty()
             && let Ok(verts) = geom.unpack_section_vertices(i)
         {
             println!("       First 3 vertices:");

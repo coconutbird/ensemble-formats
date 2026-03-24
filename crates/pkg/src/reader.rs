@@ -198,7 +198,7 @@ impl<R: Read + Seek> Reader<R> {
                 index,
                 count: self.entries.len(),
             })?;
-        let offset = entry.data_offset;
+        let offset = self.data_section_offset + entry.data_offset;
         let size = entry.data_size as usize;
 
         self.inner.seek(SeekFrom::Start(offset))?;
@@ -209,7 +209,8 @@ impl<R: Read + Seek> Reader<R> {
 
     /// Read the raw data for an entry by reference.
     pub fn read_entry_data(&mut self, entry: &PkgEntry) -> Result<Vec<u8>> {
-        self.inner.seek(SeekFrom::Start(entry.data_offset))?;
+        let offset = self.data_section_offset + entry.data_offset;
+        self.inner.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0u8; entry.data_size as usize];
         self.inner.read_exact(&mut buf)?;
         Ok(buf)

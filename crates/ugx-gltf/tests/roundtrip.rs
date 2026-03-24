@@ -144,7 +144,7 @@ fn make_test_geom() -> UgxGeom {
             vb_bytes,
             vert_size,
             num_verts: 3,
-            base_vert_packer: packer,
+            base_vert_packer: Some(packer),
             bone_remap: Vec::new(),
             rigid_only: false,
             global_bones: false,
@@ -1232,7 +1232,7 @@ fn test_gltf_import_uses_game_vertex_formats() {
 
     assert_eq!(imported.sections.len(), 1);
     let section = &imported.sections[0];
-    let packer = &section.base_vert_packer;
+    let packer = section.base_vert_packer.as_ref().unwrap();
 
     // Verify game-compatible vertex element types
     assert_eq!(
@@ -1377,7 +1377,7 @@ fn test_gltf_import_rigid_mesh_uses_game_formats() {
             vb_bytes,
             vert_size,
             num_verts: 3,
-            base_vert_packer: packer,
+            base_vert_packer: Some(packer),
             bone_remap: Vec::new(),
             rigid_only: true,
             global_bones: false,
@@ -1414,7 +1414,7 @@ fn test_gltf_import_rigid_mesh_uses_game_formats() {
 
     assert_eq!(imported.sections.len(), 1);
     let section = &imported.sections[0];
-    let imported_packer = &section.base_vert_packer;
+    let imported_packer = section.base_vert_packer.as_ref().unwrap();
 
     // Verify game-compatible vertex element types for rigid mesh
     assert_eq!(
@@ -1546,7 +1546,7 @@ fn test_material_names_and_textures_exported() {
             vb_bytes: vb.len() as i32,
             vert_size: packer.vertex_size() as i32,
             num_verts: 3,
-            base_vert_packer: packer,
+            base_vert_packer: Some(packer),
             bone_remap: Vec::new(),
             rigid_only: true,
             global_bones: false,

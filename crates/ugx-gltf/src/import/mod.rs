@@ -295,7 +295,7 @@ pub fn import_from_gltf(
                 vb_bytes,
                 vert_size,
                 num_verts: final_vertices.len() as i32,
-                base_vert_packer: final_packer,
+                base_vert_packer: Some(final_packer),
                 bone_remap: Vec::new(),
                 // rigid_only is always false from glTF import
                 // global_bones is true for sections where all vertices use same bone

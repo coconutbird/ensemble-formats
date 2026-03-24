@@ -1,7 +1,8 @@
 //! BCachedData (chunk 0x700) sub-parsers.
 //!
 //! Reads packed sections, bones, bone bounds, and univert packers from the
-//! cached data chunk using zerocopy overlays.
+//! cached data chunk using zerocopy overlays. Supports both DE (152-byte
+//! sections) and HW2 (72-byte sections) formats.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -16,10 +17,23 @@ use crate::types::{AABB, Accessory, Bone, Matrix4x4, Section};
 use crate::vertex::element::VertexElementType;
 use crate::vertex::packer::UnivertPacker;
 
+/// UGX format version, derived from the geometry header signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UgxVersion {
+    /// Halo Wars: Definitive Edition (signature 0xC2340004).
+    Hw1,
+    /// Halo Wars 2 (signature 0xC2340006).
+    Hw2,
+}
+
 /// Read packed sections array from cached data.
 ///
-/// Each section is 152 bytes (stride), located contiguously at `offset`.
-pub(super) fn read_packed_sections(data: &[u8], pos: &mut usize) -> Result<Vec<Section>> {
+/// Section stride depends on version: 152 bytes (DE) or 72 bytes (HW2).
+pub(super) fn read_packed_sections(
+    data: &[u8],
+    pos: &mut usize,
+    version: UgxVersion,
+) -> Result<Vec<Section>> {
     let (arr, _): (Ref<_, PackedArrayRaw>, _) =
         Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
             context: String::from("PackedArrayRaw sections"),
@@ -36,14 +50,18 @@ pub(super) fn read_packed_sections(data: &[u8], pos: &mut usize) -> Result<Vec<S
     let mut sections = Vec::with_capacity(count);
 
     for _ in 0..count {
-        sections.push(read_packed_section(data, &mut sec_pos)?);
+        let section = match version {
+            UgxVersion::Hw1 => read_packed_section_de(data, &mut sec_pos)?,
+            UgxVersion::Hw2 => read_packed_section_hw2(data, &mut sec_pos)?,
+        };
+        sections.push(section);
     }
 
     Ok(sections)
 }
 
-/// Read a single packed section (152 bytes).
-fn read_packed_section(data: &[u8], pos: &mut usize) -> Result<Section> {
+/// Read a single packed section in DE format (152 bytes).
+fn read_packed_section_de(data: &[u8], pos: &mut usize) -> Result<Section> {
     let (fixed, _): (Ref<_, PackedSectionFixedRaw>, _) =
         Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
             context: String::from("PackedSectionFixedRaw"),
@@ -96,7 +114,72 @@ fn read_packed_section(data: &[u8], pos: &mut usize) -> Result<Section> {
         vb_bytes,
         vert_size,
         num_verts,
-        base_vert_packer,
+        base_vert_packer: Some(base_vert_packer),
+        bone_remap,
+        rigid_only,
+        global_bones,
+    })
+}
+
+/// Read a single packed section in HW2 format (72 bytes).
+///
+/// Layout: 40 bytes fixed fields + 8 bytes flags + 8 bytes unknown + 16 bytes bone_remap PA.
+/// No UnivertPacker (vertex format is determined externally in HW2).
+fn read_packed_section_hw2(data: &[u8], pos: &mut usize) -> Result<Section> {
+    let (fixed, _): (Ref<_, PackedSectionFixedRaw>, _) =
+        Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+            context: String::from("PackedSectionFixedRaw (HW2)"),
+        })?;
+    let material_index = i32::from_le_bytes(fixed.material_index);
+    let accessory_index = i32::from_le_bytes(fixed.accessory_index);
+    let max_bones = i32::from_le_bytes(fixed.max_bones);
+    let rigid_bone_index = i32::from_le_bytes(fixed.rigid_bone_index);
+    let ib_offset = i32::from_le_bytes(fixed.ib_offset);
+    let num_tris = i32::from_le_bytes(fixed.num_tris);
+    let vb_offset = i32::from_le_bytes(fixed.vb_offset);
+    let vb_bytes = i32::from_le_bytes(fixed.vb_bytes);
+    let vert_size = i32::from_le_bytes(fixed.vert_size);
+    let num_verts = i32::from_le_bytes(fixed.num_verts);
+    *pos += core::mem::size_of::<PackedSectionFixedRaw>();
+
+    // +0x28: flags (8 bytes)
+    let rigid_only = read_i32_le(data, pos)? != 0;
+    let global_bones = read_i32_le(data, pos)? != 0;
+
+    // +0x30: unknown (8 bytes) — skip
+    let _unknown1 = read_i32_le(data, pos)?;
+    let _unknown2 = read_i32_le(data, pos)?;
+
+    // +0x38: BoneRemap packed array (16 bytes)
+    let (remap_arr, _): (Ref<_, PackedArrayRaw>, _) =
+        Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+            context: String::from("PackedArrayRaw bone_remap (HW2)"),
+        })?;
+    let bone_remap_count = u32::from_le_bytes(remap_arr.count) as usize;
+    let bone_remap_offset = u64::from_le_bytes(remap_arr.offset) as usize;
+    *pos += core::mem::size_of::<PackedArrayRaw>();
+
+    let bone_remap = if bone_remap_count > 0
+        && bone_remap_offset != 0xFFFFFFFFFFFFFFFF
+        && bone_remap_offset + bone_remap_count <= data.len()
+    {
+        data[bone_remap_offset..bone_remap_offset + bone_remap_count].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok(Section {
+        material_index,
+        accessory_index,
+        max_bones,
+        rigid_bone_index,
+        ib_offset,
+        num_tris,
+        vb_offset,
+        vb_bytes,
+        vert_size,
+        num_verts,
+        base_vert_packer: None,
         bone_remap,
         rigid_only,
         global_bones,
@@ -321,4 +404,39 @@ pub(super) fn read_packed_accessories(data: &[u8], pos: &mut usize) -> Result<Ve
     }
 
     Ok(accessories)
+}
+
+/// Read HW2 valid-accessory indices (4-byte i32 per element).
+///
+/// In HW2, valid accessories are stored as indices into the accessories array
+/// rather than full 24-byte `AccessoryRaw` structs. We resolve them by looking
+/// up the corresponding accessory from the already-parsed list.
+pub(super) fn read_valid_accessory_indices(
+    data: &[u8],
+    pos: &mut usize,
+    accessories: &[Accessory],
+) -> Result<Vec<Accessory>> {
+    let (arr, _): (Ref<_, PackedArrayRaw>, _) =
+        Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+            context: String::from("PackedArrayRaw valid_accessory_indices (HW2)"),
+        })?;
+    let count = u32::from_le_bytes(arr.count) as usize;
+    let offset = u64::from_le_bytes(arr.offset) as usize;
+    *pos += core::mem::size_of::<PackedArrayRaw>();
+
+    if count == 0 || offset == 0xFFFFFFFF || offset == 0xFFFFFFFFFFFFFFFF {
+        return Ok(Vec::new());
+    }
+
+    let mut valid = Vec::with_capacity(count);
+    let mut idx_pos = offset;
+
+    for _ in 0..count {
+        let idx = read_i32_le(data, &mut idx_pos)? as usize;
+        if idx < accessories.len() {
+            valid.push(accessories[idx].clone());
+        }
+    }
+
+    Ok(valid)
 }
