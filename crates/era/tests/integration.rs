@@ -171,10 +171,10 @@ fn write_with_progress() {
 
     let mut progress_calls = Vec::new();
     let data = writer
-        .finalize_with_progress(Some(&mut |written, total| {
+        .finalize_with_progress(&mut |written, total| {
             progress_calls.push((written, total));
             true
-        }))
+        })
         .expect("Failed to write");
 
     assert_eq!(progress_calls.len(), 4);
@@ -202,10 +202,10 @@ fn write_with_progress_cancellation() {
     writer.add_file("test/file2.txt", b"Second file content".to_vec());
 
     let mut call_count = 0;
-    let result = writer.finalize_with_progress(Some(&mut |_written, _total| {
+    let result = writer.finalize_with_progress(&mut |_written, _total| {
         call_count += 1;
         call_count < 2
-    }));
+    });
 
     assert!(matches!(result, Err(Error::Cancelled)));
 }

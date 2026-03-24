@@ -1,6 +1,6 @@
 [package]
-name = "ecf"
-description = "ECF (Ensemble Common Format) container handling"
+name = "pkg"
+description = "Halo Wars 2 PKG format parsing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,4 @@ std = ["nostdio/std"]
 
 [dependencies]
 nostdio.workspace = true
-miniz_oxide = "0.8"
 thiserror.workspace = true
-zerocopy.workspace = true

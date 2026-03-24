@@ -15,6 +15,9 @@ members = [
     "crates/era-cli",
     "crates/xmb-cli",
     "crates/ugx-cli",
+    "crates/nostdio",
+    "crates/pkg",
+    "crates/pkg-cli",
 ]
 
 [workspace.package]
@@ -29,6 +32,7 @@ authors = ["coconutbird"]
 bdt = { path = "crates/bdt" }
 ddx = { path = "crates/ddx" }
 ecf = { path = "crates/ecf" }
+nostdio = { path = "crates/nostdio" }
 era = { path = "crates/era" }
 uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
@@ -38,6 +42,7 @@ xtd = { path = "crates/xtd" }
 xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }
 ugx-cli = { path = "crates/ugx-cli" }
+pkg = { path = "crates/pkg" }
 
 # External dependencies
 byteorder = "1.5"

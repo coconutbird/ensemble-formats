@@ -29,7 +29,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::io::{Read, Seek, SeekFrom, SliceCursor};
+use ecf::io::{NoProgress, Progress, Read, Seek, SeekFrom, SliceCursor};
 use ecf::{EcfChunkHeader, EcfHeader};
 
 use crate::error::{Error, Result};
@@ -293,6 +293,46 @@ impl<R: Read + Seek> Reader<R> {
             results.push(self.read_entry_compressed(idx)?);
         }
         Ok(results)
+    }
+
+    /// Read all file entries sequentially, invoking `handler` for each.
+    ///
+    /// Skips the filename table (entry 0) and iterates entries 1..N.
+    /// Equivalent to `read_all_with_progress` with [`NoProgress`].
+    pub fn read_all(&mut self, handler: impl FnMut(usize, &EraEntry, Vec<u8>)) -> Result<()> {
+        self.read_all_with_progress(handler, &mut NoProgress)
+    }
+
+    /// Read all file entries sequentially with progress reporting.
+    ///
+    /// Skips the filename table (entry 0) and iterates entries 1..N.
+    /// The `handler` receives `(index, &EraEntry, decompressed_data)` for
+    /// each file entry.
+    ///
+    /// The [`Progress`] implementation receives `(bytes_read, total_bytes)`
+    /// and should return `true` to continue or `false` to cancel.
+    pub fn read_all_with_progress(
+        &mut self,
+        mut handler: impl FnMut(usize, &EraEntry, Vec<u8>),
+        progress: &mut impl Progress,
+    ) -> Result<()> {
+        let total_bytes: u64 = self
+            .entries
+            .iter()
+            .skip(1)
+            .map(|e| e.extra.decomp_size as u64)
+            .sum();
+        let mut bytes_read: u64 = 0;
+
+        for i in 1..self.entries.len() {
+            let data = self.read_entry(i)?;
+            bytes_read += data.len() as u64;
+            handler(i, &self.entries[i], data);
+            if !progress.report(bytes_read, total_bytes) {
+                return Err(Error::Cancelled);
+            }
+        }
+        Ok(())
     }
 
     /// Set a public key for signature verification.

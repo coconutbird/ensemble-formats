@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::io::{Read, Seek, Write};
+use ecf::io::{NoProgress, Progress, Read, Seek, Write};
 use tiger::{Digest, Tiger};
 
 use crate::error::Result;
@@ -239,17 +239,14 @@ impl Writer {
 
     /// Build the archive into a `Vec<u8>`.
     pub fn finalize(&self) -> Result<Vec<u8>> {
-        self.finalize_with_progress(None)
+        self.finalize_with_progress(&mut NoProgress)
     }
 
-    /// Build the archive into a `Vec<u8>` with optional progress callback.
+    /// Build the archive into a `Vec<u8>` with progress reporting.
     ///
-    /// The progress callback receives `(bytes_written, total_bytes)` and should
-    /// return `true` to continue or `false` to cancel.
-    pub fn finalize_with_progress(
-        &self,
-        mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
-    ) -> Result<Vec<u8>> {
+    /// The [`Progress`] implementation receives `(bytes_written, total_bytes)`
+    /// and should return `true` to continue or `false` to cancel.
+    pub fn finalize_with_progress(&self, progress: &mut impl Progress) -> Result<Vec<u8>> {
         let (layout, signature) = self.compute_layout_and_sign()?;
 
         let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
@@ -293,9 +290,7 @@ impl Writer {
         out[off..off + layout.compressed_names.data.len()]
             .copy_from_slice(&layout.compressed_names.data);
         bytes_written += layout.compressed_names.data.len() as u64;
-        if let Some(cb) = &mut progress
-            && !cb(bytes_written, layout.total_data_bytes)
-        {
+        if !progress.report(bytes_written, layout.total_data_bytes) {
             return Err(crate::error::Error::Cancelled);
         }
 
@@ -308,9 +303,7 @@ impl Writer {
             let off = chunk.offset as usize;
             out[off..off + file.data.len()].copy_from_slice(&file.data);
             bytes_written += file.data.len() as u64;
-            if let Some(cb) = &mut progress
-                && !cb(bytes_written, layout.total_data_bytes)
-            {
+            if !progress.report(bytes_written, layout.total_data_bytes) {
                 return Err(crate::error::Error::Cancelled);
             }
         }
@@ -323,9 +316,7 @@ impl Writer {
             let off = chunk.offset as usize;
             out[off..off + file.compressed_data.len()].copy_from_slice(&file.compressed_data);
             bytes_written += file.compressed_data.len() as u64;
-            if let Some(cb) = &mut progress
-                && !cb(bytes_written, layout.total_data_bytes)
-            {
+            if !progress.report(bytes_written, layout.total_data_bytes) {
                 return Err(crate::error::Error::Cancelled);
             }
         }
@@ -340,17 +331,17 @@ impl Writer {
     /// provided writer. Ideal for piping directly through an encryption writer
     /// to disk.
     pub fn write_to(&self, writer: impl Write) -> Result<u64> {
-        self.write_to_with_progress(writer, None)
+        self.write_to_with_progress(writer, &mut NoProgress)
     }
 
-    /// Stream the archive to a writer with optional progress callback.
+    /// Stream the archive to a writer with progress reporting.
     ///
-    /// The progress callback receives `(bytes_written, total_bytes)` and should
-    /// return `true` to continue or `false` to cancel.
+    /// The [`Progress`] implementation receives `(bytes_written, total_bytes)`
+    /// and should return `true` to continue or `false` to cancel.
     pub fn write_to_with_progress(
         &self,
         mut writer: impl Write,
-        mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
+        progress: &mut impl Progress,
     ) -> Result<u64> {
         let (layout, signature) = self.compute_layout_and_sign()?;
 
@@ -406,9 +397,7 @@ impl Writer {
             .write_all(&layout.compressed_names.data)
             .map_err(|_| crate::error::Error::UnexpectedEof)?;
         bytes_written += layout.compressed_names.data.len() as u64;
-        if let Some(cb) = &mut progress
-            && !cb(bytes_written, total_bytes)
-        {
+        if !progress.report(bytes_written, total_bytes) {
             return Err(crate::error::Error::Cancelled);
         }
 
@@ -426,9 +415,7 @@ impl Writer {
                 .write_all(&compressed.data)
                 .map_err(|_| crate::error::Error::UnexpectedEof)?;
             bytes_written += compressed.data.len() as u64;
-            if let Some(cb) = &mut progress
-                && !cb(bytes_written, total_bytes)
-            {
+            if !progress.report(bytes_written, total_bytes) {
                 return Err(crate::error::Error::Cancelled);
             }
         }
@@ -451,9 +438,7 @@ impl Writer {
                 .write_all(&file.compressed_data)
                 .map_err(|_| crate::error::Error::UnexpectedEof)?;
             bytes_written += file.compressed_data.len() as u64;
-            if let Some(cb) = &mut progress
-                && !cb(bytes_written, total_bytes)
-            {
+            if !progress.report(bytes_written, total_bytes) {
                 return Err(crate::error::Error::Cancelled);
             }
         }
@@ -611,16 +596,16 @@ impl Writer {
         dest: W,
         keys: crate::TeaKeys,
     ) -> Result<W> {
-        self.write_to_encrypted_with_progress(dest, keys, None)
+        self.write_to_encrypted_with_progress(dest, keys, &mut NoProgress)
     }
 
-    /// Stream the archive through a [`crypto::encrypt::Writer`] with optional
-    /// progress callback.
+    /// Stream the archive through a [`crypto::encrypt::Writer`] with progress
+    /// reporting.
     pub fn write_to_encrypted_with_progress<W: Write + Seek + Read>(
         &self,
         dest: W,
         keys: crate::TeaKeys,
-        progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
+        progress: &mut impl Progress,
     ) -> Result<W> {
         let mut encrypt = crate::crypto::encrypt::Writer::new(dest, keys);
         self.write_to_with_progress(&mut encrypt, progress)?;

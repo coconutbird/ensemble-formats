@@ -409,6 +409,7 @@ name = "ecf"
 version = "0.1.0"
 dependencies = [
  "miniz_oxide",
+ "nostdio",
  "thiserror",
  "zerocopy",
 ]
@@ -829,6 +830,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
+name = "nostdio"
+version = "0.1.0"
+
+[[package]]
 name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -901,6 +906,25 @@ name = "pastey"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+dependencies = [
+ "nostdio",
+ "thiserror",
+]
+
+[[package]]
+name = "pkg-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "glob",
+ "pkg",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "png"
