@@ -319,6 +319,14 @@ pub trait WriteLe: Write {
     fn write_u8(&mut self, v: u8) -> Result<(), IoError> {
         self.write_all(&[v])
     }
+    /// Write a little-endian `u16`.
+    fn write_u16_le(&mut self, v: u16) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
+    /// Write a little-endian `i16`.
+    fn write_i16_le(&mut self, v: i16) -> Result<(), IoError> {
+        self.write_all(&v.to_le_bytes())
+    }
     /// Write a little-endian `u32`.
     fn write_u32_le(&mut self, v: u32) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
@@ -338,3 +346,40 @@ pub trait WriteLe: Write {
 }
 
 impl<T: Write + ?Sized> WriteLe for T {}
+
+/// Extension trait for writing big-endian primitives.
+///
+/// Provided for any type implementing [`Write`], replacing the need for
+/// the `byteorder` crate.
+pub trait WriteBe: Write {
+    /// Write a `u8`.
+    fn write_u8_be(&mut self, v: u8) -> Result<(), IoError> {
+        self.write_all(&[v])
+    }
+    /// Write a big-endian `u16`.
+    fn write_u16_be(&mut self, v: u16) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+    /// Write a big-endian `i16`.
+    fn write_i16_be(&mut self, v: i16) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+    /// Write a big-endian `u32`.
+    fn write_u32_be(&mut self, v: u32) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+    /// Write a big-endian `i32`.
+    fn write_i32_be(&mut self, v: i32) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+    /// Write a big-endian `u64`.
+    fn write_u64_be(&mut self, v: u64) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+    /// Write a big-endian `f32`.
+    fn write_f32_be(&mut self, v: f32) -> Result<(), IoError> {
+        self.write_all(&v.to_be_bytes())
+    }
+}
+
+impl<T: Write + ?Sized> WriteBe for T {}
