@@ -49,12 +49,12 @@ mod tests {
     use super::*;
 
     fn read_and_decrypt_era(path: &str) -> Vec<u8> {
-        use era::{DecryptReader, TeaKeys};
+        use era::TeaKeys;
         use std::io::Read;
 
         let file = std::fs::File::open(path).expect("Failed to open ERA file");
         let keys = TeaKeys::default_archive_keys();
-        let mut decrypt = DecryptReader::new(file, keys);
+        let mut decrypt = era::crypto::decrypt::Reader::new(file, keys);
         let mut data = Vec::new();
         decrypt.read_to_end(&mut data).expect("Failed to decrypt");
         data

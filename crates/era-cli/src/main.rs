@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
-use era::{DecryptReader, Reader, TeaKeys, Writer};
+use era::{Reader, TeaKeys, Writer};
 use serde::Serialize;
 
 /// Exit codes for scripting
@@ -152,7 +152,7 @@ struct ListEntry {
 /// Read and decrypt an ERA file into a byte buffer.
 fn open_archive(
     path: &str,
-) -> Result<Reader<DecryptReader<std::io::BufReader<std::fs::File>>>, String> {
+) -> Result<Reader<era::crypto::decrypt::Reader<std::io::BufReader<std::fs::File>>>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
     let buf = std::io::BufReader::new(file);
     Reader::from_encrypted(buf, TeaKeys::default_archive_keys())

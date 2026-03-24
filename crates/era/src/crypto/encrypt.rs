@@ -2,10 +2,10 @@
 
 use ecf::io::{IoError, Read, Seek, SeekFrom, Write, invalid_seek, is_unexpected_eof};
 
-use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64, tea_encrypt_block64};
+use super::tea::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64, tea_encrypt_block64};
 
 /// A writer that encrypts data using TEA cipher before writing
-pub struct EncryptWriter<W> {
+pub struct Writer<W> {
     inner: W,
     keys: TeaKeys,
     /// Current position in the plaintext stream
@@ -20,7 +20,7 @@ pub struct EncryptWriter<W> {
     block_written: bool,
 }
 
-impl<W: Write + Seek + Read> EncryptWriter<W> {
+impl<W: Write + Seek + Read> Writer<W> {
     /// Create a new encrypting writer
     pub fn new(inner: W, keys: TeaKeys) -> Self {
         Self {
@@ -90,7 +90,7 @@ impl<W: Write + Seek + Read> EncryptWriter<W> {
     }
 }
 
-impl<W: Write + Seek + Read> Write for EncryptWriter<W> {
+impl<W: Write + Seek + Read> Write for Writer<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, IoError> {
         if buf.is_empty() {
             return Ok(0);
@@ -148,7 +148,7 @@ impl<W: Write + Seek + Read> Write for EncryptWriter<W> {
     }
 }
 
-impl<W: Write + Seek + Read> Seek for EncryptWriter<W> {
+impl<W: Write + Seek + Read> Seek for Writer<W> {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError> {
         // Flush before seeking
         self.flush_buffer()?;

@@ -1,6 +1,6 @@
 //! Decrypting reader wrapper for encrypted ERA files.
 //!
-//! [`DecryptReader`] is generic over [`ecf::io::Read`] + [`ecf::io::Seek`].
+//! [`Reader`] is generic over [`ecf::io::Read`] + [`ecf::io::Seek`].
 //! When the `std` feature is enabled, those traits *are* `std::io::Read` /
 //! `std::io::Seek`, so a `File` or `BufReader` works directly.  In `no_std`
 //! mode they are minimal replacements defined in `ecf::io`.
@@ -10,7 +10,7 @@ extern crate std;
 
 use ecf::io::{IoError, Read, Seek, SeekFrom, invalid_seek};
 
-use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64};
+use super::tea::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64};
 
 /// A reader that decrypts TEA-encrypted data on the fly.
 ///
@@ -18,11 +18,12 @@ use crate::crypto::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64};
 /// 64-byte TEA blocks in CTR mode as data is read.
 ///
 /// ```ignore
-/// use era::{DecryptReader, TeaKeys};
+/// use era::crypto::decrypt::Reader;
+/// use era::TeaKeys;
 /// let file = std::fs::File::open("archive.era")?;
-/// let mut reader = DecryptReader::new(file, TeaKeys::default_archive_keys());
+/// let mut reader = Reader::new(file, TeaKeys::default_archive_keys());
 /// ```
-pub struct DecryptReader<R> {
+pub struct Reader<R> {
     inner: R,
     keys: TeaKeys,
     /// Current position in the decrypted stream.
@@ -35,7 +36,7 @@ pub struct DecryptReader<R> {
     buffer_valid: bool,
 }
 
-impl<R: Read + Seek> DecryptReader<R> {
+impl<R: Read + Seek> Reader<R> {
     /// Create a new decrypting reader.
     pub fn new(inner: R, keys: TeaKeys) -> Self {
         Self {
@@ -74,7 +75,7 @@ impl<R: Read + Seek> DecryptReader<R> {
     }
 }
 
-impl<R: Read + Seek> Read for DecryptReader<R> {
+impl<R: Read + Seek> Read for Reader<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         if buf.is_empty() {
             return Ok(0);
@@ -106,7 +107,7 @@ impl<R: Read + Seek> Read for DecryptReader<R> {
     }
 }
 
-impl<R: Read + Seek> Seek for DecryptReader<R> {
+impl<R: Read + Seek> Seek for Reader<R> {
     fn seek(&mut self, pos: SeekFrom) -> Result<u64, IoError> {
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset,

@@ -6,10 +6,10 @@
 //! # Streaming from a file (with decryption)
 //!
 //! ```ignore
-//! use era::{Reader, DecryptReader, TeaKeys};
+//! use era::{Reader, TeaKeys, crypto};
 //!
 //! let file = std::fs::File::open("root.era")?;
-//! let decrypt = DecryptReader::new(file, TeaKeys::default_archive_keys());
+//! let decrypt = crypto::decrypt::Reader::new(file, TeaKeys::default_archive_keys());
 //! let mut reader = Reader::new(decrypt)?;
 //!
 //! if let Some(idx) = reader.find_by_name("scenario\\design\\mymap.scn") {
@@ -294,7 +294,7 @@ impl<R: Read + Seek> Reader<R> {
     /// This hashes the ECF header fields and all chunk headers exactly as
     /// the game does in `ERA_LoadArchiveHeaders`.
     pub fn header_hash(&self) -> [u8; 20] {
-        crate::merkle::compute_header_hash(
+        crate::crypto::merkle::compute_header_hash(
             self.ecf_header.header_size,
             self.ecf_header.num_chunks,
             self.ecf_header.chunk_extra_data_size,
@@ -312,7 +312,7 @@ impl<R: Read + Seek> Reader<R> {
             return Ok(false);
         }
         let hash = self.header_hash();
-        crate::merkle::verify(public_key, &hash, &self.signature)
+        crate::crypto::merkle::verify(public_key, &hash, &self.signature)
     }
 
     /// Consume the reader and return the underlying source.
@@ -335,13 +335,13 @@ impl<'a> Reader<SliceCursor<'a>> {
     }
 }
 
-impl<R: Read + Seek> Reader<crate::DecryptReader<R>> {
+impl<R: Read + Seek> Reader<crate::crypto::decrypt::Reader<R>> {
     /// Parse an encrypted ERA archive, decrypting on the fly.
     ///
-    /// Wraps the source in a [`DecryptReader`](crate::DecryptReader) so data
-    /// is decrypted block-by-block as it is read — the full archive is never
-    /// materialised in memory.
+    /// Wraps the source in a [`crypto::decrypt::Reader`] so data is decrypted
+    /// block-by-block as it is read — the full archive is never materialised
+    /// in memory.
     pub fn from_encrypted(inner: R, keys: crate::TeaKeys) -> Result<Self> {
-        Self::new(crate::DecryptReader::new(inner, keys))
+        Self::new(crate::crypto::decrypt::Reader::new(inner, keys))
     }
 }

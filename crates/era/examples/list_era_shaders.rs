@@ -1,4 +1,4 @@
-use era::{DecryptReader, Reader, TeaKeys};
+use era::{Reader, TeaKeys, crypto};
 use std::env;
 use std::io::Read;
 
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(era_path)?;
     let keys = TeaKeys::default_archive_keys();
-    let mut decrypt = DecryptReader::new(file, keys);
+    let mut decrypt = crypto::decrypt::Reader::new(file, keys);
     let mut data = Vec::new();
     decrypt.read_to_end(&mut data)?;
 

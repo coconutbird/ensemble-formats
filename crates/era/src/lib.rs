@@ -27,19 +27,13 @@ pub mod buffer_pool;
 pub mod crypto;
 mod error;
 mod header;
-pub mod merkle;
 mod reader;
 mod writer;
 
-mod decrypt_reader;
-mod encrypt_writer;
-
 pub use buffer_pool::{BufferPool, PooledBuffer};
-pub use crypto::{ARCHIVE_PASSWORD, TEA_BLOCK_SIZE, TeaKeys};
+pub use crypto::tea::{ARCHIVE_PASSWORD, TEA_BLOCK_SIZE, TeaKeys};
 #[cfg(feature = "rayon")]
-pub use crypto::{tea_decrypt_data_parallel, tea_encrypt_data_parallel};
-pub use decrypt_reader::DecryptReader;
-pub use encrypt_writer::EncryptWriter;
+pub use crypto::tea::{tea_decrypt_data_parallel, tea_encrypt_data_parallel};
 pub use error::*;
 pub use header::*;
 pub use reader::*;
@@ -146,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_tea_encrypt_decrypt_roundtrip() {
-        use crate::crypto::{tea_decrypt_block64, tea_encrypt_block64};
+        use crate::crypto::tea::{tea_decrypt_block64, tea_encrypt_block64};
 
         let keys = TeaKeys::default_archive_keys();
         let original: [u8; 64] = core::array::from_fn(|i| i as u8);
@@ -162,7 +156,7 @@ mod tests {
     #[cfg(feature = "rayon")]
     #[test]
     fn test_parallel_encryption_roundtrip() {
-        use crate::crypto::{
+        use crate::crypto::tea::{
             tea_decrypt_data_parallel, tea_encrypt_data, tea_encrypt_data_parallel,
         };
 
