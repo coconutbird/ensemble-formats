@@ -42,7 +42,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::error::{Error, Result};
-use crate::vertex_element::VertexElementType;
+use crate::vertex::element::VertexElementType;
 
 /// Vertex element specifiers used in pack order strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,7 +9,6 @@
 //! 5. Bone bounds data (12 bytes each for low, 12 bytes each for high)
 //! 6. String table (null-terminated strings for bone names, pack_order, decl_order)
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use byteorder::{LittleEndian, WriteBytesExt};
@@ -89,11 +88,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let sections_offset = cursor.stream_position()?;
     let num_sections = geom.sections.len() as u32;
 
-    struct StringFixup {
-        position: u64,
-        string: String,
-    }
-    let mut string_fixups: Vec<StringFixup> = Vec::new();
+    let mut strings = super::string_table::StringTable::new();
     let mut bone_remap_fixups: Vec<(usize, usize)> = Vec::new();
 
     for (section_idx, section) in geom.sections.iter().enumerate() {
@@ -132,16 +127,10 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         let packer = &section.base_vert_packer;
         let pack_order_fixup_pos = cursor.stream_position()?;
         cursor.write_u64::<LittleEndian>(0)?;
-        string_fixups.push(StringFixup {
-            position: pack_order_fixup_pos,
-            string: packer.pack_order.clone(),
-        });
+        strings.add(pack_order_fixup_pos as usize, packer.pack_order.clone());
         let decl_order_fixup_pos = cursor.stream_position()?;
         cursor.write_u64::<LittleEndian>(0)?;
-        string_fixups.push(StringFixup {
-            position: decl_order_fixup_pos,
-            string: packer.decl_order.clone(),
-        });
+        strings.add(decl_order_fixup_pos as usize, packer.decl_order.clone());
 
         cursor.write_u32::<LittleEndian>(packer.pos_type as u32)?;
         cursor.write_u32::<LittleEndian>(packer.basis_type as u32)?;
@@ -196,10 +185,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         };
         cursor.write_all(packed_bone.as_bytes())?;
 
-        string_fixups.push(StringFixup {
-            position: name_fixup_pos,
-            string: bone.name.clone(),
-        });
+        strings.add(name_fixup_pos as usize, bone.name.clone());
     }
 
     // ---- Bone bounds data ----
@@ -222,26 +208,14 @@ pub(super) fn build_cached_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // ---- String table ----
     pad_to_alignment(&mut cursor, 2)?;
-    let mut string_offsets: std::collections::HashMap<String, u64> =
-        std::collections::HashMap::new();
-    for fixup in &string_fixups {
-        if !string_offsets.contains_key(&fixup.string) {
-            let offset = cursor.stream_position()?;
-            string_offsets.insert(fixup.string.clone(), offset);
-            cursor.write_all(fixup.string.as_bytes())?;
-            cursor.write_u8(0)?;
-            pad_to_alignment(&mut cursor, 2)?;
-        }
+    // Release the cursor borrow so we can operate on `buf` directly via StringTable.
+    {
+        let _ = cursor;
     }
-
-    // ---- Fix up string offsets ----
-    for fixup in &string_fixups {
-        let string_offset = string_offsets[&fixup.string];
-        cursor.seek(std::io::SeekFrom::Start(fixup.position))?;
-        cursor.write_u64::<LittleEndian>(string_offset)?;
-    }
+    strings.write_aligned(&mut buf, 2);
 
     // ---- Fix up packed array headers ----
+    let mut cursor = Cursor::new(&mut buf);
     fixup_packed_array_header(
         &mut cursor,
         sections_header_pos,

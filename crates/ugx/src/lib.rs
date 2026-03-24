@@ -32,13 +32,10 @@ pub mod math;
 mod raw;
 pub use error::{Error, Result};
 
-mod vertex_element;
-pub use vertex_element::VertexElementType;
+pub mod vertex;
+pub use vertex::{MAX_UV, UnivertPacker, UnpackedVertex, VertexElementType};
 
-mod univert_packer;
-pub use univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
-
-mod types;
+pub mod types;
 pub use types::*;
 
 mod reader;

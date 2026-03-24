@@ -13,8 +13,8 @@ use crate::bytes::{
 use crate::error::{Error, Result};
 use crate::raw::{PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
 use crate::types::{AABB, Bone, Matrix4x4, Section};
-use crate::univert_packer::UnivertPacker;
-use crate::vertex_element::VertexElementType;
+use crate::vertex::element::VertexElementType;
+use crate::vertex::packer::UnivertPacker;
 
 /// Read packed sections array from cached data.
 ///

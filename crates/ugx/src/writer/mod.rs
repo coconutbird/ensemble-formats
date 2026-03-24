@@ -7,6 +7,7 @@
 mod cached_data;
 mod granny;
 mod material;
+pub(crate) mod string_table;
 
 use alloc::vec::Vec;
 
@@ -71,8 +72,8 @@ fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::types::*;
-    use crate::univert_packer::{MAX_UV, UnivertPacker, UnpackedVertex};
-    use crate::vertex_element::VertexElementType;
+    use crate::vertex::element::VertexElementType;
+    use crate::vertex::packer::{MAX_UV, UnivertPacker, UnpackedVertex};
     use alloc::string::ToString;
     use alloc::vec;
 

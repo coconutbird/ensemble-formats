@@ -273,20 +273,13 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     cursor.write_u64::<LittleEndian>(mesh_bindings_start as u64)?;
 
     // ---- Bone array ----
-    struct StringFixup {
-        position: usize,
-        string: String,
-    }
-    let mut string_fixups: Vec<StringFixup> = Vec::new();
+    let mut strings = super::string_table::StringTable::new();
 
     for (i, bone) in geom.granny_bones.iter().enumerate() {
         let base = bones_start + i * GRANNY_BONE_SIZE;
         let lt = &local_transforms[i];
 
-        string_fixups.push(StringFixup {
-            position: base,
-            string: bone.name.clone(),
-        });
+        strings.add(base, bone.name.clone());
 
         cursor.seek(std::io::SeekFrom::Start((base + 0x08) as u64))?;
         cursor.write_i32::<LittleEndian>(bone.parent_index)?;
@@ -332,10 +325,7 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
         let bone_binding_count = mesh_bone_bindings[i].len();
 
-        string_fixups.push(StringFixup {
-            position: mesh_struct_pos,
-            string: mesh_names[i].clone(),
-        });
+        strings.add(mesh_struct_pos, mesh_names[i].clone());
 
         // +0x30: BoneBindingCount
         cursor.seek(std::io::SeekFrom::Start((mesh_struct_pos + 0x30) as u64))?;
@@ -357,45 +347,18 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         }
         for (j, bone_name) in bone_names.iter().enumerate() {
             let binding_pos = current_bone_binding_offset + j * GRANNY_BONE_BINDING_SIZE;
-            string_fixups.push(StringFixup {
-                position: binding_pos,
-                string: bone_name.clone(),
-            });
+            strings.add(binding_pos, bone_name.clone());
         }
         current_bone_binding_offset += bone_names.len() * GRANNY_BONE_BINDING_SIZE;
     }
 
     // ---- String table fixups ----
-    string_fixups.push(StringFixup {
-        position: 0x10,
-        string: "gr2ugx".to_string(),
-    });
-    string_fixups.push(StringFixup {
-        position: skeleton_struct_offset,
-        string: "GrannyRootBone".to_string(),
-    });
-    string_fixups.push(StringFixup {
-        position: model_struct_offset,
-        string: "GrannyRootBone".to_string(),
-    });
+    strings.add(0x10, "gr2ugx".to_string());
+    strings.add(skeleton_struct_offset, "GrannyRootBone".to_string());
+    strings.add(model_struct_offset, "GrannyRootBone".to_string());
 
-    let mut string_offsets: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    for fixup in &string_fixups {
-        if !string_offsets.contains_key(&fixup.string) {
-            let offset = buf.len();
-            string_offsets.insert(fixup.string.clone(), offset);
-            buf.extend_from_slice(fixup.string.as_bytes());
-            buf.push(0);
-        }
-    }
-
-    // ---- Fix up string offsets ----
-    for fixup in &string_fixups {
-        let string_offset = string_offsets[&fixup.string] as u64;
-        let pos = fixup.position;
-        buf[pos..pos + 8].copy_from_slice(&string_offset.to_le_bytes());
-    }
+    // ---- Build string table and patch offsets ----
+    strings.write(&mut buf);
 
     Ok(buf)
 }
