@@ -26,51 +26,11 @@
 //! - Unsigned normalized: `value / max_value` (e.g., 255 → 1.0)
 //! - Signed normalized: `value / max_value` (e.g., 32767 → 1.0, -32768 → -1.0)
 
-use alloc::string::String;
 use alloc::vec::Vec;
 use half::f16;
 
+use crate::bytes::{read_f32_le, read_i16_le, read_u16_le, read_u32_le};
 use crate::error::{Error, Result};
-
-/// Read a little-endian u16 from `data` at `*pos`, advancing `*pos` by 2.
-#[inline]
-fn read_u16_le(data: &[u8], pos: &mut usize) -> Result<u16> {
-    let end = *pos + 2;
-    if end > data.len() {
-        return Err(Error::UnexpectedEof {
-            context: String::from("u16"),
-        });
-    }
-    let v = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
-    *pos = end;
-    Ok(v)
-}
-
-/// Read a little-endian i16 from `data` at `*pos`, advancing `*pos` by 2.
-#[inline]
-fn read_i16_le(data: &[u8], pos: &mut usize) -> Result<i16> {
-    Ok(read_u16_le(data, pos)? as i16)
-}
-
-/// Read a little-endian u32 from `data` at `*pos`, advancing `*pos` by 4.
-#[inline]
-fn read_u32_le(data: &[u8], pos: &mut usize) -> Result<u32> {
-    let end = *pos + 4;
-    if end > data.len() {
-        return Err(Error::UnexpectedEof {
-            context: String::from("u32"),
-        });
-    }
-    let v = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
-    *pos = end;
-    Ok(v)
-}
-
-/// Read a little-endian f32 from `data` at `*pos`, advancing `*pos` by 4.
-#[inline]
-fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32> {
-    Ok(f32::from_bits(read_u32_le(data, pos)?))
-}
 
 /// Vertex element data types (matches C++ `VertexElement::EType` enum).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

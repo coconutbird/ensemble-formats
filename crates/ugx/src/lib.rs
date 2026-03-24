@@ -25,7 +25,10 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+mod bytes;
+mod chunk_ids;
 mod error;
+pub mod math;
 pub use error::{Error, Result};
 
 mod vertex_element;
@@ -44,13 +47,3 @@ pub use reader::Reader;
 mod writer;
 #[cfg(feature = "std")]
 pub use writer::Writer;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ugx_version_constant() {
-        assert_eq!(UGX_VERSION, 0xECDA1015);
-    }
-}

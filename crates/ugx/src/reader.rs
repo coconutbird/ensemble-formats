@@ -101,108 +101,74 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use zerocopy::Ref;
+use zerocopy::{FromBytes, Immutable, KnownLayout, Ref};
 
+use crate::bytes::{read_f32_le, read_i32_le, read_u16_le, read_u32_le, read_u64_le};
+use crate::chunk_ids::*;
 use crate::error::{Error, Result};
 use crate::types::*;
 use crate::univert_packer::UnivertPacker;
 use crate::vertex_element::VertexElementType;
 
 // ============================================================================
-// Slice-based read helpers (little-endian)
+// Zerocopy raw overlays (reader-internal on-disk structs)
 // ============================================================================
 
-#[inline]
-fn read_u16_le(data: &[u8], pos: &mut usize) -> Result<u16> {
-    let end = *pos + 2;
-    if end > data.len() {
-        return Err(Error::UnexpectedEof {
-            context: String::from("u16"),
-        });
-    }
-    let v = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
-    *pos = end;
-    Ok(v)
+/// Raw on-disk BHeader (64 bytes, little-endian).
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+struct GeomHeaderRaw {
+    pub signature: [u8; 4],
+    pub rigid_bone_index: [u8; 4],
+    pub sphere_center: [[u8; 4]; 3],
+    pub sphere_radius: [u8; 4],
+    pub aabb_min: [[u8; 4]; 3],
+    pub aabb_max: [[u8; 4]; 3],
+    pub max_instances: [u8; 2],
+    pub instance_index_multiplier: [u8; 2],
+    pub large_geom_bone_index: [u8; 2],
+    pub all_sections_rigid: u8,
+    pub global_bones: u8,
+    pub all_sections_skinned: u8,
+    pub rigid_only: u8,
+    pub _padding: [u8; 2],
+    pub _padding2: [u8; 4],
 }
 
-#[inline]
-fn read_u32_le(data: &[u8], pos: &mut usize) -> Result<u32> {
-    let end = *pos + 4;
-    if end > data.len() {
-        return Err(Error::UnexpectedEof {
-            context: String::from("u32"),
-        });
-    }
-    let v = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
-    *pos = end;
-    Ok(v)
+/// Raw on-disk BPackedArray header (16 bytes, little-endian).
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+struct PackedArrayRaw {
+    pub count: [u8; 4],
+    pub _padding: [u8; 4],
+    pub offset: [u8; 8],
 }
 
-#[inline]
-fn read_i32_le(data: &[u8], pos: &mut usize) -> Result<i32> {
-    Ok(read_u32_le(data, pos)? as i32)
+/// Raw on-disk BBone (80 bytes, little-endian).
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+struct PackedBoneRaw {
+    pub name_offset: [u8; 8],
+    pub model_to_bone: [[u8; 4]; 16],
+    pub parent_index: [u8; 4],
+    pub _padding: [u8; 4],
 }
 
-#[inline]
-fn read_u64_le(data: &[u8], pos: &mut usize) -> Result<u64> {
-    let end = *pos + 8;
-    if end > data.len() {
-        return Err(Error::UnexpectedEof {
-            context: String::from("u64"),
-        });
-    }
-    let v = u64::from_le_bytes([
-        data[*pos],
-        data[*pos + 1],
-        data[*pos + 2],
-        data[*pos + 3],
-        data[*pos + 4],
-        data[*pos + 5],
-        data[*pos + 6],
-        data[*pos + 7],
-    ]);
-    *pos = end;
-    Ok(v)
+/// Raw on-disk BSection fixed fields (40 bytes, little-endian).
+#[derive(FromBytes, KnownLayout, Immutable, Debug)]
+#[repr(C)]
+struct PackedSectionFixedRaw {
+    pub material_index: [u8; 4],
+    pub accessory_index: [u8; 4],
+    pub max_bones: [u8; 4],
+    pub rigid_bone_index: [u8; 4],
+    pub ib_offset: [u8; 4],
+    pub num_tris: [u8; 4],
+    pub vb_offset: [u8; 4],
+    pub vb_bytes: [u8; 4],
+    pub vert_size: [u8; 4],
+    pub num_verts: [u8; 4],
 }
-
-#[inline]
-fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32> {
-    Ok(f32::from_bits(read_u32_le(data, pos)?))
-}
-
-// ============================================================================
-// ECF Chunk IDs for UGX Files
-// ============================================================================
-//
-// These chunk IDs are defined in the original source at xgeom/ugxGeom.h.
-// The ECF container holds multiple chunks, each identified by a 64-bit ID.
-
-/// BCachedData chunk - Contains header, sections, bones, accessories.
-/// All pointers in this chunk are stored as offsets for position independence.
-const ECF_CACHED_DATA_CHUNK_ID: u64 = 0x00000700;
-
-/// Index Buffer chunk - Raw array of u16 triangle indices.
-const ECF_IB_CHUNK_ID: u64 = 0x00000701;
-
-/// Vertex Buffer chunk - Packed vertex data (format defined by UnivertPacker).
-const ECF_VB_CHUNK_ID: u64 = 0x00000702;
-
-/// Granny chunk - Contains skeleton with inverse world matrices for skinning.
-/// This is the authoritative source for bone transforms in skinned meshes.
-const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
-
-/// Material chunk - BBinaryDataTree document with material definitions.
-/// Contains texture paths, blend modes, specular settings, etc.
-const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
-
-// Note: Chunk 0x705 (AABB Tree) exists but is not currently parsed.
-
-// ============================================================================
-// BCachedData Signature
-// ============================================================================
-
-/// BCachedData header signature (verified from IDA: only 0xC2340004 is used).
-const GEOM_HEADER_SIGNATURE: u32 = 0xC2340004;
 
 impl UgxGeom {
     /// Parse UGX geometry from a byte slice (ECF container).
