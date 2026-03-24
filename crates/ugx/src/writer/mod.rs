@@ -12,6 +12,8 @@ pub(crate) mod string_table;
 
 use alloc::vec::Vec;
 
+use ecf::io::WriteLe;
+
 use crate::chunk_ids::*;
 use crate::error::Result;
 use crate::types::UgxGeom;
@@ -70,7 +72,7 @@ fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
 fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
     let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
     for &idx in &geom.index_buffer {
-        buf.extend_from_slice(&idx.to_le_bytes());
+        buf.write_u16_le(idx).unwrap();
     }
     buf
 }

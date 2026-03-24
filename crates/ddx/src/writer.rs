@@ -4,6 +4,8 @@
 
 use alloc::vec::Vec;
 
+use ecf::io::WriteLe;
+
 use crate::Result;
 use crate::format::DataFormat;
 use crate::reader::{DdxTexture, TextureInfo};
@@ -55,10 +57,10 @@ impl DdxTexture {
     /// Write texture as DDS to a `Vec<u8>`.
     pub fn write_dds(&self, out: &mut Vec<u8>) -> Result<()> {
         // Magic
-        out.extend_from_slice(&DDS_MAGIC.to_le_bytes());
+        out.write_u32_le(DDS_MAGIC).unwrap();
 
         // DDS_HEADER (124 bytes)
-        out.extend_from_slice(&124u32.to_le_bytes()); // dwSize
+        out.write_u32_le(124).unwrap(); // dwSize
 
         // Flags
         let mut flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT;
@@ -68,21 +70,21 @@ impl DdxTexture {
         if self.info.data_format.is_dxt() {
             flags |= DDSD_LINEARSIZE;
         }
-        out.extend_from_slice(&flags.to_le_bytes());
+        out.write_u32_le(flags).unwrap();
 
-        out.extend_from_slice(&self.info.height.to_le_bytes());
-        out.extend_from_slice(&self.info.width.to_le_bytes());
+        out.write_u32_le(self.info.height).unwrap();
+        out.write_u32_le(self.info.width).unwrap();
 
         let linear_size =
             calculate_linear_size(self.info.width, self.info.height, self.info.data_format);
-        out.extend_from_slice(&linear_size.to_le_bytes());
+        out.write_u32_le(linear_size).unwrap();
 
-        out.extend_from_slice(&0u32.to_le_bytes()); // dwDepth
-        out.extend_from_slice(&self.info.num_mip_levels.to_le_bytes());
+        out.write_u32_le(0).unwrap(); // dwDepth
+        out.write_u32_le(self.info.num_mip_levels).unwrap();
 
         // dwReserved1[11]
         for _ in 0..11 {
-            out.extend_from_slice(&0u32.to_le_bytes());
+            out.write_u32_le(0).unwrap();
         }
 
         // DDS_PIXELFORMAT (32 bytes)
@@ -93,12 +95,12 @@ impl DdxTexture {
         if self.info.num_mip_levels > 1 {
             caps |= DDSCAPS_MIPMAP | DDSCAPS_COMPLEX;
         }
-        out.extend_from_slice(&caps.to_le_bytes());
+        out.write_u32_le(caps).unwrap();
 
-        out.extend_from_slice(&0u32.to_le_bytes()); // dwCaps2
-        out.extend_from_slice(&0u32.to_le_bytes()); // dwCaps3
-        out.extend_from_slice(&0u32.to_le_bytes()); // dwCaps4
-        out.extend_from_slice(&0u32.to_le_bytes()); // dwReserved2
+        out.write_u32_le(0).unwrap(); // dwCaps2
+        out.write_u32_le(0).unwrap(); // dwCaps3
+        out.write_u32_le(0).unwrap(); // dwCaps4
+        out.write_u32_le(0).unwrap(); // dwReserved2
 
         // Texture data
         out.extend_from_slice(&self.data);
@@ -124,26 +126,26 @@ fn calculate_linear_size(width: u32, height: u32, format: DataFormat) -> u32 {
 
 /// Write DDS_PIXELFORMAT structure.
 fn write_pixel_format(out: &mut Vec<u8>, info: &TextureInfo) -> Result<()> {
-    out.extend_from_slice(&32u32.to_le_bytes()); // dwSize
+    out.write_u32_le(32).unwrap(); // dwSize
 
     match info.data_format {
         DataFormat::Dxt1 => {
-            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.write_u32_le(DDPF_FOURCC).unwrap();
             out.extend_from_slice(b"DXT1");
             out.extend_from_slice(&[0u8; 20]); // 5 zero DWORDs
         }
         DataFormat::Dxt3 => {
-            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.write_u32_le(DDPF_FOURCC).unwrap();
             out.extend_from_slice(b"DXT3");
             out.extend_from_slice(&[0u8; 20]);
         }
         DataFormat::Dxt5 | DataFormat::Dxt5N | DataFormat::Dxt5Y | DataFormat::Dxt5H => {
-            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.write_u32_le(DDPF_FOURCC).unwrap();
             out.extend_from_slice(b"DXT5");
             out.extend_from_slice(&[0u8; 20]);
         }
         DataFormat::Dxn => {
-            out.extend_from_slice(&DDPF_FOURCC.to_le_bytes());
+            out.write_u32_le(DDPF_FOURCC).unwrap();
             out.extend_from_slice(b"ATI2");
             out.extend_from_slice(&[0u8; 20]);
         }
@@ -152,13 +154,13 @@ fn write_pixel_format(out: &mut Vec<u8>, info: &TextureInfo) -> Result<()> {
             if info.has_alpha {
                 pf_flags |= DDPF_ALPHAPIXELS;
             }
-            out.extend_from_slice(&pf_flags.to_le_bytes());
-            out.extend_from_slice(&0u32.to_le_bytes()); // dwFourCC
-            out.extend_from_slice(&32u32.to_le_bytes()); // dwRGBBitCount
-            out.extend_from_slice(&0x00FF0000u32.to_le_bytes()); // R mask
-            out.extend_from_slice(&0x0000FF00u32.to_le_bytes()); // G mask
-            out.extend_from_slice(&0x000000FFu32.to_le_bytes()); // B mask
-            out.extend_from_slice(&0xFF000000u32.to_le_bytes()); // A mask
+            out.write_u32_le(pf_flags).unwrap();
+            out.write_u32_le(0).unwrap(); // dwFourCC
+            out.write_u32_le(32).unwrap(); // dwRGBBitCount
+            out.write_u32_le(0x00FF0000).unwrap(); // R mask
+            out.write_u32_le(0x0000FF00).unwrap(); // G mask
+            out.write_u32_le(0x000000FF).unwrap(); // B mask
+            out.write_u32_le(0xFF000000).unwrap(); // A mask
         }
     }
 

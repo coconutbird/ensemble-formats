@@ -5,6 +5,8 @@
 
 use alloc::vec::Vec;
 
+use ecf::io::WriteLe;
+
 use crate::error::Result;
 use crate::types::aabb_tree::{AABB_NULL_INDEX, AABB_TREE_VERSION, AabbTree, AabbTreeNode};
 
@@ -18,10 +20,10 @@ pub(super) fn build_aabb_tree_data(tree: &AabbTree) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(est);
 
     // Version header
-    buf.extend_from_slice(&AABB_TREE_VERSION.to_le_bytes());
+    buf.write_u32_le(AABB_TREE_VERSION).unwrap();
 
     // Node count
-    buf.extend_from_slice(&(tree.nodes.len() as u32).to_le_bytes());
+    buf.write_u32_le(tree.nodes.len() as u32).unwrap();
 
     // Nodes
     for node in &tree.nodes {
@@ -29,7 +31,7 @@ pub(super) fn build_aabb_tree_data(tree: &AabbTree) -> Result<Vec<u8>> {
     }
 
     // Version sentinel
-    buf.extend_from_slice(&AABB_TREE_VERSION.to_le_bytes());
+    buf.write_u32_le(AABB_TREE_VERSION).unwrap();
 
     Ok(buf)
 }
@@ -41,28 +43,28 @@ pub(super) fn build_aabb_tree_data(tree: &AabbTree) -> Result<Vec<u8>> {
 fn write_node(buf: &mut Vec<u8>, node: &AabbTreeNode) {
     // mBounds (AABB = min[3] + max[3])
     for &v in &node.min {
-        buf.extend_from_slice(&v.to_le_bytes());
+        buf.write_f32_le(v).unwrap();
     }
     for &v in &node.max {
-        buf.extend_from_slice(&v.to_le_bytes());
+        buf.write_f32_le(v).unwrap();
     }
 
     // mpParent, mpChildren[0], mpChildren[1] as byte offsets
-    buf.extend_from_slice(&index_to_offset(node.parent).to_le_bytes());
-    buf.extend_from_slice(&index_to_offset(node.children[0]).to_le_bytes());
-    buf.extend_from_slice(&index_to_offset(node.children[1]).to_le_bytes());
+    buf.write_u32_le(index_to_offset(node.parent)).unwrap();
+    buf.write_u32_le(index_to_offset(node.children[0])).unwrap();
+    buf.write_u32_le(index_to_offset(node.children[1])).unwrap();
 
     // mIndex
-    buf.extend_from_slice(&node.index.to_le_bytes());
+    buf.write_u32_le(node.index).unwrap();
 
     // mObjIndices (BDynamicArray<int>: count + i32 elements)
-    buf.extend_from_slice(&(node.obj_indices.len() as u32).to_le_bytes());
+    buf.write_u32_le(node.obj_indices.len() as u32).unwrap();
     for &idx in &node.obj_indices {
-        buf.extend_from_slice(&idx.to_le_bytes());
+        buf.write_i32_le(idx).unwrap();
     }
 
     // mSplitPlane
-    buf.extend_from_slice(&node.split_plane.to_le_bytes());
+    buf.write_f32_le(node.split_plane).unwrap();
 }
 
 /// Convert a node index to a byte offset. `AABB_NULL_INDEX` stays as-is.

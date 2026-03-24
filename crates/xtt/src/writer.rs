@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 
 use ecf::Writer as EcfWriter;
+use ecf::io::WriteBe;
 
 use crate::{
     CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK, CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD,
@@ -65,10 +66,10 @@ impl Writer {
 
     fn write_header(header: &XttHeader) -> Vec<u8> {
         let mut buf = Vec::with_capacity(XttHeader::SIZE);
-        buf.extend_from_slice(&header.version.to_be_bytes());
-        buf.extend_from_slice(&header.num_active_textures.to_be_bytes());
-        buf.extend_from_slice(&header.num_active_decals.to_be_bytes());
-        buf.extend_from_slice(&header.num_active_decal_instances.to_be_bytes());
+        buf.write_i32_be(header.version).unwrap();
+        buf.write_i32_be(header.num_active_textures).unwrap();
+        buf.write_i32_be(header.num_active_decals).unwrap();
+        buf.write_i32_be(header.num_active_decal_instances).unwrap();
         buf
     }
 
@@ -82,23 +83,23 @@ impl Writer {
             + linker.decal_alpha_data.len();
 
         let mut buf = Vec::with_capacity(total_size);
-        buf.extend_from_slice(&linker.grid_x.to_be_bytes());
-        buf.extend_from_slice(&linker.grid_z.to_be_bytes());
-        buf.extend_from_slice(&linker.spec_pass_needed.to_be_bytes());
-        buf.extend_from_slice(&linker.self_pass_needed.to_be_bytes());
-        buf.extend_from_slice(&linker.env_mask_pass_needed.to_be_bytes());
-        buf.extend_from_slice(&linker.alpha_pass_needed.to_be_bytes());
-        buf.extend_from_slice(&linker.is_fully_opaque.to_be_bytes());
-        buf.extend_from_slice(&linker.num_splat_layers.to_be_bytes());
-        buf.extend_from_slice(&linker.num_decal_layers.to_be_bytes());
+        buf.write_i32_be(linker.grid_x).unwrap();
+        buf.write_i32_be(linker.grid_z).unwrap();
+        buf.write_i32_be(linker.spec_pass_needed).unwrap();
+        buf.write_i32_be(linker.self_pass_needed).unwrap();
+        buf.write_i32_be(linker.env_mask_pass_needed).unwrap();
+        buf.write_i32_be(linker.alpha_pass_needed).unwrap();
+        buf.write_i32_be(linker.is_fully_opaque).unwrap();
+        buf.write_i32_be(linker.num_splat_layers).unwrap();
+        buf.write_i32_be(linker.num_decal_layers).unwrap();
 
         for &id in &linker.splat_layer_ids {
-            buf.extend_from_slice(&id.to_be_bytes());
+            buf.write_i32_be(id).unwrap();
         }
         buf.extend_from_slice(&linker.splat_alpha_data);
 
         for &id in &linker.decal_layer_ids {
-            buf.extend_from_slice(&id.to_be_bytes());
+            buf.write_i32_be(id).unwrap();
         }
         buf.extend_from_slice(&linker.decal_alpha_data);
 
@@ -108,7 +109,7 @@ impl Writer {
     fn write_foliage_header(foliage: &XttFoliage) -> Vec<u8> {
         let num_sets = foliage.sets.len();
         let mut buf = Vec::with_capacity(4 + num_sets * FILENAME_SIZE);
-        buf.extend_from_slice(&(num_sets as u32).to_be_bytes());
+        buf.write_u32_be(num_sets as u32).unwrap();
 
         for set in &foliage.sets {
             let mut filename_bytes = [0u8; FILENAME_SIZE];
@@ -127,21 +128,21 @@ impl Writer {
         let total_size = 8 + num_sets * 4 * 3 + 4 + total_index_buffer_size;
 
         let mut buf = Vec::with_capacity(total_size);
-        buf.extend_from_slice(&qn.qn_parent_index.to_be_bytes());
-        buf.extend_from_slice(&qn.num_sets.to_be_bytes());
+        buf.write_u32_be(qn.qn_parent_index).unwrap();
+        buf.write_u32_be(qn.num_sets).unwrap();
 
         for &idx in &qn.set_indices {
-            buf.extend_from_slice(&idx.to_be_bytes());
+            buf.write_i32_be(idx).unwrap();
         }
         for &count in &qn.set_poly_counts {
-            buf.extend_from_slice(&count.to_be_bytes());
+            buf.write_i32_be(count).unwrap();
         }
 
         let total_physical_memory: i32 = qn.index_buffers.iter().map(|b| b.len() as i32).sum();
-        buf.extend_from_slice(&total_physical_memory.to_be_bytes());
+        buf.write_i32_be(total_physical_memory).unwrap();
 
         for b in &qn.index_buffers {
-            buf.extend_from_slice(&(b.len() as i32).to_be_bytes());
+            buf.write_i32_be(b.len() as i32).unwrap();
         }
         for b in &qn.index_buffers {
             buf.extend_from_slice(b);
