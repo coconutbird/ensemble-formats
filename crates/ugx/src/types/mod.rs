@@ -15,20 +15,38 @@
 //! | `Matrix4x4`     | `BMatrix` (row-major 4x4)        |
 //! | `AABB`          | `AABB` (xcore/math/vectorTypes.h)|
 //! | `Sphere`        | `BSphere`                        |
+//! | `AabbTree`      | `BAABBTree` (xgeom/aabbTree.h)   |
+//! | `AabbTreeNode`  | `BAABBTreeNode`                  |
 //!
 //! Note: The DE (Definitive Edition) format differs from the original Xbox 360
 //! source due to x64 pointer sizes and some additional fields.
 
+pub mod aabb_tree;
 pub mod bone;
 pub mod material;
 pub mod primitives;
 pub mod section;
 
 // Re-export all public types for convenient access.
+pub use aabb_tree::{AabbTree, AabbTreeNode};
 pub use bone::{Bone, GrannyBone, GrannyMesh};
 pub use material::{Map, MapType, Material};
 pub use primitives::{AABB, Keyframe, Sphere};
 pub use section::Section;
+
+/// A model accessory (C++ `Unigeom::BAccessory`).
+///
+/// Accessories group bones and reference object (section) indices.
+/// Layout verified from IDA `BPackedArray_Accessories__unpack` at `0x1406d8660`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Accessory {
+    /// First bone index in this accessory group.
+    pub first_bone: i32,
+    /// Number of bones in this accessory group.
+    pub num_bones: i32,
+    /// Section/object indices that belong to this accessory.
+    pub object_indices: Vec<i32>,
+}
 
 // Re-export math types so downstream code using `types::Matrix4x4` still works.
 pub use crate::math::{Matrix4x4, QForm};
@@ -64,16 +82,32 @@ pub struct UgxGeom {
     pub vertex_buffer: Vec<u8>,
     /// Raw index buffer (u16 indices).
     pub index_buffer: Vec<u16>,
+    /// Accessories (from BCachedData).
+    pub accessories: Vec<Accessory>,
+    /// Valid accessories subset (from BCachedData).
+    pub valid_accessories: Vec<Accessory>,
     /// Is the entire mesh rigid (single bone)?
     pub rigid_only: bool,
     /// Rigid bone index (if rigid_only).
     pub rigid_bone_index: i32,
+    /// Maximum number of instances for instanced rendering.
+    pub max_instances: i16,
+    /// Instance index multiplier (next power of two of max vertex count).
+    pub instance_index_multiplier: i16,
+    /// Large geometry bone index (i16::MAX when unused).
+    pub large_geom_bone_index: i16,
     /// Are all sections rigid (multi-bone rigid)?
     pub all_sections_rigid: bool,
     /// Are all sections skinned?
     pub all_sections_skinned: bool,
     /// Use global bones?
     pub global_bones: bool,
+    /// Parsed AABB tree (chunk 0x705, optional).
+    ///
+    /// Spatial acceleration structure used by the game engine for collision
+    /// and ray-casting queries. When `None`, the chunk is omitted from the
+    /// written ECF container.
+    pub aabb_tree: Option<AabbTree>,
 }
 
 impl UgxGeom {

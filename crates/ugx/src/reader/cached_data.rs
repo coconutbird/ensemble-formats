@@ -11,8 +11,8 @@ use crate::bytes::{
     read_f32_le, read_i32_le, read_null_terminated_string, read_u32_le, read_u64_le,
 };
 use crate::error::{Error, Result};
-use crate::raw::{PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
-use crate::types::{AABB, Bone, Matrix4x4, Section};
+use crate::raw::{AccessoryRaw, PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
+use crate::types::{AABB, Accessory, Bone, Matrix4x4, Section};
 use crate::vertex::element::VertexElementType;
 use crate::vertex::packer::UnivertPacker;
 
@@ -257,4 +257,68 @@ pub(super) fn read_bone_bounds(data: &[u8], pos: &mut usize) -> Result<Vec<AABB>
     }
 
     Ok(bounds)
+}
+
+/// Read packed accessories array from cached data.
+///
+/// Each accessory is 24 bytes (`AccessoryRaw`), containing `first_bone`, `num_bones`,
+/// and a nested `BPackedArray<int>` for `mObjectIndices`.
+///
+/// Verified from IDA `BPackedArray_Accessories__unpack` at `0x1406d8660`:
+/// the outer array is fixed up first, then each accessory's inner packed array
+/// offset is resolved (4-byte aligned for i32 elements).
+pub(super) fn read_packed_accessories(data: &[u8], pos: &mut usize) -> Result<Vec<Accessory>> {
+    let (arr, _): (Ref<_, PackedArrayRaw>, _) =
+        Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
+            context: String::from("PackedArrayRaw accessories"),
+        })?;
+    let count = u32::from_le_bytes(arr.count) as usize;
+    let offset = u64::from_le_bytes(arr.offset) as usize;
+    *pos += core::mem::size_of::<PackedArrayRaw>();
+
+    if count == 0 || offset == 0xFFFFFFFF || offset == 0xFFFFFFFFFFFFFFFF {
+        return Ok(Vec::new());
+    }
+
+    let mut acc_pos = offset;
+    let mut accessories = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let (raw, _): (Ref<_, AccessoryRaw>, _) =
+            Ref::from_prefix(&data[acc_pos..]).map_err(|_| Error::UnexpectedEof {
+                context: String::from("AccessoryRaw"),
+            })?;
+
+        let first_bone = i32::from_le_bytes(raw.first_bone);
+        let num_bones = i32::from_le_bytes(raw.num_bones);
+
+        // Nested packed array: mObjectIndices
+        let inner_count = u32::from_le_bytes(raw.object_indices.count) as usize;
+        let inner_offset = u64::from_le_bytes(raw.object_indices.offset) as usize;
+
+        let object_indices = if inner_count > 0
+            && inner_offset != 0xFFFFFFFF
+            && inner_offset != 0xFFFFFFFFFFFFFFFF
+            && inner_offset + inner_count * 4 <= data.len()
+        {
+            let mut indices = Vec::with_capacity(inner_count);
+            let mut idx_pos = inner_offset;
+            for _ in 0..inner_count {
+                indices.push(read_i32_le(data, &mut idx_pos)?);
+            }
+            indices
+        } else {
+            Vec::new()
+        };
+
+        accessories.push(Accessory {
+            first_bone,
+            num_bones,
+            object_indices,
+        });
+
+        acc_pos += core::mem::size_of::<AccessoryRaw>();
+    }
+
+    Ok(accessories)
 }

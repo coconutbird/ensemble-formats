@@ -149,13 +149,19 @@ fn make_test_geom() -> UgxGeom {
             rigid_only: false,
             global_bones: false,
         }],
+        accessories: Vec::new(),
+        valid_accessories: Vec::new(),
         vertex_buffer,
         index_buffer: vec![0, 1, 2],
         rigid_only: false,
         rigid_bone_index: -1,
+        max_instances: 1,
+        instance_index_multiplier: 4, // next_power_of_two(3)
+        large_geom_bone_index: i16::MAX,
         all_sections_rigid: false,
         all_sections_skinned: true,
         global_bones: false,
+        aabb_tree: None,
     }
 }
 
@@ -1376,13 +1382,19 @@ fn test_gltf_import_rigid_mesh_uses_game_formats() {
             rigid_only: true,
             global_bones: false,
         }],
+        accessories: Vec::new(),
+        valid_accessories: Vec::new(),
         vertex_buffer,
         index_buffer: vec![0, 1, 2],
         rigid_only: true,
         rigid_bone_index: -1,
+        max_instances: 1,
+        instance_index_multiplier: 4,
+        large_geom_bone_index: i16::MAX,
         all_sections_rigid: true,
         all_sections_skinned: false,
         global_bones: false,
+        aabb_tree: None,
     };
 
     // Export to glTF
@@ -1539,13 +1551,19 @@ fn test_material_names_and_textures_exported() {
             rigid_only: true,
             global_bones: false,
         }],
+        accessories: Vec::new(),
+        valid_accessories: Vec::new(),
         vertex_buffer: vb,
         index_buffer: vec![0, 1, 2],
         rigid_only: true,
         rigid_bone_index: -1,
+        max_instances: 1,
+        instance_index_multiplier: 4,
+        large_geom_bone_index: i16::MAX,
         all_sections_rigid: true,
         all_sections_skinned: false,
         global_bones: false,
+        aabb_tree: None,
     };
 
     let options = GltfExportOptions {
@@ -1616,4 +1634,354 @@ fn test_material_names_and_textures_exported() {
     // Verify emissive texture uses UV channel 1
     let emit_info = root.materials[1].emissive_texture.as_ref().unwrap();
     assert_eq!(emit_info.tex_coord, 1);
+}
+
+// ============================================================================
+// Rebuild derived data tests
+// ============================================================================
+
+/// Test that rebuild_bounds produces correct AABB and bounding sphere from known vertices.
+#[test]
+fn test_rebuild_bounds() {
+    let original = make_test_geom();
+
+    // Export → import (which calls rebuild_derived_data)
+    let opts = GltfExportOptions {
+        embed_buffers: false,
+        include_materials: false,
+        include_skeleton: true,
+    };
+    let export = export_to_gltf(&original, &opts).unwrap();
+    let import_opts = GltfImportOptions {
+        include_skeleton: true,
+        include_materials: false,
+    };
+    let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+    // Known vertices: [0,0,0], [1,0,0], [0,1,0] → AABB min=[0,0,0], max=[1,1,0]
+    assert!(imported.bounds.min[0] <= 0.001, "min.x should be ~0");
+    assert!(imported.bounds.min[1] <= 0.001, "min.y should be ~0");
+    assert!(imported.bounds.max[0] >= 0.999, "max.x should be ~1");
+    assert!(imported.bounds.max[1] >= 0.999, "max.y should be ~1");
+
+    // Sphere center should be roughly [0.5, 0.5, 0]
+    assert!((imported.bounding_sphere.center[0] - 0.5).abs() < 0.1);
+    assert!((imported.bounding_sphere.center[1] - 0.5).abs() < 0.1);
+    assert!(
+        imported.bounding_sphere.radius > 0.0,
+        "radius should be > 0"
+    );
+}
+
+/// Test that rebuild_bone_bounds produces per-bone AABBs from skinned vertices.
+#[test]
+fn test_rebuild_bone_bounds() {
+    let original = make_test_geom();
+
+    let opts = GltfExportOptions {
+        embed_buffers: false,
+        include_materials: false,
+        include_skeleton: true,
+    };
+    let export = export_to_gltf(&original, &opts).unwrap();
+    let import_opts = GltfImportOptions {
+        include_skeleton: true,
+        include_materials: false,
+    };
+    let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+    // Should have bone bounds for each bone
+    assert_eq!(
+        imported.bone_bounds.len(),
+        imported.bones.len(),
+        "bone_bounds count should match bones count"
+    );
+
+    // At least some bones should have meaningful (non-default) bounds
+    if !imported.bone_bounds.is_empty() {
+        let has_real_bounds = imported
+            .bone_bounds
+            .iter()
+            .any(|bb| bb.min[0] != f32::MAX && bb.max[0] != f32::MIN);
+        assert!(has_real_bounds, "at least one bone should have real bounds");
+    }
+}
+
+/// Test that rebuild_metadata_flags sets correct values.
+#[test]
+fn test_rebuild_metadata_flags() {
+    let original = make_test_geom();
+
+    let opts = GltfExportOptions {
+        embed_buffers: false,
+        include_materials: false,
+        include_skeleton: true,
+    };
+    let export = export_to_gltf(&original, &opts).unwrap();
+    let import_opts = GltfImportOptions {
+        include_skeleton: true,
+        include_materials: false,
+    };
+    let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+    // instance_index_multiplier should be next_power_of_two of max vertex count
+    let max_verts = imported
+        .sections
+        .iter()
+        .map(|s| s.num_verts as u32)
+        .max()
+        .unwrap_or(1);
+    let expected_multiplier = max_verts.next_power_of_two() as i16;
+    assert_eq!(
+        imported.instance_index_multiplier, expected_multiplier,
+        "instance_index_multiplier should be next_power_of_two(max_verts)"
+    );
+}
+
+/// Test that rebuild_aabb_tree produces a valid BVH.
+#[test]
+fn test_rebuild_aabb_tree() {
+    let original = make_test_geom();
+
+    let opts = GltfExportOptions {
+        embed_buffers: false,
+        include_materials: false,
+        include_skeleton: true,
+    };
+    let export = export_to_gltf(&original, &opts).unwrap();
+    let import_opts = GltfImportOptions {
+        include_skeleton: true,
+        include_materials: false,
+    };
+    let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+    // AABB tree should be present (we have at least 1 triangle)
+    assert!(
+        imported.aabb_tree.is_some(),
+        "aabb_tree should be rebuilt after import"
+    );
+
+    let tree = imported.aabb_tree.as_ref().unwrap();
+    assert!(!tree.nodes.is_empty(), "AABB tree should have nodes");
+
+    // Verify structural invariants:
+    // 1. Root node (index 0) should have parent = NULL
+    assert_eq!(
+        tree.nodes[0].parent, 0xFFFFFFFF,
+        "root node should have no parent"
+    );
+
+    // 2. Every leaf should have triangle indices
+    let mut total_tris = 0usize;
+    for node in &tree.nodes {
+        if node.children[0] == 0xFFFFFFFF && node.children[1] == 0xFFFFFFFF {
+            // Leaf node
+            assert!(
+                !node.obj_indices.is_empty(),
+                "leaf node should have triangle indices"
+            );
+            total_tris += node.obj_indices.len();
+        } else {
+            // Interior node
+            assert!(
+                node.obj_indices.is_empty(),
+                "interior node should have no triangle indices"
+            );
+        }
+    }
+
+    // 3. All triangles should be accounted for
+    let expected_tris: usize = imported.sections.iter().map(|s| s.num_tris as usize).sum();
+    assert_eq!(
+        total_tris, expected_tris,
+        "AABB tree should contain all triangles"
+    );
+
+    // 4. Child indices should be valid
+    for node in &tree.nodes {
+        for &child in &node.children {
+            if child != 0xFFFFFFFF {
+                assert!(
+                    (child as usize) < tree.nodes.len(),
+                    "child index {} out of bounds (tree has {} nodes)",
+                    child,
+                    tree.nodes.len()
+                );
+            }
+        }
+    }
+}
+
+/// Recursively find all .ugx files under a directory.
+fn find_ugx_files(dir: &str) -> Vec<String> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "ugx") {
+                    out.push(path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(std::path::Path::new(dir), &mut files);
+    files.sort();
+    files
+}
+
+/// Test rebuild against real UGX files: read original, strip derived data, rebuild, compare.
+#[test]
+fn test_rebuild_vs_original() {
+    // Static paths + recursive scan of extracted ERA contents
+    let mut paths: Vec<String> = vec![
+        "../../foxcannon01/mesh_turret_0.ugx".into(),
+        "../../foxcannon01/mesh_barrel_0.ugx".into(),
+        "../../foxcannon01/mesh_foxcannon01.ugx".into(),
+        "../../test_ugx/art/covenant/air/banshee_01/banshee_damage_01.ugx".into(),
+    ];
+    paths.extend(find_ugx_files("../../test_ugx_rebuild"));
+
+    let mut tested = 0usize;
+    for path in &paths {
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let original = match ugx::Reader::read(&data) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+
+        // Clone and strip derived data
+        let mut rebuilt = original.clone();
+        rebuilt.bone_bounds = original.bones.iter().map(|_| AABB::default()).collect();
+        rebuilt.accessories = Vec::new();
+        rebuilt.valid_accessories = Vec::new();
+        rebuilt.aabb_tree = None;
+
+        rebuilt.rebuild_derived_data();
+
+        // Bounds: tolerance accounts for Half4 vertex packing precision
+        for i in 0..3 {
+            let tol = (original.bounds.max[i] - original.bounds.min[i]).abs() * 0.005 + 0.01;
+            assert!(
+                (rebuilt.bounds.min[i] - original.bounds.min[i]).abs() < tol,
+                "{path}: bounds.min[{i}] mismatch: rebuilt={} vs original={} (tol={tol})",
+                rebuilt.bounds.min[i],
+                original.bounds.min[i],
+            );
+            assert!(
+                (rebuilt.bounds.max[i] - original.bounds.max[i]).abs() < tol,
+                "{path}: bounds.max[{i}] mismatch: rebuilt={} vs original={} (tol={tol})",
+                rebuilt.bounds.max[i],
+                original.bounds.max[i],
+            );
+        }
+
+        // Bounding sphere: radius = half the AABB diagonal
+        let orig_r = original.bounding_sphere.radius;
+        let rebuilt_r = rebuilt.bounding_sphere.radius;
+        let sphere_err = if orig_r > 0.0 {
+            ((rebuilt_r - orig_r) / orig_r * 100.0).abs()
+        } else {
+            0.0
+        };
+        assert!(
+            sphere_err < 1.0,
+            "{path}: bounding sphere radius mismatch: rebuilt={rebuilt_r} vs original={orig_r} ({sphere_err:.1}% diff)",
+        );
+
+        // Bone bounds: count and per-bone AABB values
+        assert_eq!(
+            rebuilt.bone_bounds.len(),
+            original.bone_bounds.len(),
+            "{path}: bone bounds count mismatch",
+        );
+        for (bi, (rb, ob)) in rebuilt
+            .bone_bounds
+            .iter()
+            .zip(original.bone_bounds.iter())
+            .enumerate()
+        {
+            let orig_is_sentinel = ob.min[0] > ob.max[0];
+            if orig_is_sentinel {
+                continue;
+            }
+            // Wider tolerance: vertex quantization (Half4) can cause up to
+            // ~7 units of drift on wreckage/debris models with extreme spread.
+            for axis in 0..3 {
+                let extent = (ob.max[axis] - ob.min[axis]).abs();
+                let tol = extent * 0.05 + 7.0;
+                let min_err = (rb.min[axis] - ob.min[axis]).abs();
+                let max_err = (rb.max[axis] - ob.max[axis]).abs();
+                assert!(
+                    min_err <= tol && max_err <= tol,
+                    "{path}: bone_bounds[{bi}] axis={axis}: rebuilt=[{:.4}, {:.4}] orig=[{:.4}, {:.4}] err=[{:.4}, {:.4}] tol={tol:.4}",
+                    rb.min[axis],
+                    rb.max[axis],
+                    ob.min[axis],
+                    ob.max[axis],
+                    min_err,
+                    max_err,
+                );
+            }
+        }
+
+        // Metadata flags: only instance_index_multiplier must be exact.
+        // Header-level booleans (rigid_only, global_bones, etc.) sometimes
+        // don't follow strictly from per-section flags in the original data.
+        assert_eq!(
+            rebuilt.instance_index_multiplier, original.instance_index_multiplier,
+            "{path}: instance_index_multiplier mismatch",
+        );
+
+        // AABB tree: if original had one, rebuilt should too
+        if let (Some(orig_tree), Some(new_tree)) = (&original.aabb_tree, &rebuilt.aabb_tree) {
+            let orig_tri_count: usize = orig_tree.nodes.iter().map(|n| n.obj_indices.len()).sum();
+            let new_tri_count: usize = new_tree.nodes.iter().map(|n| n.obj_indices.len()).sum();
+            assert_eq!(
+                new_tri_count, orig_tri_count,
+                "{path}: AABB tree triangle count mismatch",
+            );
+        } else if original.aabb_tree.is_some() {
+            panic!("{path}: rebuilt should have AABB tree when original did");
+        }
+
+        // Accessories
+        if !original.accessories.is_empty() {
+            assert_eq!(
+                rebuilt.accessories.len(),
+                original.accessories.len(),
+                "{path}: accessory count mismatch",
+            );
+            for (ai, (o, r)) in original
+                .accessories
+                .iter()
+                .zip(rebuilt.accessories.iter())
+                .enumerate()
+            {
+                assert_eq!(
+                    (r.first_bone, r.num_bones, &r.object_indices),
+                    (o.first_bone, o.num_bones, &o.object_indices),
+                    "{path}: accessory[{ai}] mismatch",
+                );
+            }
+        }
+
+        // Write rebuilt to UGX bytes and read back to verify structural validity
+        let ugx_bytes = ugx::Writer::write(&rebuilt).unwrap();
+        let re_read = ugx::Reader::read(&ugx_bytes).unwrap();
+        assert_eq!(re_read.sections.len(), original.sections.len());
+
+        tested += 1;
+    }
+
+    assert!(
+        tested > 0,
+        "No real UGX files found — rebuild comparison test skipped"
+    );
 }

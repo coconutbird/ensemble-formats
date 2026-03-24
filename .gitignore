@@ -33,6 +33,9 @@ Thumbs.db
 /root.era
 /root_extracted/
 /--filter/
+/test_ugx_rebuild/
+/test_ugx/
+/foxcannon01/
 
 # Temporary files
 *.tmp

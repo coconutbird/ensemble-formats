@@ -2,8 +2,9 @@
 //!
 //! Serializes a `UgxGeom` into UGX binary format (ECF container).
 //! Writes chunks 0x700 (cached data), 0x701 (index buffer), 0x702 (vertex buffer),
-//! 0x703 (granny bones), and 0x704 (materials).
+//! 0x703 (granny bones), 0x704 (materials), and 0x705 (AABB tree, if present).
 
+mod aabb_tree;
 mod cached_data;
 mod granny;
 mod material;
@@ -54,6 +55,12 @@ fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
     if !geom.materials.is_empty() {
         let mat_data = material::build_material_data(geom)?;
         ecf.add_chunk(ECF_MATERIAL_CHUNK_ID, mat_data);
+    }
+
+    // Write AABB tree chunk if present
+    if let Some(ref tree) = geom.aabb_tree {
+        let tree_data = aabb_tree::build_aabb_tree_data(tree)?;
+        ecf.add_chunk(ECF_AABB_TREE_CHUNK_ID, tree_data);
     }
 
     Ok(ecf.finalize()?)
@@ -197,13 +204,19 @@ mod tests {
                 },
             ],
             sections: vec![section],
+            accessories: Vec::new(),
+            valid_accessories: Vec::new(),
             vertex_buffer,
             index_buffer: vec![0, 1, 2],
             rigid_only: true,
             rigid_bone_index: 0,
+            max_instances: 1,
+            instance_index_multiplier: 4,
+            large_geom_bone_index: i16::MAX,
             all_sections_rigid: true,
             all_sections_skinned: false,
             global_bones: false,
+            aabb_tree: None,
         }
     }
 

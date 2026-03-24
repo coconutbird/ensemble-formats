@@ -6,10 +6,6 @@
 
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-// ============================================================================
-// BCachedData (chunk 0x700) raw structs
-// ============================================================================
-
 /// Raw on-disk BUGXGeomHeader (64 bytes, little-endian).
 ///
 /// Layout verified from IDA disassembly of `BUGXGeom::load`.
@@ -58,6 +54,24 @@ pub(crate) struct PackedBoneRaw {
     pub _padding: [u8; 4],
 }
 
+/// Raw on-disk BAccessory (24 bytes, little-endian).
+///
+/// Layout from IDA `BPackedArray_Accessories__unpack` at `0x1406d8660`:
+/// - `+0x00` (4 bytes): i32 mFirstBone
+/// - `+0x04` (4 bytes): i32 mNumBones
+/// - `+0x08` (16 bytes): BPackedArray<int> mObjectIndices
+///
+/// The nested `mObjectIndices` packed array requires a recursive fixup:
+/// the outer array is fixed up first (8-byte aligned), then each accessory's
+/// inner `mObjectIndices` offset is fixed up (4-byte aligned for i32 elements).
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone)]
+#[repr(C)]
+pub(crate) struct AccessoryRaw {
+    pub first_bone: [u8; 4],
+    pub num_bones: [u8; 4],
+    pub object_indices: PackedArrayRaw,
+}
+
 /// Raw on-disk BSection fixed fields (40 bytes, little-endian).
 ///
 /// This is the first 40 bytes of each 152-byte section record.
@@ -77,10 +91,6 @@ pub(crate) struct PackedSectionFixedRaw {
     pub vert_size: [u8; 4],
     pub num_verts: [u8; 4],
 }
-
-// ============================================================================
-// Granny chunk (0x703) constants
-// ============================================================================
 
 /// Granny bone size in bytes (164 = 0xA4).
 ///

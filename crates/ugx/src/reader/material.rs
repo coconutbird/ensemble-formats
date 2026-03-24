@@ -87,10 +87,6 @@ fn read_material(node: &bdt::Node) -> Material {
     mat
 }
 
-// ============================================================================
-// Variant conversion helpers
-// ============================================================================
-
 fn variant_to_f32(v: &bdt::Variant) -> f32 {
     match v {
         bdt::Variant::Float(f) => *f,

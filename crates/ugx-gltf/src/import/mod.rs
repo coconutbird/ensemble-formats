@@ -356,7 +356,14 @@ pub fn import_from_gltf(
     let granny_meshes =
         generate_granny_meshes_from_vertices(&all_vertices, &granny_bones, &mesh_infos, &sections);
 
-    Ok(UgxGeom {
+    let max_vertex_index = sections
+        .iter()
+        .map(|s| s.num_verts as u32)
+        .max()
+        .unwrap_or(1);
+    let instance_index_multiplier = max_vertex_index.next_power_of_two() as i16;
+
+    let mut geom = UgxGeom {
         bounding_sphere,
         bounds,
         materials,
@@ -365,14 +372,26 @@ pub fn import_from_gltf(
         granny_meshes,
         bone_bounds,
         sections,
+        accessories: Vec::new(),
+        valid_accessories: Vec::new(),
         vertex_buffer: all_vertex_buffer,
         index_buffer: all_index_buffer,
         rigid_only: all_rigid,
         rigid_bone_index: 0,
+        max_instances: 1,
+        instance_index_multiplier,
+        large_geom_bone_index: i16::MAX,
         all_sections_rigid: all_rigid,
         all_sections_skinned,
         global_bones: any_global_bones,
-    })
+        aabb_tree: None,
+    };
+
+    // Rebuild all derived data that doesn't survive the glTF round-trip:
+    // bone bounds, accessories, metadata flags, and AABB tree.
+    geom.rebuild_derived_data();
+
+    Ok(geom)
 }
 
 /// Generate `GrannyMesh` entries from vertex skin data and section info.

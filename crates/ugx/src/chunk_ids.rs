@@ -21,8 +21,8 @@ pub(crate) const ECF_GRANNY_CHUNK_ID: u64 = 0x00000703;
 /// Contains texture paths, blend modes, specular settings, etc.
 pub(crate) const ECF_MATERIAL_CHUNK_ID: u64 = 0x00000704;
 
-// Note: Chunk 0x705 (AABB Tree) exists but is not currently parsed.
-#[allow(dead_code)]
+/// AABB Tree chunk — spatial acceleration structure for collision/ray queries.
+/// Streamed format: version + node_count + nodes (variable-length) + sentinel.
 pub(crate) const ECF_AABB_TREE_CHUNK_ID: u64 = 0x00000705;
 
 /// BCachedData header signature (verified from IDA: only 0xC2340004 is used).

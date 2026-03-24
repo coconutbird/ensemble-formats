@@ -20,6 +20,9 @@
 //! │ Chunk 0x703: Granny Data - Bone inverse world matrices (optional)   │
 //! │ Chunk 0x704: Materials - BBinaryDataTree document (optional)        │
 //! │ Chunk 0x705: AABB Tree - Spatial acceleration structure (optional)  │
+//!
+//! The AABB tree is a streamed format (not flat binary) with variable-length
+//! triangle index arrays per node. See `reader/aabb_tree.rs` for details.
 //! └─────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
@@ -98,6 +101,7 @@
 //! +0x48: end (total 84 bytes, differs from x64 in-memory which is 104 bytes)
 //! ```
 
+mod aabb_tree;
 mod cached_data;
 mod granny;
 mod material;
@@ -109,10 +113,12 @@ use zerocopy::Ref;
 use crate::bytes::read_u16_le;
 use crate::chunk_ids::*;
 use crate::error::{Error, Result};
-use crate::raw::{GeomHeaderRaw, PackedArrayRaw};
+use crate::raw::GeomHeaderRaw;
 use crate::types::*;
 
-use cached_data::{read_bone_bounds, read_packed_bones, read_packed_sections};
+use cached_data::{
+    read_bone_bounds, read_packed_accessories, read_packed_bones, read_packed_sections,
+};
 use granny::{parse_granny_bones, parse_granny_meshes};
 use material::read_materials;
 
@@ -135,6 +141,7 @@ impl UgxGeom {
 
         let granny_data = ecf.chunk_data_by_id(ECF_GRANNY_CHUNK_ID).ok();
         let material_data = ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).ok();
+        let aabb_tree_raw = ecf.chunk_data_by_id(ECF_AABB_TREE_CHUNK_ID).ok();
 
         let num_indices = ib_data.len() / 2;
         let mut index_buffer = Vec::with_capacity(num_indices);
@@ -147,6 +154,7 @@ impl UgxGeom {
             &cached_data,
             granny_data,
             material_data,
+            aabb_tree_raw,
             vertex_buffer,
             index_buffer,
         )
@@ -157,6 +165,7 @@ impl UgxGeom {
         data: &[u8],
         granny_data: Option<Vec<u8>>,
         material_data: Option<Vec<u8>>,
+        aabb_tree_raw: Option<Vec<u8>>,
         vertex_buffer: Vec<u8>,
         index_buffer: Vec<u16>,
     ) -> Result<Self> {
@@ -197,6 +206,9 @@ impl UgxGeom {
             ],
         };
 
+        let max_instances = i16::from_le_bytes(hdr.max_instances);
+        let instance_index_multiplier = i16::from_le_bytes(hdr.instance_index_multiplier);
+        let large_geom_bone_index = i16::from_le_bytes(hdr.large_geom_bone_index);
         let all_sections_rigid = hdr.all_sections_rigid != 0;
         let global_bones = hdr.global_bones != 0;
         let all_sections_skinned = hdr.all_sections_skinned != 0;
@@ -219,10 +231,8 @@ impl UgxGeom {
             Vec::new()
         };
 
-        // Accessories (skip — struct layout unknown)
-        let packed_arr_size = core::mem::size_of::<PackedArrayRaw>();
-        *pos += packed_arr_size; // accessories
-        *pos += packed_arr_size; // validAccessories
+        let accessories = read_packed_accessories(data, pos)?;
+        let valid_accessories = read_packed_accessories(data, pos)?;
 
         let bone_bounds = read_bone_bounds(data, pos)?;
 
@@ -230,6 +240,12 @@ impl UgxGeom {
             read_materials(mat_data).unwrap_or_default()
         } else {
             Vec::new()
+        };
+
+        let aabb_tree = if let Some(ref tree_data) = aabb_tree_raw {
+            Some(aabb_tree::read_aabb_tree(tree_data)?)
+        } else {
+            None
         };
 
         Ok(Self {
@@ -241,13 +257,19 @@ impl UgxGeom {
             granny_meshes,
             bone_bounds,
             sections,
+            accessories,
+            valid_accessories,
             vertex_buffer,
             index_buffer,
             rigid_only,
             rigid_bone_index,
+            max_instances,
+            instance_index_multiplier,
+            large_geom_bone_index,
             all_sections_rigid,
             all_sections_skinned,
             global_bones,
+            aabb_tree,
         })
     }
 }

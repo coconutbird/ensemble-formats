@@ -39,6 +39,7 @@ pub mod types;
 pub use types::*;
 
 mod reader;
+mod rebuild;
 pub use reader::Reader;
 
 #[cfg(feature = "std")]
