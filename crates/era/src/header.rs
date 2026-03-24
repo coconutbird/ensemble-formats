@@ -128,10 +128,16 @@ impl EraChunkExtra {
         let (raw, _): (Ref<_, EraChunkExtraRaw>, _) =
             Ref::from_prefix(buf).map_err(|_| Error::UnexpectedEof)?;
 
+        // Tiger128 is stored on disk with BE 64-bit words; convert to native LE
+        // so consumers can compare directly against Tiger::digest output.
+        let mut tiger = raw.comp_tiger128;
+        tiger[0..8].reverse();
+        tiger[8..16].reverse();
+
         Ok(Self {
             date: u64::from_be_bytes(raw.date),
             decomp_size: u32::from_be_bytes(raw.decomp_size),
-            comp_tiger128: raw.comp_tiger128,
+            comp_tiger128: tiger,
             name_offset: u32::from_be_bytes([
                 0,
                 raw.name_offset[0],
@@ -146,7 +152,11 @@ impl EraChunkExtra {
         let mut buf = [0u8; Self::SIZE];
         buf[0..8].copy_from_slice(&self.date.to_be_bytes());
         buf[8..12].copy_from_slice(&self.decomp_size.to_be_bytes());
-        buf[12..28].copy_from_slice(&self.comp_tiger128);
+        // Convert native LE Tiger128 back to BE words for on-disk storage
+        let mut tiger = self.comp_tiger128;
+        tiger[0..8].reverse();
+        tiger[8..16].reverse();
+        buf[12..28].copy_from_slice(&tiger);
         let offset_bytes = self.name_offset.to_be_bytes();
         buf[28] = offset_bytes[1];
         buf[29] = offset_bytes[2];
