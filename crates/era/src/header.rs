@@ -130,9 +130,11 @@ impl EraChunkExtra {
 
         // Tiger128 is stored on disk with BE 64-bit words; convert to native LE
         // so consumers can compare directly against Tiger::digest output.
-        let mut tiger = raw.comp_tiger128;
-        tiger[0..8].reverse();
-        tiger[8..16].reverse();
+        let mut tiger = [0u8; 16];
+        let w0 = u64::from_be_bytes(raw.comp_tiger128[0..8].try_into().unwrap());
+        let w1 = u64::from_be_bytes(raw.comp_tiger128[8..16].try_into().unwrap());
+        tiger[0..8].copy_from_slice(&w0.to_le_bytes());
+        tiger[8..16].copy_from_slice(&w1.to_le_bytes());
 
         Ok(Self {
             date: u64::from_be_bytes(raw.date),
@@ -153,10 +155,10 @@ impl EraChunkExtra {
         buf[0..8].copy_from_slice(&self.date.to_be_bytes());
         buf[8..12].copy_from_slice(&self.decomp_size.to_be_bytes());
         // Convert native LE Tiger128 back to BE words for on-disk storage
-        let mut tiger = self.comp_tiger128;
-        tiger[0..8].reverse();
-        tiger[8..16].reverse();
-        buf[12..28].copy_from_slice(&tiger);
+        let w0 = u64::from_le_bytes(self.comp_tiger128[0..8].try_into().unwrap());
+        let w1 = u64::from_le_bytes(self.comp_tiger128[8..16].try_into().unwrap());
+        buf[12..20].copy_from_slice(&w0.to_be_bytes());
+        buf[20..28].copy_from_slice(&w1.to_be_bytes());
         let offset_bytes = self.name_offset.to_be_bytes();
         buf[28] = offset_bytes[1];
         buf[29] = offset_bytes[2];
