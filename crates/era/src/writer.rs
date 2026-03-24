@@ -44,6 +44,8 @@ pub struct CompressedData {
 pub struct Writer {
     files: Vec<PendingFile>,
     precompressed: Vec<PreCompressedFile>,
+    /// Optional private key for signing the archive.
+    signing_key: Option<crate::crypto::merkle::PrivateKey>,
 }
 
 /// Pre-computed archive layout (shared between finalize and write_to).
@@ -53,6 +55,8 @@ struct ComputedLayout {
     compressed_names: CompressedData,
     compressed_files: Vec<CompressedData>,
     total_data_bytes: u64,
+    /// Size of the signature block (0 if unsigned).
+    signature_size: u32,
 }
 
 impl Writer {
@@ -61,7 +65,15 @@ impl Writer {
         Self {
             files: Vec::new(),
             precompressed: Vec::new(),
+            signing_key: None,
         }
+    }
+
+    /// Set a private key for signing the archive.
+    ///
+    /// When set, the archive will include a Merkle signature in the header.
+    pub fn set_signing_key(&mut self, key: crate::crypto::merkle::PrivateKey) {
+        self.signing_key = Some(key);
     }
 
     /// Add a file to the archive (will be compressed during write).
@@ -88,7 +100,10 @@ impl Writer {
     }
 
     /// Compress all pending files and compute the archive layout.
-    fn compute_layout(&self) -> ComputedLayout {
+    ///
+    /// `signature_size` is the number of bytes reserved for the digital
+    /// signature block between the ERA archive header and the chunk headers.
+    fn compute_layout(&self, signature_size: u32) -> ComputedLayout {
         // Build filename table
         let mut filename_table = Vec::new();
         let mut name_offsets = Vec::new();
@@ -114,7 +129,8 @@ impl Writer {
         // Calculate layout
         let total_files = self.files.len() + self.precompressed.len();
         let num_chunks = 1 + total_files;
-        let total_header_size = ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE;
+        let total_header_size =
+            ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE + signature_size as usize;
         let chunk_header_size = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
         let headers_size = total_header_size + chunk_header_size * num_chunks;
 
@@ -183,7 +199,42 @@ impl Writer {
             compressed_names,
             compressed_files,
             total_data_bytes,
+            signature_size,
         }
+    }
+
+    /// Compute layout and (optionally) sign the archive.
+    ///
+    /// Iterates until the signature size stabilises: the signature size
+    /// affects the header layout, which affects the header hash, which
+    /// affects the signature size. In practice this converges in 2–3
+    /// iterations.
+    fn compute_layout_and_sign(&self) -> Result<(ComputedLayout, Option<Vec<u8>>)> {
+        let Some(key) = &self.signing_key else {
+            return Ok((self.compute_layout(0), None));
+        };
+
+        // Seed: sign a dummy hash to discover the initial signature size.
+        let dummy_sig = crate::crypto::merkle::sign(key, &[0u8; 20])?;
+        let mut sig_size = dummy_sig.len() as u32;
+
+        // Iterate until stable.
+        for _ in 0..8 {
+            let layout = self.compute_layout(sig_size);
+            let header_hash = layout_header_hash(&layout);
+            let sig = crate::crypto::merkle::sign(key, &header_hash)?;
+
+            if sig.len() as u32 == sig_size {
+                return Ok((layout, Some(sig)));
+            }
+            sig_size = sig.len() as u32;
+        }
+
+        // Should never happen — fall back to the last computed size.
+        let layout = self.compute_layout(sig_size);
+        let header_hash = layout_header_hash(&layout);
+        let sig = crate::crypto::merkle::sign(key, &header_hash)?;
+        Ok((layout, Some(sig)))
     }
 
     /// Build the archive into a `Vec<u8>`.
@@ -199,15 +250,13 @@ impl Writer {
         &self,
         mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<Vec<u8>> {
-        let layout = self.compute_layout();
-        let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
+        let (layout, signature) = self.compute_layout_and_sign()?;
 
-        let total_header_size = layout.ecf_header.header_size as usize;
+        let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
         let chunk_header_size = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
-        let data_offset = layout.ecf_header.file_size as usize;
 
         // Allocate output buffer
-        let mut out = vec![0u8; data_offset];
+        let mut out = vec![0u8; layout.ecf_header.file_size as usize];
 
         // Write ECF header (32 bytes)
         write_ecf_header(
@@ -216,12 +265,21 @@ impl Writer {
             adler32,
         );
 
-        // Write ERA archive header
+        // Write ERA archive header (with signature_size)
+        let mut archive_hdr = EraArchiveHeader::new();
+        archive_hdr.signature_size = layout.signature_size;
         out[ecf::EcfHeader::SIZE..ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE]
-            .copy_from_slice(&EraArchiveHeader::new().to_bytes());
+            .copy_from_slice(&archive_hdr.to_bytes());
+
+        // Write signature block (if present)
+        if let Some(sig) = &signature {
+            let sig_offset = ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE;
+            out[sig_offset..sig_offset + sig.len()].copy_from_slice(sig);
+        }
 
         // Write chunk headers
-        let mut pos = total_header_size;
+        let header_size = layout.ecf_header.header_size as usize;
+        let mut pos = header_size;
         for chunk in &layout.chunks {
             write_chunk_header(&mut out[pos..], chunk);
             pos += chunk_header_size;
@@ -294,7 +352,7 @@ impl Writer {
         mut writer: impl Write,
         mut progress: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<u64> {
-        let layout = self.compute_layout();
+        let (layout, signature) = self.compute_layout_and_sign()?;
 
         // Write ECF header (32 bytes)
         let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
@@ -304,11 +362,19 @@ impl Writer {
             .write_all(&hdr_buf)
             .map_err(|_| crate::error::Error::UnexpectedEof)?;
 
-        // Write ERA archive header
-        let archive_hdr = EraArchiveHeader::new().to_bytes();
+        // Write ERA archive header (with signature_size)
+        let mut archive_hdr = EraArchiveHeader::new();
+        archive_hdr.signature_size = layout.signature_size;
         writer
-            .write_all(&archive_hdr)
+            .write_all(&archive_hdr.to_bytes())
             .map_err(|_| crate::error::Error::UnexpectedEof)?;
+
+        // Write signature block (if present)
+        if let Some(sig) = &signature {
+            writer
+                .write_all(sig)
+                .map_err(|_| crate::error::Error::UnexpectedEof)?;
+        }
 
         // Write chunk headers
         let chunk_header_size = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
@@ -348,7 +414,6 @@ impl Writer {
 
         // Regular files
         for (i, compressed) in layout.compressed_files.iter().enumerate() {
-            // Alignment padding between previous chunk and this one
             let prev_end = layout.chunks[i].offset as usize + layout.chunks[i].size as usize;
             let next_start = layout.chunks[i + 1].offset as usize;
             if next_start > prev_end {
@@ -511,6 +576,28 @@ fn write_chunk_header(buf: &mut [u8], chunk: &ChunkLayout) {
     // EraChunkExtra (32 bytes)
     let extra = EraChunkExtra::new(chunk.decomp_size, chunk.name_offset, chunk.comp_tiger128);
     buf[24..56].copy_from_slice(&extra.to_bytes());
+}
+
+/// Build the raw chunk header bytes (big-endian, as on disk) for signature hashing.
+fn build_chunk_headers_raw(chunks: &[ChunkLayout]) -> Vec<u8> {
+    let stride = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
+    let mut buf = vec![0u8; stride * chunks.len()];
+    for (i, chunk) in chunks.iter().enumerate() {
+        write_chunk_header(&mut buf[i * stride..], chunk);
+    }
+    buf
+}
+
+/// Compute the header hash from a computed layout (same hash the reader produces).
+fn layout_header_hash(layout: &ComputedLayout) -> [u8; 20] {
+    let raw = build_chunk_headers_raw(&layout.chunks);
+    crate::crypto::merkle::compute_header_hash(
+        layout.ecf_header.header_size,
+        layout.ecf_header.num_chunks,
+        layout.ecf_header.chunk_extra_data_size,
+        layout.ecf_header.file_size,
+        &raw,
+    )
 }
 
 impl Writer {

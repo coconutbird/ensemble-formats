@@ -28,11 +28,11 @@ A Rust library for parsing Halo Wars Definitive Edition file formats.
 
 ### Binary Data Formats
 
-| Format  | Extension | ECF File ID  | Description                                                                                           | Status             |
-| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------ |
-| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented     |
-| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ Implemented     |
-| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented     |
+| Format  | Extension | ECF File ID  | Description                                                                                           | Status         |
+| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | -------------- |
+| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented |
+| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ Implemented |
+| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented |
 | **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ✅ Implemented |
 | **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented |
 
@@ -80,6 +80,20 @@ Key fields:
 - File ID: Identifies the file type (e.g., `0xAAC93746` for UGX)
 - Chunks: Each chunk has a 64-bit ID, offset, size, and alignment
 
+### ERA (Encrypted Resource Archive)
+
+ECF container with TEA block encryption and optional Merkle One-Time Signature verification.
+
+**Encryption**: TEA (Tiny Encryption Algorithm) in CBC mode with IV `0x15EF0AF334248FE2` and the archive password `3zDdptN*rV=qOkRbE*NAuWM6`.
+
+**Digital Signatures**: ERA archives may contain a Merkle OTS signature block at offset 48 (after the ECF + ERA headers). The signature is verified against a public key (Merkle tree root hash) using a KISS PRNG-driven tree walk seeded by the header hash.
+
+Known public keys:
+
+| Game                          | Public Key (hex)                           |
+| ----------------------------- | ------------------------------------------ |
+| Halo Wars: Definitive Edition | `FD016BE719C21BD14F84CA9961A3F3CB18221F25` |
+
 ### UGX (Model Geometry)
 
 ECF-based 3D model format containing:
@@ -100,6 +114,7 @@ ECF-based animation format using RAD Game Tools' Granny SDK internally.
 The chunk contains a 32-byte header followed by a Granny `file_info` structure. Pointers within the structure are stored with a +0x10 offset that must be subtracted. The format uses 32-bit pointers in the file_info but 64-bit pointers inside animation structs.
 
 Key animation fields:
+
 - Name (partial path from original .max file)
 - Duration (seconds)
 - TimeStep (keyframe interval)
@@ -138,29 +153,18 @@ All core crates (`ecf`, `era`, `xmb`, `bdt`, `xml`, `xtd`, `xtt`) are `no_std + 
 ### Reading an ERA archive
 
 ```rust
-use std::io::Read;
-use era::{Reader, DecryptReader, TeaKeys};
-
-// Decrypt the ERA file
-let file = std::fs::File::open("root.era")?;
-let keys = TeaKeys::default_archive_keys();
-let mut decrypt = DecryptReader::new(file, keys);
-let mut data = Vec::new();
-decrypt.read_to_end(&mut data)?;
-
-// Parse the archive
-let archive = Reader::new(&data)?;
+// Open and decrypt an ERA archive
+let file = std::io::BufReader::new(std::fs::File::open("root.era")?);
+let mut archive = era::Reader::from_encrypted(file, era::TeaKeys::default_archive_keys())?;
 
 // List files
 for entry in archive.iter() {
-    if let Some(name) = &entry.filename {
-        println!("{}", name);
-    }
+    println!("{}", entry.filename.as_deref().unwrap_or("<unnamed>"));
 }
 
 // Extract a file by name
 if let Some(idx) = archive.find_by_name("data\\objects.xml.xmb") {
-    let file_data = archive.read_entry(idx)?;
+    let data = archive.read_entry(idx)?;
 }
 ```
 

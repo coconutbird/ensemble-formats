@@ -54,6 +54,8 @@ pub struct Reader<R> {
     chunk_headers_raw: Vec<u8>,
     /// Signature block bytes (empty if unsigned).
     signature: Vec<u8>,
+    /// Optional public key for signature verification.
+    public_key: Option<[u8; 20]>,
 }
 
 impl<R: Read + Seek> Reader<R> {
@@ -61,7 +63,20 @@ impl<R: Read + Seek> Reader<R> {
     ///
     /// Reads all headers and the filename table (chunk 0) up-front.
     /// Entry data is **not** read until [`read_entry`](Self::read_entry) is called.
-    pub fn new(mut inner: R) -> Result<Self> {
+    pub fn new(inner: R) -> Result<Self> {
+        Self::parse(inner, None)
+    }
+
+    /// Parse an ERA archive and set a public key for signature verification.
+    ///
+    /// Same as [`new`](Self::new), but stores the key so that
+    /// [`verify_signature`](Self::verify_signature) can be called without
+    /// an explicit key argument.
+    pub fn with_public_key(inner: R, public_key: [u8; 20]) -> Result<Self> {
+        Self::parse(inner, Some(public_key))
+    }
+
+    fn parse(mut inner: R, public_key: Option<[u8; 20]>) -> Result<Self> {
         // Read ECF header (32 bytes)
         let mut hdr_buf = [0u8; EcfHeader::SIZE];
         inner
@@ -166,6 +181,7 @@ impl<R: Read + Seek> Reader<R> {
             entries,
             chunk_headers_raw: chunk_buf,
             signature,
+            public_key,
         })
     }
 
@@ -279,6 +295,14 @@ impl<R: Read + Seek> Reader<R> {
         Ok(results)
     }
 
+    /// Set a public key for signature verification.
+    ///
+    /// When set, [`verify_signature`](Self::verify_signature) can be called
+    /// without an explicit key argument.
+    pub fn set_public_key(&mut self, key: [u8; 20]) {
+        self.public_key = Some(key);
+    }
+
     /// Whether this archive has a digital signature.
     pub fn has_signature(&self) -> bool {
         !self.signature.is_empty()
@@ -303,11 +327,26 @@ impl<R: Read + Seek> Reader<R> {
         )
     }
 
-    /// Verify the archive's Merkle signature against a public key.
+    /// Verify the archive's Merkle signature against the stored public key.
+    ///
+    /// Returns `Ok(true)` if valid, `Ok(false)` if unsigned or no key set,
+    /// or `Err` if the signature is malformed.
+    pub fn verify_signature(&self) -> Result<bool> {
+        let Some(key) = &self.public_key else {
+            return Ok(false);
+        };
+        if self.signature.is_empty() {
+            return Ok(false);
+        }
+        let hash = self.header_hash();
+        crate::crypto::merkle::verify(key, &hash, &self.signature)
+    }
+
+    /// Verify the archive's Merkle signature against an explicit public key.
     ///
     /// Returns `Ok(true)` if valid, `Ok(false)` if verification fails,
     /// or `Err` if the signature is malformed or missing.
-    pub fn verify_signature(&self, public_key: &[u8; 20]) -> Result<bool> {
+    pub fn verify_signature_with_key(&self, public_key: &[u8; 20]) -> Result<bool> {
         if self.signature.is_empty() {
             return Ok(false);
         }

@@ -739,7 +739,7 @@ fn verify_archive(path: &str, key_hex: &str, json: bool) -> i32 {
 
     let hash = archive.header_hash();
 
-    match archive.verify_signature(&key_bytes) {
+    match archive.verify_signature_with_key(&key_bytes) {
         Ok(true) => {
             if json {
                 println!(

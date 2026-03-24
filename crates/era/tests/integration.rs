@@ -251,3 +251,218 @@ fn write_to_with_precompressed() {
 
     assert_eq!(finalized, streamed);
 }
+
+#[test]
+fn merkle_sign_verify_roundtrip() {
+    use era::crypto::merkle::{PrivateKey, sign, verify};
+    use sha1::{Digest, Sha1};
+
+    let depth: u8 = 10;
+    let num_leaves = 1u32 << (depth - 1); // 512
+
+    // Generate deterministic "random" secrets from a seed
+    let mut secrets = Vec::with_capacity(num_leaves as usize);
+    for i in 0..num_leaves {
+        let mut hasher = Sha1::new();
+        hasher.update(b"test-secret-seed");
+        hasher.update(i.to_le_bytes());
+        let result = hasher.finalize();
+        let mut secret = [0u8; 20];
+        secret.copy_from_slice(&result);
+        secrets.push(secret);
+    }
+
+    let private_key = PrivateKey::from_secrets(depth, secrets);
+
+    // Create a fake header hash
+    let mut hasher = Sha1::new();
+    hasher.update(b"test-header-data");
+    let result = hasher.finalize();
+    let mut header_hash = [0u8; 20];
+    header_hash.copy_from_slice(&result);
+
+    // Derive public key for this header hash
+    let public_key = private_key.public_key(&header_hash);
+
+    // Sign
+    let signature = sign(&private_key, &header_hash).expect("signing failed");
+
+    // Verify
+    let valid = verify(&public_key, &header_hash, &signature).expect("verify failed");
+    assert!(valid, "signature should verify against derived public key");
+}
+
+#[test]
+fn merkle_sign_verify_different_depths() {
+    use era::crypto::merkle::{PrivateKey, sign, verify};
+    use sha1::{Digest, Sha1};
+
+    for depth in [2u8, 5, 8, 10, 12] {
+        let num_leaves = 1u32 << (depth - 1);
+
+        let mut secrets = Vec::with_capacity(num_leaves as usize);
+        for i in 0..num_leaves {
+            let mut hasher = Sha1::new();
+            hasher.update(b"depth-test-seed");
+            hasher.update(depth.to_le_bytes());
+            hasher.update(i.to_le_bytes());
+            let result = hasher.finalize();
+            let mut secret = [0u8; 20];
+            secret.copy_from_slice(&result);
+            secrets.push(secret);
+        }
+
+        let private_key = PrivateKey::from_secrets(depth, secrets);
+
+        let mut hasher = Sha1::new();
+        hasher.update(b"header-for-depth-test");
+        hasher.update(depth.to_le_bytes());
+        let result = hasher.finalize();
+        let mut header_hash = [0u8; 20];
+        header_hash.copy_from_slice(&result);
+
+        let public_key = private_key.public_key(&header_hash);
+        let signature = sign(&private_key, &header_hash).expect("signing failed");
+        let valid = verify(&public_key, &header_hash, &signature).expect("verify failed");
+        assert!(valid, "depth {} should verify", depth);
+    }
+}
+
+#[test]
+fn merkle_wrong_key_rejects() {
+    use era::crypto::merkle::{PrivateKey, sign, verify};
+    use sha1::{Digest, Sha1};
+
+    let depth: u8 = 8;
+    let num_leaves = 1u32 << (depth - 1);
+
+    let mut secrets = Vec::with_capacity(num_leaves as usize);
+    for i in 0..num_leaves {
+        let mut hasher = Sha1::new();
+        hasher.update(b"reject-test-seed");
+        hasher.update(i.to_le_bytes());
+        let result = hasher.finalize();
+        let mut secret = [0u8; 20];
+        secret.copy_from_slice(&result);
+        secrets.push(secret);
+    }
+
+    let private_key = PrivateKey::from_secrets(depth, secrets);
+
+    let mut hasher = Sha1::new();
+    hasher.update(b"reject-header");
+    let result = hasher.finalize();
+    let mut header_hash = [0u8; 20];
+    header_hash.copy_from_slice(&result);
+
+    let signature = sign(&private_key, &header_hash).expect("signing failed");
+
+    // Use a wrong public key
+    let wrong_key = [0xFFu8; 20];
+    let valid = verify(&wrong_key, &header_hash, &signature).expect("verify failed");
+    assert!(!valid, "wrong public key should reject");
+}
+
+#[test]
+fn signed_archive_roundtrip() {
+    use era::crypto::merkle::PrivateKey;
+    use sha1::{Digest, Sha1};
+
+    let depth: u8 = 10;
+    let num_leaves = 1u32 << (depth - 1);
+
+    // Generate deterministic secrets
+    let mut secrets = Vec::with_capacity(num_leaves as usize);
+    for i in 0..num_leaves {
+        let mut hasher = Sha1::new();
+        hasher.update(b"signed-archive-test");
+        hasher.update(i.to_le_bytes());
+        let result = hasher.finalize();
+        let mut secret = [0u8; 20];
+        secret.copy_from_slice(&result);
+        secrets.push(secret);
+    }
+
+    let private_key = PrivateKey::from_secrets(depth, secrets);
+
+    // Build a signed archive
+    let mut writer = era::Writer::new();
+    writer.set_signing_key(private_key.clone());
+    writer.add_file("test\\hello.txt", b"Hello, signed world!".to_vec());
+    writer.add_file("test\\data.bin", vec![0xAB; 1024]);
+
+    let archive_bytes = writer.finalize().expect("finalize failed");
+
+    // Read it back
+    let cursor = std::io::Cursor::new(&archive_bytes);
+    let mut reader = era::Reader::new(cursor).expect("reader failed");
+
+    // Verify it has a signature
+    assert!(reader.has_signature(), "archive should have a signature");
+
+    // Compute public key from the header hash in the written archive
+    let header_hash = reader.header_hash();
+    let public_key = private_key.public_key(&header_hash);
+
+    // Verify signature
+    let valid = reader
+        .verify_signature_with_key(&public_key)
+        .expect("verify failed");
+    assert!(valid, "signature should verify against derived public key");
+
+    // Verify data integrity
+    assert_eq!(reader.len(), 3); // filename table + 2 files
+    let data0 = reader.read_entry(1).expect("read entry 1");
+    assert_eq!(data0, b"Hello, signed world!");
+    let data1 = reader.read_entry(2).expect("read entry 2");
+    assert_eq!(data1, vec![0xAB; 1024]);
+}
+
+#[test]
+fn signed_archive_write_to_roundtrip() {
+    use era::crypto::merkle::PrivateKey;
+    use sha1::{Digest, Sha1};
+
+    let depth: u8 = 8;
+    let num_leaves = 1u32 << (depth - 1);
+
+    let mut secrets = Vec::with_capacity(num_leaves as usize);
+    for i in 0..num_leaves {
+        let mut hasher = Sha1::new();
+        hasher.update(b"write-to-signed-test");
+        hasher.update(i.to_le_bytes());
+        let result = hasher.finalize();
+        let mut secret = [0u8; 20];
+        secret.copy_from_slice(&result);
+        secrets.push(secret);
+    }
+
+    let private_key = PrivateKey::from_secrets(depth, secrets);
+
+    let mut writer = era::Writer::new();
+    writer.set_signing_key(private_key.clone());
+    writer.add_file("data\\file.bin", vec![42u8; 512]);
+
+    // Use write_to (streaming) path
+    let mut buf = Vec::new();
+    let cursor = std::io::Cursor::new(&mut buf);
+    writer.write_to(cursor).expect("write_to failed");
+
+    // Also get finalize output and compare
+    let finalized = writer.finalize().expect("finalize failed");
+    assert_eq!(
+        buf, finalized,
+        "write_to and finalize should produce identical output"
+    );
+
+    // Verify signature
+    let reader = era::Reader::new(std::io::Cursor::new(&buf)).expect("reader failed");
+    assert!(reader.has_signature());
+    let header_hash = reader.header_hash();
+    let public_key = private_key.public_key(&header_hash);
+    assert!(
+        reader
+            .verify_signature_with_key(&public_key)
+            .expect("verify failed")
+    );
+}
