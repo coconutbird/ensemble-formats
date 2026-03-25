@@ -1,0 +1,17 @@
+[package]
+name = "xmb-serde"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Deserialize XMB binary XML files directly into Rust structs via serde"
+
+[features]
+default = []
+std = ["bdt-serde/std"]
+
+[dependencies]
+bdt-serde = { workspace = true }
+xmb = { workspace = true }
+serde = { workspace = true }

@@ -1501,6 +1501,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmb-serde"
+version = "0.1.0"
+dependencies = [
+ "bdt-serde",
+ "serde",
+ "xmb",
+]
+
+[[package]]
 name = "xml"
 version = "0.1.0"
 dependencies = [

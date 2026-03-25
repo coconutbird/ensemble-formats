@@ -19,6 +19,7 @@ members = [
     "crates/pkg",
     "crates/pkg-cli",
     "crates/bdt-serde",
+    "crates/xmb-serde",
     "crates/database",
     "crates/database-cli",
 ]
@@ -40,6 +41,7 @@ nostdio = { path = "crates/nostdio" }
 era = { path = "crates/era" }
 uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
+xmb-serde = { path = "crates/xmb-serde" }
 ugx = { path = "crates/ugx" }
 ugx-gltf = { path = "crates/ugx-gltf" }
 xtd = { path = "crates/xtd" }
