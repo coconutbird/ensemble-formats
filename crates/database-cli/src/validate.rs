@@ -17,6 +17,64 @@ struct DbFile {
     parse: fn(&[u8]) -> ParseResult,
 }
 
+/// Result of validating a single database file.
+pub struct FileResult {
+    pub label: String,
+    pub outcome: FileOutcome,
+}
+
+/// Outcome for a single database file.
+pub enum FileOutcome {
+    /// Parsed successfully with a summary string and optional warnings.
+    Ok {
+        summary: String,
+        warnings: Vec<Warning>,
+    },
+    /// Parse or type error.
+    Failed(String),
+    /// File not found in the asset source.
+    Missing,
+}
+
+/// Aggregate result of a full validation run.
+pub struct ValidateReport {
+    pub files: Vec<FileResult>,
+    pub elapsed: std::time::Duration,
+}
+
+impl ValidateReport {
+    pub fn passed(&self) -> usize {
+        self.files
+            .iter()
+            .filter(|f| matches!(f.outcome, FileOutcome::Ok { .. }))
+            .count()
+    }
+
+    pub fn failed(&self) -> usize {
+        self.files
+            .iter()
+            .filter(|f| matches!(f.outcome, FileOutcome::Failed(_)))
+            .count()
+    }
+
+    pub fn missing(&self) -> usize {
+        self.files
+            .iter()
+            .filter(|f| matches!(f.outcome, FileOutcome::Missing))
+            .count()
+    }
+
+    pub fn total_warnings(&self) -> usize {
+        self.files
+            .iter()
+            .map(|f| match &f.outcome {
+                FileOutcome::Ok { warnings, .. } => warnings.len(),
+                _ => 0,
+            })
+            .sum()
+    }
+}
+
 fn parse_xmb(data: &[u8]) -> Result<xmb::Document, String> {
     xmb::Reader::read(data).map_err(|e| format!("XMB parse error: {e}"))
 }
@@ -37,6 +95,7 @@ fn parse_children_warned<'de, T: serde::Deserialize<'de>>(
             root.name
         ));
     }
+
     let mut items = Vec::new();
     let mut all_warnings = Vec::new();
     for child in root.children.iter().filter(|c| c.name == child_name) {
@@ -44,20 +103,12 @@ fn parse_children_warned<'de, T: serde::Deserialize<'de>>(
         all_warnings.extend(warnings);
         items.push(item);
     }
+
     Ok((items, all_warnings))
 }
 
-pub fn run(era_path: &str) {
-    let start = Instant::now();
-    let mut src = AssetSource::new();
-    let count = src.add_era(era_path).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
-
-    println!("Opened {era_path} ({count} entries)\n");
-
-    let db_files: &[DbFile] = &[
+fn db_files() -> Vec<DbFile> {
+    vec![
         DbFile {
             path: "data\\objects.xml.xmb",
             label: "objects",
@@ -165,48 +216,75 @@ pub fn run(era_path: &str) {
                 ))
             },
         },
-    ];
+    ]
+}
 
-    let (mut passed, mut failed, mut missing) = (0usize, 0usize, 0usize);
-    let mut total_warnings = 0usize;
+/// Run validation and return structured results.
+pub fn validate(src: &mut AssetSource) -> ValidateReport {
+    let start = Instant::now();
+    let mut files = Vec::new();
 
-    for db in db_files {
-        let Some(raw) = src.read(db.path) else {
-            println!("  SKIP  {:<14} not found in archive", db.label);
-            missing += 1;
-            continue;
+    for db in &db_files() {
+        let outcome = match src.read(db.path) {
+            Some(raw) => match (db.parse)(&raw) {
+                Ok((summary, warnings)) => FileOutcome::Ok { summary, warnings },
+                Err(e) => FileOutcome::Failed(e),
+            },
+            None => FileOutcome::Missing,
         };
-        match (db.parse)(&raw) {
-            Ok((summary, warnings)) => {
+        files.push(FileResult {
+            label: db.label.to_string(),
+            outcome,
+        });
+    }
+
+    ValidateReport {
+        files,
+        elapsed: start.elapsed(),
+    }
+}
+
+/// Run validation, print results to stdout, and exit on failure.
+pub fn run(src: &mut AssetSource) {
+    let report = validate(src);
+
+    for f in &report.files {
+        match &f.outcome {
+            FileOutcome::Ok { summary, warnings } => {
                 if warnings.is_empty() {
-                    println!("  OK    {:<14} {summary}", db.label);
+                    println!("  OK    {:<14} {summary}", f.label);
                 } else {
                     println!(
                         "  OK    {:<14} {summary}  ({} warnings)",
-                        db.label,
+                        f.label,
                         warnings.len()
                     );
-                    for w in &warnings {
+                    for w in warnings {
                         println!("        ⚠ {w}");
                     }
-                    total_warnings += warnings.len();
                 }
-                passed += 1;
             }
-            Err(e) => {
-                println!("  FAIL  {:<14} {e}", db.label);
-                failed += 1;
+            FileOutcome::Failed(e) => {
+                println!("  FAIL  {:<14} {e}", f.label);
+            }
+            FileOutcome::Missing => {
+                println!("  SKIP  {:<14} not found in archive", f.label);
             }
         }
     }
 
-    let elapsed = start.elapsed();
+    let elapsed = report.elapsed;
     println!("\n--- Summary ---");
     println!(
-        "{passed} passed, {failed} failed, {missing} missing, {total_warnings} warnings ({:.1}s)",
+        "{} passed, {} failed, {} missing, {} warnings ({:.1}s)",
+        report.passed(),
+        report.failed(),
+        report.missing(),
+        report.total_warnings(),
         elapsed.as_secs_f64()
     );
-    if failed > 0 {
+
+    if report.failed() > 0 {
         std::process::exit(1);
     }
 }

@@ -1,24 +1,12 @@
 //! HW1 game database CLI — validate database files and resolve the full asset
 //! pipeline from ERA archives.
-//!
-//! # Subcommands
-//!
-//! - `validate` — parse all database XMBs and report success/failure
-//! - `resolve`  — walk the full asset resolution pipeline:
-//!   objects → visuals → model/anim refs, objects → tactics, objects → physics chain
-//!
-//! # ERA loading
-//!
-//! Uses [`AssetSource`] to load multiple ERA archives in priority order,
-//! matching the game engine's `BArchiveManager` behaviour (confirmed via IDA).
 
-pub mod assets;
 mod resolve;
-mod validate;
 
 use clap::{Parser, Subcommand};
 
-use assets::AssetSource;
+use database_cli::assets::AssetSource;
+use database_cli::load_game_dir;
 
 #[derive(Parser)]
 #[command(name = "database")]
@@ -32,8 +20,12 @@ struct Cli {
 enum Commands {
     /// Validate all database XMB files parse correctly
     Validate {
-        /// Path to root.era
-        era_path: String,
+        /// Path to the game directory containing ERA files
+        #[arg(long)]
+        game_dir: String,
+        /// Additional ERA to layer on top (e.g. a scenario ERA)
+        #[arg(long = "era")]
+        era_paths: Vec<String>,
     },
     /// Resolve the full asset pipeline: objects → visuals → models/anims
     Resolve {
@@ -47,40 +39,6 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
-}
-
-/// Build an [`AssetSource`] from a game directory, loading ERAs in the
-/// engine's confirmed load order.
-fn load_game_dir(dir: &str) -> AssetSource {
-    let mut src = AssetSource::new();
-    let era_order = [
-        "root.era",
-        "root_update.era",
-        "locale.era",
-        "locale_update.era",
-        "scenarioshared.era",
-    ];
-    for name in &era_order {
-        let path = format!("{dir}/{name}");
-        if std::path::Path::new(&path).exists() {
-            match src.add_era(&path) {
-                Ok(n) => println!("  Loaded {name:<24} ({n} entries)"),
-                Err(e) => eprintln!("  WARN  {name}: {e}"),
-            }
-        }
-    }
-    // Auto-discover DLC ERAs
-    for i in 1..=10 {
-        let name = format!("dlc{i:02}.era");
-        let path = format!("{dir}/{name}");
-        if std::path::Path::new(&path).exists() {
-            match src.add_era(&path) {
-                Ok(n) => println!("  Loaded {name:<24} ({n} entries)"),
-                Err(e) => eprintln!("  WARN  {name}: {e}"),
-            }
-        }
-    }
-    src
 }
 
 /// Build an [`AssetSource`] from explicit ERA paths.
@@ -101,7 +59,24 @@ fn load_era_list(paths: &[String]) -> AssetSource {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Validate { era_path } => validate::run(&era_path),
+        Commands::Validate {
+            game_dir,
+            era_paths,
+        } => {
+            println!("Loading ERAs from {game_dir}:");
+            let mut src = load_game_dir(&game_dir);
+            for path in &era_paths {
+                match src.add_era(path) {
+                    Ok(n) => println!("  Loaded {path} ({n} entries)"),
+                    Err(e) => {
+                        eprintln!("Failed to load {path}: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            println!();
+            database_cli::validate::run(&mut src);
+        }
         Commands::Resolve {
             game_dir,
             era_paths,

@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use crate::assets::AssetSource;
+use database_cli::assets::AssetSource;
 
 /// Collected asset manifest from the full resolution pipeline.
 #[derive(Default)]

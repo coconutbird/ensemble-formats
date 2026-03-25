@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lib]
+name = "database_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "database-validate"
 path = "src/main.rs"
@@ -18,3 +22,6 @@ xmb.workspace = true
 clap.workspace = true
 bdt-serde.workspace = true
 serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+dotenvy.workspace = true
