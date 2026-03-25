@@ -183,8 +183,10 @@ impl Variant {
 
     /// Try to interpret the value as an `f32`.
     ///
-    /// Converts `Float`, `Double`, `Int`, and `UInt` variants; returns `None`
-    /// for strings, bools, vecs, and null.
+    /// Converts `Float`, `Double`, `Int`, `UInt`, and `Fract24` variants
+    /// directly. For `String`/`UString`, attempts `parse::<f32>()` after
+    /// stripping a trailing `f`/`F` suffix (C-style float literal).
+    /// Returns `None` for bools, vecs, null, and unparseable strings.
     pub fn as_float(&self) -> Option<f32> {
         match self {
             Variant::Float(v) => Some(*v),
@@ -192,6 +194,14 @@ impl Variant {
             Variant::Int(v) => Some(*v as f32),
             Variant::UInt(v) => Some(*v as f32),
             Variant::Fract24(v) => Some(*v),
+            Variant::String(s) | Variant::UString(s) => {
+                // Strip optional trailing 'f'/'F' (C-style float literal).
+                let trimmed = s
+                    .strip_suffix('f')
+                    .or_else(|| s.strip_suffix('F'))
+                    .unwrap_or(s);
+                trimmed.parse::<f32>().ok()
+            }
             _ => None,
         }
     }

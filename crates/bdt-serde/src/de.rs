@@ -9,7 +9,7 @@
 //! | anything else    | Child element with that name   |
 
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use bdt::Node;
@@ -177,17 +177,30 @@ struct NodeMapAccess<'a> {
     diag: Option<&'a Diagnostics>,
 }
 
+/// Find the canonical expected field name for `xml_key` by case-insensitive
+/// comparison. Returns the expected name if found, otherwise the original key.
+fn canonicalize(xml_key: &str, expected: &[&str]) -> String {
+    for &e in expected {
+        if e.eq_ignore_ascii_case(xml_key) {
+            return String::from(e);
+        }
+    }
+    String::from(xml_key)
+}
+
 impl<'a> NodeMapAccess<'a> {
     fn new(
         node: &'a Node,
-        _expected_fields: &'static [&'static str],
+        expected_fields: &'static [&'static str],
         diag: Option<&'a Diagnostics>,
     ) -> Self {
         let mut entries: Vec<(String, MapEntry<'a>)> = Vec::new();
 
-        // Attributes → @name
+        // Attributes → @name (case-insensitive match against expected fields)
         for attr in &node.attributes {
-            entries.push((format!("@{}", attr.name), MapEntry::Attribute(attr)));
+            let xml_key = format!("@{}", attr.name);
+            let key = canonicalize(&xml_key, expected_fields);
+            entries.push((key, MapEntry::Attribute(attr)));
         }
 
         // Text content → $text
@@ -196,17 +209,19 @@ impl<'a> NodeMapAccess<'a> {
             entries.push((String::from("$text"), MapEntry::Text(node)));
         }
 
-        // Children — group by name
-        let mut seen: Vec<(&str, Vec<&Node>)> = Vec::new();
+        // Children — group by canonical name (case-insensitive)
+        let mut seen: Vec<(String, Vec<&Node>)> = Vec::new();
         for child in &node.children {
-            if let Some(e) = seen.iter_mut().find(|(n, _)| *n == child.name.as_str()) {
+            let key = canonicalize(child.name.as_str(), expected_fields);
+            if let Some(e) = seen.iter_mut().find(|(n, _)| *n == key) {
                 e.1.push(child);
             } else {
-                seen.push((child.name.as_str(), alloc::vec![child]));
+                seen.push((key, alloc::vec![child]));
             }
         }
+
         for (name, nodes) in seen {
-            entries.push((String::from(name), MapEntry::Children(nodes)));
+            entries.push((name, MapEntry::Children(nodes)));
         }
 
         Self {
@@ -245,12 +260,20 @@ impl<'a, 'de> de::MapAccess<'de> for NodeMapAccess<'a> {
         // Create a diagnostics-aware deserializer that records the field
         // name if serde calls `deserialize_ignored_any` on the value.
         let de = DiagValueDeserializer {
-            field_name,
+            field_name: field_name.clone(),
             element_name,
             entry,
             diag,
         };
-        seed.deserialize(de)
+        seed.deserialize(de).map_err(|e| {
+            // Enrich the error with field context if not already present.
+            let msg = e.to_string();
+            if msg.contains("for field `") {
+                e
+            } else {
+                Error::new(format!("{msg} (field `{field_name}` in <{element_name}>)"))
+            }
+        })
     }
 }
 
@@ -366,15 +389,19 @@ impl<'a> DiagValueDeserializer<'a> {
             }
         };
         let result = f(dispatched);
-        if result.is_err()
-            && let Some(diag) = diag
-        {
-            diag.record_type_mismatch(
-                field_name,
-                element_name,
-                String::from(expected),
-                actual_desc,
-            );
+        if result.is_err() {
+            if let Some(diag) = diag {
+                diag.record_type_mismatch(
+                    field_name.clone(),
+                    element_name.clone(),
+                    String::from(expected),
+                    actual_desc.clone(),
+                );
+            }
+            // Return an enriched error that includes field context.
+            return Err(Error::new(format!(
+                "expected {expected} for field `{field_name}` in <{element_name}>, got {actual_desc}"
+            )));
         }
         result
     }
