@@ -538,6 +538,15 @@ impl<'a, 'de> de::Deserializer<'de> for ChildrenDeserializer<'a> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        // If the single child element has Null text and no children/attributes
+        // of its own, treat it as None (the element is present but empty).
+        if self.0.len() == 1
+            && matches!(self.0[0].text, Variant::Null)
+            && self.0[0].children.is_empty()
+            && self.0[0].attributes.is_empty()
+        {
+            return visitor.visit_none();
+        }
         visitor.visit_some(self)
     }
 

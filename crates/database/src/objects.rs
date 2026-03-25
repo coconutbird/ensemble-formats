@@ -59,9 +59,48 @@ pub struct ProtoObject {
     /// Rollover text string ID.
     #[serde(rename = "RolloverTextID")]
     pub rollover_text_id: Option<i32>,
+    /// Flatten region 0 min X.
+    #[serde(rename = "FlattenMinX0")]
+    pub flatten_min_x0: Option<f32>,
+    /// Flatten region 0 max X.
+    #[serde(rename = "FlattenMaxX0")]
+    pub flatten_max_x0: Option<f32>,
+    /// Flatten region 0 min Z.
+    #[serde(rename = "FlattenMinZ0")]
+    pub flatten_min_z0: Option<f32>,
+    /// Flatten region 0 max Z.
+    #[serde(rename = "FlattenMaxZ0")]
+    pub flatten_max_z0: Option<f32>,
+    /// Flatten region 1 min X.
+    #[serde(rename = "FlattenMinX1")]
+    pub flatten_min_x1: Option<f32>,
+    /// Flatten region 1 max X.
+    #[serde(rename = "FlattenMaxX1")]
+    pub flatten_max_x1: Option<f32>,
+    /// Obstruction radius X.
+    #[serde(rename = "ObstructionRadiusX")]
+    pub obstruction_radius_x: Option<f32>,
+    /// Obstruction radius Y.
+    #[serde(rename = "ObstructionRadiusY")]
+    pub obstruction_radius_y: Option<f32>,
+    /// Obstruction radius Z.
+    #[serde(rename = "ObstructionRadiusZ")]
+    pub obstruction_radius_z: Option<f32>,
+    /// Maximum ammo capacity.
+    #[serde(rename = "AmmoMax")]
+    pub ammo_max: Option<f32>,
+    /// Ammo regeneration rate.
+    #[serde(rename = "AmmoRegenRate")]
+    pub ammo_regen_rate: Option<f32>,
+    /// Number of conversions.
+    #[serde(rename = "NumConversions")]
+    pub num_conversions: Option<i32>,
+    /// Number of stasis fields required to stop.
+    #[serde(rename = "NumStasisFieldsToStop")]
+    pub num_stasis_fields_to_stop: Option<i32>,
     /// Bounty value.
     #[serde(rename = "Bounty")]
-    pub bounty: Option<i32>,
+    pub bounty: Option<f32>,
     /// Flags (e.g. `"ForceToGaiaPlayer"`, `"Invulnerable"`, `"NoRender"`).
     #[serde(rename = "Flag", default)]
     pub flags: Vec<String>,

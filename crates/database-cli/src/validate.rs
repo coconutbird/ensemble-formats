@@ -135,7 +135,7 @@ fn db_files() -> Vec<DbFile> {
             parse: |d| {
                 let doc = parse_xmb(d)?;
                 let (r, w): (Vec<database::Tech>, _) =
-                    parse_children_warned(&doc, "Techs", "Tech")?;
+                    parse_children_warned(&doc, "TechTree", "Tech")?;
                 Ok((format!("{} techs", r.len()), w))
             },
         },

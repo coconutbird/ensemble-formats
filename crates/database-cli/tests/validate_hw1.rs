@@ -107,3 +107,121 @@ fn validate_with_scenario_era() {
         report.passed()
     );
 }
+
+#[test]
+fn debug_objects_i32_failure() {
+    let Some(dir) = hw1_game_dir() else {
+        eprintln!("SKIP: HW1_GAME_DIR not set");
+        return;
+    };
+
+    let mut src = load_hw1(&dir);
+    let raw = src
+        .read("data\\objects.xml.xmb")
+        .expect("objects.xml.xmb not found");
+    let doc = xmb::Reader::read(&raw).expect("XMB parse failed");
+    let root = doc.root().expect("no root");
+
+    for (i, child) in root
+        .children
+        .iter()
+        .filter(|c| c.name == "Object")
+        .enumerate()
+    {
+        let name_attr = child
+            .get_attribute("name")
+            .map(|a| a.value_string())
+            .unwrap_or_default();
+        let result: Result<(database::ProtoObject, Vec<bdt_serde::Warning>), _> =
+            bdt_serde::from_node_warned(child);
+        match result {
+            Ok((_, warnings)) => {
+                for w in &warnings {
+                    if format!("{w}").contains("i32") {
+                        eprintln!("WARNING Object[{i}] name={name_attr}: {w}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("FAIL Object[{i}] name={name_attr}: {e}");
+                for attr in &child.attributes {
+                    eprintln!("  @{} = {:?}", attr.name, attr.value);
+                }
+                // Show all children
+                for ch in &child.children {
+                    eprintln!(
+                        "  <{}> text={:?} attrs={:?}",
+                        ch.name,
+                        ch.text,
+                        ch.attributes
+                            .iter()
+                            .map(|a| format!("@{}={:?}", a.name, a.value))
+                            .collect::<Vec<_>>()
+                    );
+                }
+                return;
+            }
+        }
+    }
+    eprintln!("All objects parsed OK");
+
+    // Collect unique extra field warnings from objects
+    let raw2 = src
+        .read("data\\objects.xml.xmb")
+        .expect("objects.xml.xmb not found");
+    let doc2 = xmb::Reader::read(&raw2).expect("XMB parse failed");
+    let root2 = doc2.root().expect("no root");
+    let mut extra_fields: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for child in root2.children.iter().filter(|c| c.name == "Object") {
+        let result: Result<(database::ProtoObject, Vec<bdt_serde::Warning>), _> =
+            bdt_serde::from_node_warned(child);
+        if let Ok((_, warnings)) = result {
+            for w in &warnings {
+                if let bdt_serde::Warning::ExtraField { field, .. } = w {
+                    *extra_fields.entry(field.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    eprintln!("\n=== Extra fields in objects.xml.xmb (unique field name : count) ===");
+    for (field, count) in &extra_fields {
+        eprintln!("  {field:<40} {count}x");
+    }
+    eprintln!("  ({} unique extra fields)", extra_fields.len());
+
+    // Also check squads
+    let raw = src
+        .read("data\\squads.xml.xmb")
+        .expect("squads.xml.xmb not found");
+    let doc = xmb::Reader::read(&raw).expect("XMB parse failed");
+    let root = doc.root().expect("no root");
+
+    for (i, child) in root
+        .children
+        .iter()
+        .filter(|c| c.name == "Squad")
+        .enumerate()
+    {
+        let name_attr = child
+            .get_attribute("name")
+            .map(|a| a.value_string())
+            .unwrap_or_default();
+        let result: Result<(database::Squad, Vec<bdt_serde::Warning>), _> =
+            bdt_serde::from_node_warned(child);
+        match result {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("FAIL Squad[{i}] name={name_attr}: {e}");
+                for attr in &child.attributes {
+                    eprintln!("  @{} = {:?}", attr.name, attr.value);
+                }
+                for ch in &child.children {
+                    eprintln!("  <{}> text={:?}", ch.name, ch.text);
+                }
+                return;
+            }
+        }
+    }
+    eprintln!("All squads parsed OK");
+}
