@@ -4,154 +4,128 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::Deserialize;
 
-use crate::node_ext::{NodeExt, expect_root};
+use crate::node_ext::expect_root;
 
 /// A single proto-object definition from `objects.xml`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProtoObject {
     /// Object name (unique key), e.g. `"unsc_veh_warthog_01"`.
+    #[serde(rename = "@name", default)]
     pub name: String,
     /// Numeric ID (the `id` attribute, often 0).
+    #[serde(rename = "@id")]
     pub id: Option<i32>,
     /// Database ID (the `dbid` attribute).
+    #[serde(rename = "@dbid")]
     pub dbid: Option<i32>,
     /// Object class: `"Unit"`, `"Squad"`, `"Building"`, `"Object"`, etc.
+    #[serde(rename = "ObjectClass")]
     pub object_class: Option<String>,
     /// Visual file path (relative, no `art\` prefix, no extension).
+    #[serde(rename = "Visual")]
     pub visual: Option<String>,
     /// Physics info bare name (resolves to `physics\{name}.*`).
+    #[serde(rename = "PhysicsInfo")]
     pub physics_info: Option<String>,
     /// Physics replacement info bare name.
+    #[serde(rename = "PhysicsReplacementInfo")]
     pub physics_replacement_info: Option<String>,
     /// Tactics file base name (resolves to `data\tactics\{name}.xmb`).
+    #[serde(rename = "Tactics")]
     pub tactics: Option<String>,
     /// Hitpoints.
+    #[serde(rename = "Hitpoints")]
     pub hitpoints: Option<f32>,
     /// Movement type: `"Land"`, `"Air"`, etc.
+    #[serde(rename = "MovementType")]
     pub movement_type: Option<String>,
     /// Velocity.
+    #[serde(rename = "Velocity")]
     pub velocity: Option<f32>,
     /// Turn rate.
+    #[serde(rename = "TurnRate")]
     pub turn_rate: Option<f32>,
     /// Line of sight radius.
+    #[serde(rename = "LOS")]
     pub los: Option<f32>,
     /// Portrait icon path.
+    #[serde(rename = "PortraitIcon")]
     pub portrait_icon: Option<String>,
     /// Display name string ID.
+    #[serde(rename = "DisplayNameID")]
     pub display_name_id: Option<i32>,
     /// Rollover text string ID.
+    #[serde(rename = "RolloverTextID")]
     pub rollover_text_id: Option<i32>,
     /// Bounty value.
+    #[serde(rename = "Bounty")]
     pub bounty: Option<i32>,
     /// Flags (e.g. `"ForceToGaiaPlayer"`, `"Invulnerable"`, `"NoRender"`).
+    #[serde(rename = "Flag", default)]
     pub flags: Vec<String>,
     /// Object types (e.g. `"CreepDifficultyMarker"`).
+    #[serde(rename = "ObjectType", default)]
     pub object_types: Vec<String>,
     /// Hardpoints.
+    #[serde(rename = "Hardpoint", default)]
     pub hardpoints: Vec<Hardpoint>,
     /// Veterancy levels.
+    #[serde(rename = "Veterancy", default)]
     pub veterancy: Vec<VeterancyLevel>,
 }
 
 /// A hardpoint on a proto-object (turret mount point).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Hardpoint {
+    #[serde(rename = "@name", default)]
     pub name: String,
+    #[serde(rename = "@yawrate")]
     pub yaw_rate: Option<f32>,
+    #[serde(rename = "@pitchrate")]
     pub pitch_rate: Option<f32>,
+    #[serde(rename = "@pitchMinAngle")]
     pub pitch_min_angle: Option<f32>,
+    #[serde(rename = "@pitchMaxAngle")]
     pub pitch_max_angle: Option<f32>,
+    #[serde(rename = "@yawattachment")]
     pub yaw_attachment: Option<String>,
+    #[serde(rename = "@pitchattachment")]
     pub pitch_attachment: Option<String>,
+    #[serde(rename = "@autocenter")]
     pub autocenter: Option<bool>,
 }
 
 /// A veterancy level entry.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct VeterancyLevel {
+    #[serde(rename = "@Level", default)]
     pub level: i32,
+    #[serde(rename = "@XP")]
     pub xp: Option<f32>,
+    #[serde(rename = "@Damage")]
     pub damage: Option<f32>,
+    #[serde(rename = "@Velocity")]
     pub velocity: Option<f32>,
+    #[serde(rename = "@Accuracy")]
     pub accuracy: Option<f32>,
+    #[serde(rename = "@WorkRate")]
     pub work_rate: Option<f32>,
+    #[serde(rename = "@WeaponRange")]
     pub weapon_range: Option<f32>,
+    #[serde(rename = "@DamageTaken")]
     pub damage_taken: Option<f32>,
 }
 
 /// Parse all proto-objects from an `objects.xml.xmb` document.
 pub fn parse(doc: &xmb::Document) -> crate::Result<Vec<ProtoObject>> {
     let root = expect_root(doc, "Objects")?;
-    let mut objects = Vec::new();
-
-    for node in root.children_named("Object") {
-        objects.push(parse_object(node));
-    }
-
+    let objects: Vec<ProtoObject> = root
+        .children
+        .iter()
+        .filter(|c| c.name == "Object")
+        .map(bdt_serde::from_node)
+        .collect::<Result<_, _>>()?;
     Ok(objects)
-}
-
-fn parse_object(node: &bdt::Node) -> ProtoObject {
-    let mut obj = ProtoObject {
-        name: node.attr_str("name").unwrap_or_default(),
-        id: node.attr_i32("id"),
-        dbid: node.attr_i32("dbid"),
-        object_class: node.child_text("ObjectClass"),
-        visual: node.child_text("Visual"),
-        physics_info: node.child_text("PhysicsInfo"),
-        physics_replacement_info: node.child_text("PhysicsReplacementInfo"),
-        tactics: node.child_text("Tactics"),
-        hitpoints: node.child_f32("Hitpoints"),
-        movement_type: node.child_text("MovementType"),
-        velocity: node.child_f32("Velocity"),
-        turn_rate: node.child_f32("TurnRate"),
-        los: node.child_f32("LOS"),
-        portrait_icon: node.child_text("PortraitIcon"),
-        display_name_id: node.child_i32("DisplayNameID"),
-        rollover_text_id: node.child_i32("RolloverTextID"),
-        bounty: node.child_i32("Bounty"),
-        ..Default::default()
-    };
-
-    for flag in node.children_named("Flag") {
-        obj.flags.push(flag.text_string());
-    }
-    for ot in node.children_named("ObjectType") {
-        obj.object_types.push(ot.text_string());
-    }
-    for hp in node.children_named("Hardpoint") {
-        obj.hardpoints.push(parse_hardpoint(hp));
-    }
-    for vet in node.children_named("Veterancy") {
-        obj.veterancy.push(parse_veterancy(vet));
-    }
-
-    obj
-}
-
-fn parse_hardpoint(node: &bdt::Node) -> Hardpoint {
-    Hardpoint {
-        name: node.attr_str("name").unwrap_or_default(),
-        yaw_rate: node.attr_f32("yawrate"),
-        pitch_rate: node.attr_f32("pitchrate"),
-        pitch_min_angle: node.attr_f32("pitchMinAngle"),
-        pitch_max_angle: node.attr_f32("pitchMaxAngle"),
-        yaw_attachment: node.attr_str("yawattachment"),
-        pitch_attachment: node.attr_str("pitchattachment"),
-        autocenter: node.attr_bool("autocenter"),
-    }
-}
-
-fn parse_veterancy(node: &bdt::Node) -> VeterancyLevel {
-    VeterancyLevel {
-        level: node.attr_i32("Level").unwrap_or(0),
-        xp: node.attr_f32("XP"),
-        damage: node.attr_f32("Damage"),
-        velocity: node.attr_f32("Velocity"),
-        accuracy: node.attr_f32("Accuracy"),
-        work_rate: node.attr_f32("WorkRate"),
-        weapon_range: node.attr_f32("WeaponRange"),
-        damage_taken: node.attr_f32("DamageTaken"),
-    }
 }

@@ -9,6 +9,8 @@ description = "HW1 game database parser — objects, squads, techs, visuals, tac
 
 [dependencies]
 bdt = { workspace = true }
+bdt-serde = { workspace = true }
+serde = { workspace = true }
 xmb = { workspace = true }
 thiserror = { workspace = true }
 

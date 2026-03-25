@@ -395,6 +395,8 @@ name = "database"
 version = "0.1.0"
 dependencies = [
  "bdt",
+ "bdt-serde",
+ "serde",
  "thiserror",
  "xmb",
 ]
@@ -403,9 +405,11 @@ dependencies = [
 name = "database-cli"
 version = "0.1.0"
 dependencies = [
+ "bdt-serde",
  "clap",
  "database",
  "era",
+ "serde",
  "xmb",
 ]
 

@@ -30,6 +30,7 @@ extern crate std;
 mod error;
 
 pub use bdt_serde::NodeDeserializer;
+pub use bdt_serde::Warning;
 pub use error::Error;
 
 /// Deserialize a `T` from raw XMB bytes (binary or XML text).
@@ -42,6 +43,19 @@ pub fn from_bytes<'de, T: serde::Deserialize<'de>>(data: &[u8]) -> Result<T, Err
     bdt_serde::from_node(root).map_err(Error::Deserialize)
 }
 
+/// Deserialize a `T` from raw XMB bytes, collecting diagnostic warnings.
+///
+/// Returns `(value, warnings)` — the parse succeeds even when there are
+/// extra fields or type mismatches; inspect the warnings to discover
+/// schema differences in game data files.
+pub fn from_bytes_warned<'de, T: serde::Deserialize<'de>>(
+    data: &[u8],
+) -> Result<(T, alloc::vec::Vec<Warning>), Error> {
+    let doc = xmb::Reader::read(data)?;
+    let root = doc.root().ok_or(Error::EmptyDocument)?;
+    bdt_serde::from_node_warned(root).map_err(Error::Deserialize)
+}
+
 /// Deserialize a `T` from an XML string.
 ///
 /// This is the XMB equivalent of `serde_json::from_str` for raw XML text.
@@ -51,6 +65,17 @@ pub fn from_str<'de, T: serde::Deserialize<'de>>(xml: &str) -> Result<T, Error> 
     bdt_serde::from_node(root).map_err(Error::Deserialize)
 }
 
+/// Deserialize a `T` from an XML string, collecting diagnostic warnings.
+///
+/// Returns `(value, warnings)` — see [`from_bytes_warned`] for details.
+pub fn from_str_warned<'de, T: serde::Deserialize<'de>>(
+    xml: &str,
+) -> Result<(T, alloc::vec::Vec<Warning>), Error> {
+    let doc = xmb::Document::from_xml(xml)?;
+    let root = doc.root().ok_or(Error::EmptyDocument)?;
+    bdt_serde::from_node_warned(root).map_err(Error::Deserialize)
+}
+
 /// Deserialize a `T` from a pre-parsed [`xmb::Document`].
 ///
 /// Use this when you already have a parsed document and want to avoid
@@ -58,4 +83,15 @@ pub fn from_str<'de, T: serde::Deserialize<'de>>(xml: &str) -> Result<T, Error> 
 pub fn from_document<'de, T: serde::Deserialize<'de>>(doc: &xmb::Document) -> Result<T, Error> {
     let root = doc.root().ok_or(Error::EmptyDocument)?;
     bdt_serde::from_node(root).map_err(Error::Deserialize)
+}
+
+/// Deserialize a `T` from a pre-parsed [`xmb::Document`], collecting
+/// diagnostic warnings.
+///
+/// Returns `(value, warnings)` — see [`from_bytes_warned`] for details.
+pub fn from_document_warned<'de, T: serde::Deserialize<'de>>(
+    doc: &xmb::Document,
+) -> Result<(T, alloc::vec::Vec<Warning>), Error> {
+    let root = doc.root().ok_or(Error::EmptyDocument)?;
+    bdt_serde::from_node_warned(root).map_err(Error::Deserialize)
 }

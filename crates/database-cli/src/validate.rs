@@ -1,17 +1,50 @@
 //! `validate` subcommand — parse all database XMBs and report success/failure.
+//!
+//! Uses `bdt_serde::from_node_warned` to collect diagnostic warnings about
+//! extra fields and type mismatches without aborting the parse.
 
 use std::time::Instant;
 
+use bdt_serde::Warning;
+
 use crate::assets::AssetSource;
+
+type ParseResult = Result<(String, Vec<Warning>), String>;
 
 struct DbFile {
     path: &'static str,
     label: &'static str,
-    parse: fn(&[u8]) -> Result<String, String>,
+    parse: fn(&[u8]) -> ParseResult,
 }
 
 fn parse_xmb(data: &[u8]) -> Result<xmb::Document, String> {
     xmb::Reader::read(data).map_err(|e| format!("XMB parse error: {e}"))
+}
+
+/// Deserialize each child element of `root` that matches `child_name`,
+/// collecting warnings across all children.
+fn parse_children_warned<'de, T: serde::Deserialize<'de>>(
+    doc: &xmb::Document,
+    root_name: &str,
+    child_name: &str,
+) -> Result<(Vec<T>, Vec<Warning>), String> {
+    let root = doc
+        .root()
+        .ok_or_else(|| "missing root element".to_string())?;
+    if root.name != root_name {
+        return Err(format!(
+            "unexpected root: expected '{root_name}', got '{}'",
+            root.name
+        ));
+    }
+    let mut items = Vec::new();
+    let mut all_warnings = Vec::new();
+    for child in root.children.iter().filter(|c| c.name == child_name) {
+        let (item, warnings) = bdt_serde::from_node_warned(child).map_err(|e| format!("{e}"))?;
+        all_warnings.extend(warnings);
+        items.push(item);
+    }
+    Ok((items, all_warnings))
 }
 
 pub fn run(era_path: &str) {
@@ -30,8 +63,9 @@ pub fn run(era_path: &str) {
             label: "objects",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::objects::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} proto objects", r.len()))
+                let (r, w): (Vec<database::ProtoObject>, _) =
+                    parse_children_warned(&doc, "Objects", "Object")?;
+                Ok((format!("{} proto objects", r.len()), w))
             },
         },
         DbFile {
@@ -39,8 +73,9 @@ pub fn run(era_path: &str) {
             label: "squads",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::squads::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} squads", r.len()))
+                let (r, w): (Vec<database::Squad>, _) =
+                    parse_children_warned(&doc, "Squads", "Squad")?;
+                Ok((format!("{} squads", r.len()), w))
             },
         },
         DbFile {
@@ -48,8 +83,9 @@ pub fn run(era_path: &str) {
             label: "techs",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::techs::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} techs", r.len()))
+                let (r, w): (Vec<database::Tech>, _) =
+                    parse_children_warned(&doc, "Techs", "Tech")?;
+                Ok((format!("{} techs", r.len()), w))
             },
         },
         DbFile {
@@ -57,8 +93,9 @@ pub fn run(era_path: &str) {
             label: "abilities",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::abilities::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} abilities", r.len()))
+                let (r, w): (Vec<database::Ability>, _) =
+                    parse_children_warned(&doc, "Abilities", "Ability")?;
+                Ok((format!("{} abilities", r.len()), w))
             },
         },
         DbFile {
@@ -66,8 +103,9 @@ pub fn run(era_path: &str) {
             label: "powers",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::powers::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} powers", r.len()))
+                let (r, w): (Vec<database::Power>, _) =
+                    parse_children_warned(&doc, "Powers", "Power")?;
+                Ok((format!("{} powers", r.len()), w))
             },
         },
         DbFile {
@@ -75,8 +113,8 @@ pub fn run(era_path: &str) {
             label: "civs",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::civs::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} civs", r.len()))
+                let (r, w): (Vec<database::Civ>, _) = parse_children_warned(&doc, "Civs", "Civ")?;
+                Ok((format!("{} civs", r.len()), w))
             },
         },
         DbFile {
@@ -84,8 +122,9 @@ pub fn run(era_path: &str) {
             label: "leaders",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::leaders::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} leaders", r.len()))
+                let (r, w): (Vec<database::Leader>, _) =
+                    parse_children_warned(&doc, "Leaders", "Leader")?;
+                Ok((format!("{} leaders", r.len()), w))
             },
         },
         DbFile {
@@ -93,8 +132,9 @@ pub fn run(era_path: &str) {
             label: "weapontypes",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::weapontypes::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} weapon types", r.len()))
+                let (r, w): (Vec<database::WeaponType>, _) =
+                    parse_children_warned(&doc, "WeaponTypes", "WeaponType")?;
+                Ok((format!("{} weapon types", r.len()), w))
             },
         },
         DbFile {
@@ -102,8 +142,9 @@ pub fn run(era_path: &str) {
             label: "damagetypes",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let r = database::damagetypes::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!("{} damage types", r.len()))
+                let (r, w): (Vec<database::DamageType>, _) =
+                    parse_children_warned(&doc, "DamageTypes", "DamageType")?;
+                Ok((format!("{} damage types", r.len()), w))
             },
         },
         DbFile {
@@ -111,17 +152,23 @@ pub fn run(era_path: &str) {
             label: "gamedata",
             parse: |d| {
                 let doc = parse_xmb(d)?;
-                let g = database::gamedata::parse(&doc).map_err(|e| format!("{e}"))?;
-                Ok(format!(
-                    "{} resources, {} pops",
-                    g.resources.len(),
-                    g.pops.len()
+                let root = doc.root().ok_or_else(|| "missing root".to_string())?;
+                let (g, w): (database::GameData, _) =
+                    bdt_serde::from_node_warned(root).map_err(|e| format!("{e}"))?;
+                Ok((
+                    format!(
+                        "{} resources, {} pops",
+                        g.resources.as_ref().map_or(0, |r| r.entries.len()),
+                        g.pops.as_ref().map_or(0, |p| p.entries.len())
+                    ),
+                    w,
                 ))
             },
         },
     ];
 
     let (mut passed, mut failed, mut missing) = (0usize, 0usize, 0usize);
+    let mut total_warnings = 0usize;
 
     for db in db_files {
         let Some(raw) = src.read(db.path) else {
@@ -130,8 +177,20 @@ pub fn run(era_path: &str) {
             continue;
         };
         match (db.parse)(&raw) {
-            Ok(summary) => {
-                println!("  OK    {:<14} {summary}", db.label);
+            Ok((summary, warnings)) => {
+                if warnings.is_empty() {
+                    println!("  OK    {:<14} {summary}", db.label);
+                } else {
+                    println!(
+                        "  OK    {:<14} {summary}  ({} warnings)",
+                        db.label,
+                        warnings.len()
+                    );
+                    for w in &warnings {
+                        println!("        ⚠ {w}");
+                    }
+                    total_warnings += warnings.len();
+                }
                 passed += 1;
             }
             Err(e) => {
@@ -144,7 +203,7 @@ pub fn run(era_path: &str) {
     let elapsed = start.elapsed();
     println!("\n--- Summary ---");
     println!(
-        "{passed} passed, {failed} failed, {missing} missing ({:.1}s)",
+        "{passed} passed, {failed} failed, {missing} missing, {total_warnings} warnings ({:.1}s)",
         elapsed.as_secs_f64()
     );
     if failed > 0 {

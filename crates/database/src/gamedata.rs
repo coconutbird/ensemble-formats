@@ -5,153 +5,197 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::Deserialize;
 
-use crate::node_ext::{NodeExt, expect_root};
+use crate::node_ext::expect_root;
 
 /// Global game data from `gamedata.xml`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct GameData {
-    /// Resource definitions (Supplies, Power, etc.).
-    pub resources: Vec<ResourceDef>,
-    /// Rate definitions.
-    pub rates: Vec<String>,
-    /// Population type names.
-    pub pops: Vec<String>,
-    /// Ref count names.
-    pub ref_counts: Vec<String>,
-    /// HUD item names.
-    pub hud_items: Vec<String>,
-    /// Flashable item names.
-    pub flashable_items: Vec<String>,
-    /// Unit flag names.
-    pub unit_flags: Vec<String>,
-    /// Squad flag names.
-    pub squad_flags: Vec<String>,
-    /// Player state names.
-    pub player_states: Vec<String>,
-    /// Code proto-object mappings (type → proto name).
-    pub code_proto_objects: Vec<CodeProtoObject>,
-    /// Code object type mappings.
-    pub code_object_types: Vec<CodeObjectType>,
+    /// Resource definitions wrapper.
+    #[serde(rename = "Resources")]
+    pub resources: Option<ResourcesWrapper>,
+    /// Rate definitions wrapper.
+    #[serde(rename = "Rates")]
+    pub rates: Option<RatesWrapper>,
+    /// Population type names wrapper.
+    #[serde(rename = "Pops")]
+    pub pops: Option<PopsWrapper>,
+    /// Ref count names wrapper.
+    #[serde(rename = "RefCounts")]
+    pub ref_counts: Option<RefCountsWrapper>,
+    /// HUD item names wrapper.
+    #[serde(rename = "HUDItems")]
+    pub hud_items: Option<HUDItemsWrapper>,
+    /// Flashable item names wrapper.
+    #[serde(rename = "FlashableItems")]
+    pub flashable_items: Option<FlashableItemsWrapper>,
+    /// Unit flag names wrapper.
+    #[serde(rename = "UnitFlags")]
+    pub unit_flags: Option<UnitFlagsWrapper>,
+    /// Squad flag names wrapper.
+    #[serde(rename = "SquadFlags")]
+    pub squad_flags: Option<SquadFlagsWrapper>,
+    /// Player state names wrapper.
+    #[serde(rename = "PlayerStates")]
+    pub player_states: Option<PlayerStatesWrapper>,
+    /// Code proto-object mappings wrapper.
+    #[serde(rename = "CodeProtoObjects")]
+    pub code_proto_objects: Option<CodeProtoObjectsWrapper>,
+    /// Code object type mappings wrapper.
+    #[serde(rename = "CodeObjectTypes")]
+    pub code_object_types: Option<CodeObjectTypesWrapper>,
 
     // Difficulty settings
+    #[serde(rename = "DifficultyEasy")]
     pub difficulty_easy: Option<f32>,
+    #[serde(rename = "DifficultyNormal")]
     pub difficulty_normal: Option<f32>,
+    #[serde(rename = "DifficultyHard")]
     pub difficulty_hard: Option<f32>,
+    #[serde(rename = "DifficultyLegendary")]
     pub difficulty_legendary: Option<f32>,
+    #[serde(rename = "DifficultyDefault")]
     pub difficulty_default: Option<f32>,
 
     // Supply pad settings
+    #[serde(rename = "UnscSupplyPadBonus")]
     pub unsc_supply_pad_bonus: Option<f32>,
+    #[serde(rename = "UnscSupplyPadBreakEvenPoint")]
     pub unsc_supply_pad_break_even_point: Option<f32>,
+    #[serde(rename = "CovSupplyPadBonus")]
     pub cov_supply_pad_bonus: Option<f32>,
+    #[serde(rename = "CovSupplyPadBreakEvenPoint")]
     pub cov_supply_pad_break_even_point: Option<f32>,
 
     // Transport settings
+    #[serde(rename = "TransportMax")]
     pub transport_max: Option<i32>,
 
     // Cryo/freeze settings
+    #[serde(rename = "TimeFrozenToThaw")]
     pub time_frozen_to_thaw: Option<f32>,
+    #[serde(rename = "TimeFreezingToThaw")]
     pub time_freezing_to_thaw: Option<f32>,
+    #[serde(rename = "DefaultCryoPoints")]
     pub default_cryo_points: Option<f32>,
+    #[serde(rename = "DefaultThawSpeed")]
     pub default_thaw_speed: Option<f32>,
+    #[serde(rename = "FreezingSpeedModifier")]
     pub freezing_speed_modifier: Option<f32>,
+    #[serde(rename = "FreezingDamageModifier")]
     pub freezing_damage_modifier: Option<f32>,
+    #[serde(rename = "FrozenDamageModifier")]
     pub frozen_damage_modifier: Option<f32>,
 }
 
+/// Wrapper for `<Resources>` containing `<Resource>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ResourcesWrapper {
+    #[serde(rename = "Resource", default)]
+    pub entries: Vec<ResourceDef>,
+}
+
 /// A resource definition.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ResourceDef {
+    #[serde(rename = "$text", default)]
     pub name: String,
+    #[serde(rename = "@Deductable")]
     pub deductable: Option<bool>,
 }
 
+/// Wrapper for `<Rates>` containing `<Rate>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RatesWrapper {
+    #[serde(rename = "Rate", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<Pops>` containing `<Pop>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PopsWrapper {
+    #[serde(rename = "Pop", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<RefCounts>` containing `<RefCount>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RefCountsWrapper {
+    #[serde(rename = "RefCount", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<HUDItems>` containing `<HUDItem>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HUDItemsWrapper {
+    #[serde(rename = "HUDItem", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<FlashableItems>` containing `<Item>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FlashableItemsWrapper {
+    #[serde(rename = "Item", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<UnitFlags>` containing `<UnitFlag>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct UnitFlagsWrapper {
+    #[serde(rename = "UnitFlag", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<SquadFlags>` containing `<SquadFlag>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SquadFlagsWrapper {
+    #[serde(rename = "SquadFlag", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<PlayerStates>` containing `<PlayerState>` children.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlayerStatesWrapper {
+    #[serde(rename = "PlayerState", default)]
+    pub entries: Vec<String>,
+}
+
+/// Wrapper for `<CodeProtoObjects>`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CodeProtoObjectsWrapper {
+    #[serde(rename = "CodeProtoObject", default)]
+    pub entries: Vec<CodeProtoObject>,
+}
+
 /// A code proto-object mapping.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CodeProtoObject {
+    #[serde(rename = "@Type", default)]
     pub object_type: String,
+    #[serde(rename = "$text", default)]
     pub proto_name: String,
 }
 
+/// Wrapper for `<CodeObjectTypes>`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CodeObjectTypesWrapper {
+    #[serde(rename = "CodeObjectType", default)]
+    pub entries: Vec<CodeObjectType>,
+}
+
 /// A code object type mapping.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CodeObjectType {
+    #[serde(rename = "@name", default)]
     pub name: String,
+    #[serde(rename = "$text", default)]
     pub value: String,
 }
 
 /// Parse game data from a `gamedata.xml.xmb` document.
 pub fn parse(doc: &xmb::Document) -> crate::Result<GameData> {
     let root = expect_root(doc, "GameData")?;
-    let mut gd = GameData::default();
-
-    // Resources
-    if let Some(res) = root.child("Resources") {
-        for r in res.children_named("Resource") {
-            gd.resources.push(ResourceDef {
-                name: r.text_string(),
-                deductable: r.attr_bool("Deductable"),
-            });
-        }
-    }
-
-    // Simple list sections
-    parse_string_list(root, "Rates", "Rate", &mut gd.rates);
-    parse_string_list(root, "Pops", "Pop", &mut gd.pops);
-    parse_string_list(root, "RefCounts", "RefCount", &mut gd.ref_counts);
-    parse_string_list(root, "HUDItems", "HUDItem", &mut gd.hud_items);
-    parse_string_list(root, "FlashableItems", "Item", &mut gd.flashable_items);
-    parse_string_list(root, "UnitFlags", "UnitFlag", &mut gd.unit_flags);
-    parse_string_list(root, "SquadFlags", "SquadFlag", &mut gd.squad_flags);
-    parse_string_list(root, "PlayerStates", "PlayerState", &mut gd.player_states);
-
-    // Code proto objects
-    if let Some(cpo) = root.child("CodeProtoObjects") {
-        for c in cpo.children_named("CodeProtoObject") {
-            gd.code_proto_objects.push(CodeProtoObject {
-                object_type: c.attr_str("Type").unwrap_or_default(),
-                proto_name: c.text_string(),
-            });
-        }
-    }
-
-    // Code object types
-    if let Some(cot) = root.child("CodeObjectTypes") {
-        for c in cot.children_named("CodeObjectType") {
-            gd.code_object_types.push(CodeObjectType {
-                name: c.attr_str("name").unwrap_or_default(),
-                value: c.text_string(),
-            });
-        }
-    }
-
-    // Scalar values
-    gd.difficulty_easy = root.child_f32("DifficultyEasy");
-    gd.difficulty_normal = root.child_f32("DifficultyNormal");
-    gd.difficulty_hard = root.child_f32("DifficultyHard");
-    gd.difficulty_legendary = root.child_f32("DifficultyLegendary");
-    gd.difficulty_default = root.child_f32("DifficultyDefault");
-    gd.unsc_supply_pad_bonus = root.child_f32("UnscSupplyPadBonus");
-    gd.unsc_supply_pad_break_even_point = root.child_f32("UnscSupplyPadBreakEvenPoint");
-    gd.cov_supply_pad_bonus = root.child_f32("CovSupplyPadBonus");
-    gd.cov_supply_pad_break_even_point = root.child_f32("CovSupplyPadBreakEvenPoint");
-    gd.transport_max = root.child_i32("TransportMax");
-    gd.time_frozen_to_thaw = root.child_f32("TimeFrozenToThaw");
-    gd.time_freezing_to_thaw = root.child_f32("TimeFreezingToThaw");
-    gd.default_cryo_points = root.child_f32("DefaultCryoPoints");
-    gd.default_thaw_speed = root.child_f32("DefaultThawSpeed");
-    gd.freezing_speed_modifier = root.child_f32("FreezingSpeedModifier");
-    gd.freezing_damage_modifier = root.child_f32("FreezingDamageModifier");
-    gd.frozen_damage_modifier = root.child_f32("FrozenDamageModifier");
-
+    let gd: GameData = bdt_serde::from_node(root)?;
     Ok(gd)
-}
-
-fn parse_string_list(root: &bdt::Node, parent: &str, child: &str, out: &mut Vec<String>) {
-    if let Some(section) = root.child(parent) {
-        for item in section.children_named(child) {
-            out.push(item.text_string());
-        }
-    }
 }

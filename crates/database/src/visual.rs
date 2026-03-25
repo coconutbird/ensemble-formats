@@ -5,231 +5,157 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::Deserialize;
 
-use crate::node_ext::{NodeExt, expect_root};
+use crate::node_ext::expect_root;
 
 /// A complete visual definition from a `.vis.xmb` file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Visual {
     /// Default model name (from `defaultmodel` attribute on root).
+    #[serde(rename = "@defaultmodel")]
     pub default_model: Option<String>,
     /// Named models (e.g. `"Default"`, `"Turret"`, `"Wheel"`).
+    #[serde(rename = "model", default)]
     pub models: Vec<Model>,
 }
 
 /// A named model within a visual.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Model {
     /// Model name (e.g. `"Default"`, `"Turret"`).
+    #[serde(rename = "@name", default)]
     pub name: String,
     /// Component (contains asset refs and attachments).
+    #[serde(rename = "component")]
     pub component: Option<Component>,
     /// Animations.
+    #[serde(rename = "anim", default)]
     pub anims: Vec<Anim>,
 }
 
 /// Component data: model files and attachment points.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Component {
     /// Direct asset references in the component.
+    #[serde(rename = "asset", default)]
     pub assets: Vec<Asset>,
     /// Attachment points (model refs, particle effects, etc.).
+    #[serde(rename = "attach", default)]
     pub attachments: Vec<Attachment>,
     /// Impact/board/launch points.
+    #[serde(rename = "point", default)]
     pub points: Vec<Point>,
     /// Logic-switched asset variants (tech upgrades).
+    #[serde(rename = "logic")]
     pub logic: Option<Logic>,
 }
 
 /// An asset reference (model or animation file).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Asset {
     /// Asset type: `"Model"` or `"Anim"`.
+    #[serde(rename = "@type", default)]
     pub asset_type: String,
     /// File path (relative, no `art\` prefix, no extension).
+    #[serde(rename = "file")]
     pub file: Option<String>,
     /// Damage model file path.
+    #[serde(rename = "damagefile")]
     pub damage_file: Option<String>,
     /// Weight for random selection.
+    #[serde(rename = "weight")]
     pub weight: Option<i32>,
 }
 
 /// An attachment point.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Attachment {
     /// Attachment type: `"ModelRef"`, `"ParticleFile"`, `"TerrainEffect"`.
+    #[serde(rename = "@type", default)]
     pub attach_type: String,
     /// Attachment name / reference.
+    #[serde(rename = "@name", default)]
     pub name: String,
     /// Target bone.
+    #[serde(rename = "@tobone")]
     pub to_bone: Option<String>,
     /// Source bone.
+    #[serde(rename = "@frombone")]
     pub from_bone: Option<String>,
     /// Whether to sync animations.
+    #[serde(rename = "@syncanims")]
     pub sync_anims: Option<bool>,
 }
 
 /// A point on a component (impact, board, launch, pickup).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Point {
     /// Point type: `"Impact"`, `"Board"`, `"Launch"`, `"Pickup"`.
+    #[serde(rename = "@pointType", default)]
     pub point_type: String,
     /// Bone name.
+    #[serde(rename = "@bone")]
     pub bone: Option<String>,
     /// Point data (material type, e.g. `"Metal"`).
+    #[serde(rename = "@pointData")]
     pub point_data: Option<String>,
 }
 
 /// Logic switch for tech-based model variants.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Logic {
     /// Logic type: `"Tech"`.
+    #[serde(rename = "@type", default)]
     pub logic_type: String,
     /// Logic data entries (one per tech level).
+    #[serde(rename = "logicdata", default)]
     pub entries: Vec<LogicEntry>,
 }
 
 /// A single logic entry (maps a tech value to an asset).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct LogicEntry {
     /// Tech value that activates this variant (empty = default).
+    #[serde(rename = "@value", default)]
     pub value: String,
     /// Model reference name.
+    #[serde(rename = "@modelref")]
     pub model_ref: Option<String>,
     /// Weight.
+    #[serde(rename = "@weight")]
     pub weight: Option<i32>,
     /// The asset selected for this variant.
+    #[serde(rename = "asset")]
     pub asset: Option<Asset>,
 }
 
 /// An animation definition.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Anim {
     /// Animation type: `"Idle"`, `"Walk"`, `"Death"`, etc.
+    #[serde(rename = "@type", default)]
     pub anim_type: String,
     /// Exit action: `"Loop"`, `"Freeze"`, `"Transition"`.
+    #[serde(rename = "@exitAction")]
     pub exit_action: Option<String>,
     /// Tween time.
+    #[serde(rename = "@tweenTime")]
     pub tween_time: Option<i32>,
     /// Tween-to animation name.
+    #[serde(rename = "@tweenToAnimation")]
     pub tween_to_animation: Option<String>,
     /// Asset references (animation files).
+    #[serde(rename = "asset", default)]
     pub assets: Vec<Asset>,
     /// Attachments active during this animation.
+    #[serde(rename = "attach", default)]
     pub attachments: Vec<Attachment>,
 }
 
 /// Parse a visual definition from a `.vis.xmb` document.
 pub fn parse(doc: &xmb::Document) -> crate::Result<Visual> {
     let root = expect_root(doc, "visual")?;
-    let mut vis = Visual {
-        default_model: root.attr_str("defaultmodel"),
-        ..Default::default()
-    };
-
-    for model_node in root.children_named("model") {
-        vis.models.push(parse_model(model_node));
-    }
-
+    let vis: Visual = bdt_serde::from_node(root)?;
     Ok(vis)
-}
-
-fn parse_model(node: &bdt::Node) -> Model {
-    let mut model = Model {
-        name: node.attr_str("name").unwrap_or_default(),
-        ..Default::default()
-    };
-
-    if let Some(comp) = node.child("component") {
-        model.component = Some(parse_component(comp));
-    }
-
-    for anim_node in node.children_named("anim") {
-        model.anims.push(parse_anim(anim_node));
-    }
-
-    model
-}
-
-fn parse_component(node: &bdt::Node) -> Component {
-    let mut comp = Component::default();
-
-    for asset_node in node.children_named("asset") {
-        comp.assets.push(parse_asset(asset_node));
-    }
-    for attach_node in node.children_named("attach") {
-        comp.attachments.push(parse_attachment(attach_node));
-    }
-    for point_node in node.children_named("point") {
-        comp.points.push(Point {
-            point_type: point_node.attr_str("pointType").unwrap_or_default(),
-            bone: point_node.attr_str("bone"),
-            point_data: point_node.attr_str("pointData"),
-        });
-    }
-    if let Some(logic_node) = node.child("logic") {
-        comp.logic = Some(parse_logic(logic_node));
-    }
-
-    comp
-}
-
-fn parse_asset(node: &bdt::Node) -> Asset {
-    Asset {
-        asset_type: node.attr_str("type").unwrap_or_default(),
-        file: node.child_text("file"),
-        damage_file: node.child_text("damagefile"),
-        weight: node.child_i32("weight"),
-    }
-}
-
-fn parse_attachment(node: &bdt::Node) -> Attachment {
-    Attachment {
-        attach_type: node.attr_str("type").unwrap_or_default(),
-        name: node.attr_str("name").unwrap_or_default(),
-        to_bone: node.attr_str("tobone"),
-        from_bone: node.attr_str("frombone"),
-        sync_anims: node.attr_bool("syncanims"),
-    }
-}
-
-fn parse_logic(node: &bdt::Node) -> Logic {
-    let mut logic = Logic {
-        logic_type: node.attr_str("type").unwrap_or_default(),
-        ..Default::default()
-    };
-
-    for entry_node in node.children_named("logicdata") {
-        let mut entry = LogicEntry {
-            value: entry_node.attr_str("value").unwrap_or_default(),
-            model_ref: entry_node.attr_str("modelref"),
-            weight: entry_node.attr_i32("weight"),
-            ..Default::default()
-        };
-        if let Some(asset_node) = entry_node.child("asset") {
-            entry.asset = Some(parse_asset(asset_node));
-        }
-        logic.entries.push(entry);
-    }
-
-    logic
-}
-
-fn parse_anim(node: &bdt::Node) -> Anim {
-    let mut anim = Anim {
-        anim_type: node.attr_str("type").unwrap_or_default(),
-        exit_action: node.attr_str("exitAction"),
-        tween_time: node.attr_i32("tweenTime"),
-        tween_to_animation: node.attr_str("tweenToAnimation"),
-        ..Default::default()
-    };
-
-    for asset_node in node.children_named("asset") {
-        anim.assets.push(parse_asset(asset_node));
-    }
-    for attach_node in node.children_named("attach") {
-        anim.attachments.push(parse_attachment(attach_node));
-    }
-
-    anim
 }

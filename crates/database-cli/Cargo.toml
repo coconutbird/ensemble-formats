@@ -16,3 +16,5 @@ database.workspace = true
 era.workspace = true
 xmb.workspace = true
 clap.workspace = true
+bdt-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }

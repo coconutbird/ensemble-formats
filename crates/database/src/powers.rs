@@ -4,151 +4,122 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::Deserialize;
 
-use crate::node_ext::{NodeExt, expect_root};
+use crate::node_ext::expect_root;
 
 /// A single leader power definition from `powers.xml`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Power {
     /// Power name (unique key), e.g. `"UnscLeaderNuke"`.
+    #[serde(rename = "@name", default)]
     pub name: String,
     /// Trigger script file name.
+    #[serde(rename = "TriggerScript")]
     pub trigger_script: Option<String>,
-    /// Power attributes.
-    pub attributes: PowerAttributes,
-    /// Data levels (level-specific parameters).
-    pub data_levels: Vec<DataLevel>,
+    /// Power attributes (contains data levels too).
+    #[serde(rename = "Attributes")]
+    pub attributes: Option<PowerAttributes>,
 }
 
 /// Attributes block for a power.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PowerAttributes {
     /// Power type: `"Transport"`, `"Cleansing"`, etc.
+    #[serde(rename = "PowerType")]
     pub power_type: Option<String>,
-    /// Whether the power has infinite uses.
-    pub infinite_uses: bool,
-    /// Whether this is a leader power.
-    pub leader_power: bool,
+    /// Presence-based: element exists = true.
+    #[serde(rename = "InfiniteUses")]
+    pub infinite_uses: Option<String>,
+    /// Presence-based: element exists = true.
+    #[serde(rename = "LeaderPower")]
+    pub leader_power: Option<String>,
     /// Auto-recharge flag.
+    #[serde(rename = "AutoRecharge")]
     pub auto_recharge: Option<i32>,
     /// Display name string ID.
+    #[serde(rename = "DisplayNameID")]
     pub display_name_id: Option<i32>,
     /// Rollover text string ID.
+    #[serde(rename = "RolloverTextID")]
     pub rollover_text_id: Option<i32>,
     /// Prereq text string ID.
+    #[serde(rename = "PrereqTextID")]
     pub prereq_text_id: Option<i32>,
     /// Icon path.
+    #[serde(rename = "Icon")]
     pub icon: Option<String>,
     /// Icon location index.
+    #[serde(rename = "IconLocation")]
     pub icon_location: Option<i32>,
     /// UI radius.
+    #[serde(rename = "UIRadius")]
     pub ui_radius: Option<f32>,
-    /// Supply cost.
-    pub cost_supplies: Option<f32>,
-    /// Power cost.
-    pub cost_power: Option<f32>,
+    /// Cost element.
+    #[serde(rename = "Cost")]
+    pub cost: Option<PowerCost>,
     /// Show transport arrows.
+    #[serde(rename = "ShowTransportArrows")]
     pub show_transport_arrows: Option<bool>,
-    /// Show limit flag.
-    pub show_limit: bool,
+    /// Presence-based: element exists = true.
+    #[serde(rename = "ShowLimit")]
+    pub show_limit: Option<String>,
     /// Min distance to squad.
+    #[serde(rename = "MinDistanceToSquad")]
     pub min_distance_to_squad: Option<f32>,
     /// Max distance to squad.
+    #[serde(rename = "MaxDistanceToSquad")]
     pub max_distance_to_squad: Option<f32>,
+    /// Base data level (inside Attributes).
+    #[serde(rename = "BaseDataLevel")]
+    pub base_data_level: Option<DataLevel>,
+    /// Data levels (inside Attributes).
+    #[serde(rename = "DataLevel", default)]
+    pub data_levels: Vec<DataLevel>,
+}
+
+/// Cost element with attribute-based supplies/power.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PowerCost {
+    #[serde(rename = "@Supplies")]
+    pub supplies: Option<f32>,
+    #[serde(rename = "@Power")]
+    pub power: Option<f32>,
 }
 
 /// A data level entry (level-specific power parameters).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct DataLevel {
-    /// Level index (0-based). -1 for BaseDataLevel.
-    pub level: i32,
+    /// Level index (0-based). Absent for BaseDataLevel.
+    #[serde(rename = "@level")]
+    pub level: Option<i32>,
     /// Key-value data entries.
+    #[serde(rename = "Data", default)]
     pub entries: Vec<DataEntry>,
 }
 
 /// A single data entry within a data level.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct DataEntry {
     /// Data type: `"float"`, `"int"`, `"sound"`, `"protoobject"`, `"texture"`, etc.
+    #[serde(rename = "@type", default)]
     pub data_type: String,
     /// Data name key.
+    #[serde(rename = "@name", default)]
     pub name: String,
     /// Data value (text content).
+    #[serde(rename = "$text", default)]
     pub value: String,
 }
 
 /// Parse all powers from a `powers.xml.xmb` document.
 pub fn parse(doc: &xmb::Document) -> crate::Result<Vec<Power>> {
     let root = expect_root(doc, "Powers")?;
-    let mut powers = Vec::new();
-
-    for node in root.children_named("Power") {
-        powers.push(parse_power(node));
-    }
-
+    let powers: Vec<Power> = root
+        .children
+        .iter()
+        .filter(|c| c.name == "Power")
+        .map(bdt_serde::from_node)
+        .collect::<Result<_, _>>()?;
     Ok(powers)
-}
-
-fn parse_power(node: &bdt::Node) -> Power {
-    let mut power = Power {
-        name: node.attr_str("name").unwrap_or_default(),
-        trigger_script: node.child_text("TriggerScript"),
-        ..Default::default()
-    };
-
-    if let Some(attrs) = node.child("Attributes") {
-        power.attributes = parse_attributes(attrs);
-
-        // BaseDataLevel is inside Attributes
-        if let Some(base) = attrs.child("BaseDataLevel") {
-            power.data_levels.push(parse_data_level(base, -1));
-        }
-
-        // DataLevel entries inside Attributes
-        for dl in attrs.children_named("DataLevel") {
-            let level = dl.attr_i32("level").unwrap_or(0);
-            power.data_levels.push(parse_data_level(dl, level));
-        }
-    }
-
-    power
-}
-
-fn parse_attributes(node: &bdt::Node) -> PowerAttributes {
-    let (cost_supplies, cost_power) = if let Some(cost) = node.child("Cost") {
-        (cost.attr_f32("Supplies"), cost.attr_f32("Power"))
-    } else {
-        (None, None)
-    };
-
-    PowerAttributes {
-        power_type: node.child_text("PowerType"),
-        infinite_uses: node.child("InfiniteUses").is_some(),
-        leader_power: node.child("LeaderPower").is_some(),
-        auto_recharge: node.child_i32("AutoRecharge"),
-        display_name_id: node.child_i32("DisplayNameID"),
-        rollover_text_id: node.child_i32("RolloverTextID"),
-        prereq_text_id: node.child_i32("PrereqTextID"),
-        icon: node.child_text("Icon"),
-        icon_location: node.child_i32("IconLocation"),
-        ui_radius: node.child_f32("UIRadius"),
-        cost_supplies,
-        cost_power,
-        show_transport_arrows: node.child_bool("ShowTransportArrows"),
-        show_limit: node.child("ShowLimit").is_some(),
-        min_distance_to_squad: node.child_f32("MinDistanceToSquad"),
-        max_distance_to_squad: node.child_f32("MaxDistanceToSquad"),
-    }
-}
-
-fn parse_data_level(node: &bdt::Node, level: i32) -> DataLevel {
-    let mut entries = Vec::new();
-    for data in node.children_named("Data") {
-        entries.push(DataEntry {
-            data_type: data.attr_str("type").unwrap_or_default(),
-            name: data.attr_str("name").unwrap_or_default(),
-            value: data.text_string(),
-        });
-    }
-    DataLevel { level, entries }
 }

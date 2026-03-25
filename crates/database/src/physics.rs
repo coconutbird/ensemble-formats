@@ -7,120 +7,109 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::Deserialize;
 
-use crate::node_ext::{NodeExt, expect_root};
+use crate::node_ext::expect_root;
 
 /// Physics configuration from a `.physics.xmb` file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Physics {
     /// Blueprint name reference.
+    #[serde(rename = "blueprint")]
     pub blueprint: Option<String>,
     /// Whether this object can be thrown by projectiles.
+    #[serde(rename = "ThrownByProjectiles")]
     pub thrown_by_projectiles: Option<bool>,
     /// Vehicle type name.
+    #[serde(rename = "Vehicle")]
     pub vehicle: Option<String>,
     /// Center of mass offset (comma-separated floats).
+    #[serde(rename = "CenterOffset")]
     pub center_offset: Option<String>,
     /// Terrain effects path.
+    #[serde(rename = "TerrainEffects")]
     pub terrain_effects: Option<String>,
 }
 
 /// Physical properties from a `.blueprint.xmb` file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Blueprint {
     /// Mass in kg.
+    #[serde(rename = "mass")]
     pub mass: Option<f32>,
     /// Friction coefficient.
+    #[serde(rename = "friction")]
     pub friction: Option<f32>,
     /// Restitution (bounciness).
+    #[serde(rename = "restitution")]
     pub restitution: Option<f32>,
     /// Linear damping.
+    #[serde(rename = "linearDamping")]
     pub linear_damping: Option<f32>,
     /// Angular damping.
+    #[serde(rename = "angularDamping")]
     pub angular_damping: Option<f32>,
     /// Shape reference name.
+    #[serde(rename = "shape")]
     pub shape: Option<String>,
 }
 
 /// A Havok collision shape from a `.shp.xmb` file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Shape {
     /// Havok version string (e.g. `"V_20200_B_20031014"`).
+    #[serde(rename = "@version")]
     pub hke_version: Option<String>,
     /// Shape objects.
+    #[serde(rename = "hkobject", default)]
     pub objects: Vec<HavokObject>,
 }
 
 /// A single Havok object (shape primitive).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct HavokObject {
     /// Object name (e.g. `"body"`).
+    #[serde(rename = "@name", default)]
     pub name: String,
     /// Object type (e.g. `"hkBoxShape"`, `"hkConvexVerticesShape"`).
+    #[serde(rename = "@type", default)]
     pub object_type: String,
     /// Parameters as key-value pairs.
+    #[serde(rename = "hkparam", default)]
     pub params: Vec<HavokParam>,
 }
 
 /// A Havok parameter.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct HavokParam {
     /// Parameter name (e.g. `"halfExtents"`, `"radius"`).
+    #[serde(rename = "@name", default)]
     pub name: String,
     /// Parameter type (e.g. `"hkTypeVector4"`, `"hkTypeReal"`).
+    #[serde(rename = "@type", default)]
     pub param_type: String,
     /// Raw value as string.
+    #[serde(rename = "$text", default)]
     pub value: String,
 }
 
 /// Parse a `.physics.xmb` document.
 pub fn parse_physics(doc: &xmb::Document) -> crate::Result<Physics> {
     let root = expect_root(doc, "physics")?;
-    Ok(Physics {
-        blueprint: root.child_text("blueprint"),
-        thrown_by_projectiles: root.child_bool("ThrownByProjectiles"),
-        vehicle: root.child_text("Vehicle"),
-        center_offset: root.child_text("CenterOffset"),
-        terrain_effects: root.child_text("TerrainEffects"),
-    })
+    let physics: Physics = bdt_serde::from_node(root)?;
+    Ok(physics)
 }
 
 /// Parse a `.blueprint.xmb` document.
 pub fn parse_blueprint(doc: &xmb::Document) -> crate::Result<Blueprint> {
     let root = crate::node_ext::root_node(doc)?;
-    Ok(Blueprint {
-        mass: root.child_f32("mass"),
-        friction: root.child_f32("friction"),
-        restitution: root.child_f32("restitution"),
-        linear_damping: root.child_f32("linearDamping"),
-        angular_damping: root.child_f32("angularDamping"),
-        shape: root.child_text("shape"),
-    })
+    let bp: Blueprint = bdt_serde::from_node(root)?;
+    Ok(bp)
 }
 
 /// Parse a `.shp.xmb` document (Havok XML shapes).
 pub fn parse_shape(doc: &xmb::Document) -> crate::Result<Shape> {
     let root = expect_root(doc, "hke")?;
-    let mut shape = Shape {
-        hke_version: root.attr_str("version"),
-        ..Default::default()
-    };
-
-    for obj_node in root.children_named("hkobject") {
-        let mut obj = HavokObject {
-            name: obj_node.attr_str("name").unwrap_or_default(),
-            object_type: obj_node.attr_str("type").unwrap_or_default(),
-            ..Default::default()
-        };
-        for param_node in obj_node.children_named("hkparam") {
-            obj.params.push(HavokParam {
-                name: param_node.attr_str("name").unwrap_or_default(),
-                param_type: param_node.attr_str("type").unwrap_or_default(),
-                value: param_node.text_string(),
-            });
-        }
-        shape.objects.push(obj);
-    }
-
+    let shape: Shape = bdt_serde::from_node(root)?;
     Ok(shape)
 }

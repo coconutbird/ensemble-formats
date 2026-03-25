@@ -57,6 +57,9 @@ pub enum Error {
     #[cfg_attr(feature = "std", error("xmb error: {0}"))]
     Xmb(#[cfg_attr(feature = "std", from)] xmb::Error),
 
+    #[cfg_attr(feature = "std", error("deserialize error: {0}"))]
+    Deserialize(#[cfg_attr(feature = "std", from)] bdt_serde::Error),
+
     #[cfg_attr(feature = "std", error("missing root element"))]
     MissingRoot,
 

@@ -4,127 +4,105 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::Deserialize;
 
-use crate::node_ext::{NodeExt, expect_root};
+use crate::node_ext::expect_root;
 
 /// A complete tactics definition from a `.tactics.xmb` file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct TacticData {
     /// Weapons available to this unit.
+    #[serde(rename = "Weapon", default)]
     pub weapons: Vec<Weapon>,
     /// Actions the unit can perform.
+    #[serde(rename = "Action", default)]
     pub actions: Vec<Action>,
 }
 
 /// A weapon definition.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Weapon {
     /// Weapon name, e.g. `"Machinegun"`, `"GaussCannon"`.
+    #[serde(rename = "Name", default)]
     pub name: String,
     /// Attack rate (seconds between attacks).
+    #[serde(rename = "AttackRate")]
     pub attack_rate: Option<f32>,
     /// Damage per second.
+    #[serde(rename = "DamagePerSecond")]
     pub dps: Option<f32>,
     /// Weapon type classification.
+    #[serde(rename = "WeaponType")]
     pub weapon_type: Option<String>,
     /// Projectile proto-object name.
+    #[serde(rename = "Projectile")]
     pub projectile: Option<String>,
     /// Maximum range.
+    #[serde(rename = "MaxRange")]
     pub max_range: Option<f32>,
     /// Accuracy (0.0–1.0).
+    #[serde(rename = "Accuracy")]
     pub accuracy: Option<f32>,
     /// Maximum deviation.
+    #[serde(rename = "MaxDeviation")]
     pub max_deviation: Option<f32>,
     /// Moving accuracy.
+    #[serde(rename = "MovingAccuracy")]
     pub moving_accuracy: Option<f32>,
     /// Moving max deviation.
+    #[serde(rename = "MovingMaxDeviation")]
     pub moving_max_deviation: Option<f32>,
     /// Hardpoint this weapon is mounted on.
+    #[serde(rename = "Hardpoint")]
     pub hardpoint: Option<String>,
     /// AOE radius.
+    #[serde(rename = "AOERadius")]
     pub aoe_radius: Option<f32>,
     /// Target priorities.
+    #[serde(rename = "TargetPriority", default)]
     pub target_priorities: Vec<TargetPriority>,
-    /// Whether this weapon is small-arms deflectable.
-    pub small_arms_deflectable: bool,
-    /// Whether this weapon is dodgeable.
-    pub dodgeable: bool,
+    /// Presence-based: element exists = true.
+    #[serde(rename = "SmallArmsDeflectable")]
+    pub small_arms_deflectable: Option<String>,
+    /// Presence-based: element exists = true.
+    #[serde(rename = "Dodgeable")]
+    pub dodgeable: Option<String>,
 }
 
 /// Target priority for a weapon.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct TargetPriority {
     /// Target type: `"Infantry"`, `"Aircraft"`, etc.
+    #[serde(rename = "@type", default)]
     pub target_type: String,
     /// Priority value (higher = preferred).
+    #[serde(rename = "$text", default)]
     pub priority: f32,
 }
 
 /// An action a unit can perform.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Action {
     /// Action name.
+    #[serde(rename = "Name", default)]
     pub name: String,
     /// Action type.
+    #[serde(rename = "ActionType")]
     pub action_type: Option<String>,
     /// Weapon name used for this action.
+    #[serde(rename = "Weapon")]
     pub weapon: Option<String>,
     /// Duration.
+    #[serde(rename = "Duration")]
     pub duration: Option<f32>,
-    /// Whether this is the default action.
-    pub default: bool,
+    /// Presence-based: element exists = true.
+    #[serde(rename = "Default")]
+    pub default: Option<String>,
 }
 
 /// Parse tactics from a `.tactics.xmb` document.
 pub fn parse(doc: &xmb::Document) -> crate::Result<TacticData> {
     let root = expect_root(doc, "TacticData")?;
-    let mut data = TacticData::default();
-
-    for weapon_node in root.children_named("Weapon") {
-        data.weapons.push(parse_weapon(weapon_node));
-    }
-    for action_node in root.children_named("Action") {
-        data.actions.push(parse_action(action_node));
-    }
-
+    let data: TacticData = bdt_serde::from_node(root)?;
     Ok(data)
-}
-
-fn parse_weapon(node: &bdt::Node) -> Weapon {
-    let mut weapon = Weapon {
-        name: node.child_text("Name").unwrap_or_default(),
-        attack_rate: node.child_f32("AttackRate"),
-        dps: node.child_f32("DamagePerSecond"),
-        weapon_type: node.child_text("WeaponType"),
-        projectile: node.child_text("Projectile"),
-        max_range: node.child_f32("MaxRange"),
-        accuracy: node.child_f32("Accuracy"),
-        max_deviation: node.child_f32("MaxDeviation"),
-        moving_accuracy: node.child_f32("MovingAccuracy"),
-        moving_max_deviation: node.child_f32("MovingMaxDeviation"),
-        hardpoint: node.child_text("Hardpoint"),
-        aoe_radius: node.child_f32("AOERadius"),
-        small_arms_deflectable: node.child("SmallArmsDeflectable").is_some(),
-        dodgeable: node.child("Dodgeable").is_some(),
-        ..Default::default()
-    };
-
-    for tp in node.children_named("TargetPriority") {
-        weapon.target_priorities.push(TargetPriority {
-            target_type: tp.attr_str("type").unwrap_or_default(),
-            priority: tp.text.as_float().unwrap_or(0.0),
-        });
-    }
-
-    weapon
-}
-
-fn parse_action(node: &bdt::Node) -> Action {
-    Action {
-        name: node.child_text("Name").unwrap_or_default(),
-        action_type: node.child_text("ActionType"),
-        weapon: node.child_text("Weapon"),
-        duration: node.child_f32("Duration"),
-        default: node.child("Default").is_some(),
-    }
 }
