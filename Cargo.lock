@@ -185,6 +185,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bdt-serde"
+version = "0.1.0"
+dependencies = [
+ "bdt",
+ "serde",
+]
+
+[[package]]
 name = "bit_field"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -380,6 +388,25 @@ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "database"
+version = "0.1.0"
+dependencies = [
+ "bdt",
+ "thiserror",
+ "xmb",
+]
+
+[[package]]
+name = "database-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "database",
+ "era",
+ "xmb",
 ]
 
 [[package]]

@@ -46,15 +46,59 @@ HW1 distributes files across multiple `.era` archives:
 
 | Archive              | Size   | Contents                                                                |
 | -------------------- | ------ | ----------------------------------------------------------------------- |
-| `root.era`           | 49 MB  | Metadata: `.vis.xmb`, `.pfx`, `objects.xml.xmb`, tactics, etc.          |
+| `root.era`           | 49 MB  | Metadata: `.vis.xmb`, `.pfx`, `objects.xml.xmb`, tactics, physics, etc. |
+| `root_update.era`    | 3.4 MB | Delta patches: `objects_update.xml.xmb`, `squads_update.xml.xmb`, etc.  |
 | `scenarioshared.era` | 357 MB | Shared art: `.ugx` (326), `.uax` (1240), `.ddx` (1123), `.dmg.xmb` (58) |
-| `release.era`        | 94 MB  | Additional release assets                                               |
-| `repository.era`     | 61 MB  | Repository data                                                         |
+| `release.era`        | 94 MB  | Per-mission: Shield Exterior (207 files — environment, flood, terrain)  |
+| `repository.era`     | 61 MB  | Per-mission: Shield Interior (292 files — plants, creatures, terrain)   |
 | `PHXscn*.era`        | varies | Per-campaign-mission assets                                             |
 | `*.era` (map names)  | varies | Per-multiplayer-map assets                                              |
+| `locale_*.era`       | varies | Localized strings and UI assets                                         |
 
 **Key split**: `root.era` has the manifests (`.vis.xmb`) while `scenarioshared.era`
 has the actual geometry (`.ugx`), animations (`.uax`), textures (`.ddx`), and damage models (`.dmg.xmb`).
+
+### Archive Load Order (confirmed via IDA — `BArchiveManager::reloadRootArchive` at `0x14017CE90`)
+
+```
+1. root.era            → qword_1415005B8  (addFileCache + enableFileCache)
+2. root_update.era     → qword_1415005C0  (addFileCache + enableFileCache)
+3. locale.era          → loaded by BArchiveManager::reloadLocaleArchive
+4. locale_update.era   → loaded after locale.era
+5. scenarioshared.era  → loaded during scenario load (beginScenarioLoad)
+6. <map>.era           → loaded per-mission (release.era, repository.era, etc.)
+```
+
+**`root_update.era` is NOT a file-level override.** The update ERA contains delta
+XML files (`objects_update.xml.xmb`, `squads_update.xml.xmb`, `techs_update.xml.xmb`)
+that use `update="true"` on their elements. `BDatabase::loadXmlData` loads these
+as separate files and merges updated entries into the existing database by matching
+object names.
+
+Example from `objects_update.xml.xmb`:
+
+```xml
+<Object name="game_CTF_flag_01" is="0" id="2061" dbid="4355" update="true">
+    <PhysicsInfo>sentinel</PhysicsInfo>
+    <ObjectClass>Squad</ObjectClass>
+    <!-- replaces/augments the existing game_CTF_flag_01 definition -->
+</Object>
+```
+
+The update files also add entirely new objects (e.g., `env_shieldinterior_redriver_01`,
+`sys_icon_53_01`) and contain UI asset patches (minimap icons, HUD widgets, flash controls).
+
+### Per-Mission Archives (`release.era`, `repository.era`)
+
+These are **NOT** general-purpose archives. Each corresponds to a specific campaign
+mission and contains environment art unique to that map:
+
+- **`release.era`** — "Shield Exterior" mission: flood pods, shield doors, dark rocks,
+  terrain tiles, wreckage, plus the scenario definition (`.scn.xmb`, `.sc2.xmb`)
+- **`repository.era`** — "Shield Interior" mission: canyon geometry, plants, grass,
+  birds, forerunner structures, plus jackal animations for that mission's encounters
+
+Both also contain `pfxfilelist.txt` and `visfilelist.txt` for that mission's preload lists.
 
 ## The Two Databases
 
@@ -92,6 +136,48 @@ Also in `root.era` at `data\squads.xml.xmb`:
 ### 3. Tactics — `data\tactics\*.tactics.xmb`
 
 In `root.era`. Referenced by base name from `objects.xml` (no path prefix).
+
+### 4. Physics — `physics\*.{physics,blueprint,shp}.xmb`
+
+In `root.era` under the `physics\` directory. `<PhysicsInfo>warthog</PhysicsInfo>`
+resolves to three files by appending extensions to the bare name:
+
+| File                            | Purpose                                                                          |
+| ------------------------------- | -------------------------------------------------------------------------------- |
+| `physics\warthog.physics.xmb`   | Physics config: blueprint ref, center offset, vehicle type, terrain effects path |
+| `physics\warthog.blueprint.xmb` | Physical properties: mass (150), friction (2.0), restitution (0.5), shape ref    |
+| `physics\warthog.shp.xmb`       | Havok shape definition (box with half-extents 1.5×1.0×3.0)                       |
+
+```xml
+<!-- warthog.physics.xmb -->
+<physics>
+    <blueprint>warthog</blueprint>
+    <ThrownByProjectiles>true</ThrownByProjectiles>
+    <Vehicle>warthog</Vehicle>
+    <CenterOffset>0,2.28,0</CenterOffset>
+    <TerrainEffects>effects\terraineffects\warthog_physics</TerrainEffects>
+</physics>
+```
+
+The shape file (`.shp.xmb`) uses a serialized Havok format (`hke version="V_20200_B_20031014"`)
+with `hkBoxShape` or similar primitives. Not `.hkt` files — HW1 uses XML-serialized Havok shapes.
+
+`<PhysicsReplacementInfo>` works the same way (e.g., `aircraft_default` → `physics\aircraft_default.*`).
+
+### 5. LCE (Legendary Collector's Edition) Variants
+
+LCE assets (e.g., `warthoglce_01.vis.xmb`, `mg_gunlce.ugx`) are alternate visual
+definitions for units unlocked via the Legendary edition.
+
+The unlock logic is in `sub_140392F90` (a 17-case switch processing unlockable content):
+
+- **Case 16**: `LCE_warthog_unlock` — looks up string hash in `BStringTable`,
+  checks unlock state via `sub_140416980`, applies unlock via `sub_1404165C0`
+- **Case 17**: `LCE_wraith_unlock` — same pattern
+
+The LCE variants are separate proto objects in `objects.xml` that reference the
+`*lce*.vis.xmb` files. When unlocked, the engine swaps the proto object's visual
+reference to the LCE variant. The unlock state is persisted via the string table system.
 
 ## The `.vis.xmb` File — The Asset Manifest
 
@@ -151,7 +237,7 @@ Located in `root.era` under `art\{faction}\{category}\{unit}\{unit}.vis.xmb`.
 - **`defaultmodel="Default"`** — HW1 uses "Default" as the convention; HW2 uses
   the unit name
 
-### Path Resolution
+### Path Resolution (confirmed via IDA — `xgameFinal.exe`)
 
 `<file>` paths in the `.vis.xmb` are **relative, extensionless**:
 
@@ -159,7 +245,26 @@ Located in `root.era` under `art\{faction}\{category}\{unit}\{unit}.vis.xmb`.
 - `unsc\vehicle\warthog_01\idle_01` → `art\unsc\vehicle\warthog_01\idle_01.uax`
 - `<damagefile>` path → append `.dmg.xmb`
 
-The engine prepends `art\` and appends the appropriate extension based on asset type.
+**The `art\` prefix is hardcoded in the engine.** Verified in `BDatabase::preloadVisFiles`
+(at `0x1401F1AA0`), which reads vis names from `preloadVisFileList.txt` and explicitly
+calls `BString_Set(…, "art\\", …)` before concatenating the vis file path.
+
+For mesh/animation loading, `BGrannyModel::loadFromFile` (`0x14073D6F0`) constructs the
+full path via `sprintf("%s%s", basePath, fileName)` where:
+
+- `basePath` = `"art\\"` (stored at the model's offset 80, set from a global)
+- `fileName` = the extensionless path from the `.vis.xmb` `<file>` element (offset 96)
+
+The function then strips any existing extension (via `strrchr(path, '.')`) and tries `.ugx`.
+
+This means:
+
+- The `<Visual>` path in `objects.xml` has **no `art\` prefix** — it's just
+  `unsc\vehicle\warthog_01\warthog_01.vis`
+- The engine prepends `art\` and appends `.vis.xmb` when looking up the vis file in ERA
+- For meshes/anims referenced within the vis, the engine again prepends the stored
+  `art\` base path and appends `.ugx` (for `<asset type="Model">`) or `.uax`
+  (for `<asset type="Anim">`)
 
 ## The `.dmg.xmb` File — Damage Model
 
@@ -223,6 +328,10 @@ data\
 ├── squads.xml.xmb                   # squad compositions
 └── tactics\
     └── unsc_veh_warthog_01.tactics.xmb
+physics\
+├── warthog.physics.xmb              # physics config
+├── warthog.blueprint.xmb            # mass/friction/shape ref
+└── warthog.shp.xmb                  # Havok shape definition
 ```
 
 ### `scenarioshared.era` — Art Assets
@@ -271,13 +380,17 @@ art\unsc\vehicle\warthog_01\
 
 ### File Type Summary
 
-| Extension      | Format      | Description                                       |
-| -------------- | ----------- | ------------------------------------------------- |
-| `.ugx`         | ECF         | Geometry (vertices, indices, skeleton, materials) |
-| `.uax`         | ECF         | Animation clips                                   |
-| `.vis.xmb`     | XMB         | Visual manifest (models, anims, attachments)      |
-| `.dmg.xmb`     | XMB         | Damage model (destruction sequence)               |
-| `.tactics.xmb` | XMB         | Combat tactics (weapons, abilities)               |
-| `.ddx`         | DDS variant | Textures (diffuse, specular, normal, emissive)    |
-| `.pfx`         | Particle    | Particle effect definitions                       |
-| `.era`         | ERA         | Archive container for all file types              |
+| Extension        | Format      | Description                                       |
+| ---------------- | ----------- | ------------------------------------------------- |
+| `.ugx`           | ECF         | Geometry (vertices, indices, skeleton, materials) |
+| `.uax`           | ECF         | Animation clips                                   |
+| `.vis.xmb`       | XMB         | Visual manifest (models, anims, attachments)      |
+| `.dmg.xmb`       | XMB         | Damage model (destruction sequence)               |
+| `.tactics.xmb`   | XMB         | Combat tactics (weapons, abilities)               |
+| `.physics.xmb`   | XMB         | Physics config (vehicle type, center offset)      |
+| `.blueprint.xmb` | XMB         | Physical properties (mass, friction, shape ref)   |
+| `.shp.xmb`       | XMB (Havok) | Collision shape (hkBoxShape, hkConvexShape, etc.) |
+| `.ddx`           | DDS variant | Textures (diffuse, specular, normal, emissive)    |
+| `.pfx`           | Particle    | Particle effect definitions                       |
+| `.tfx`           | Terrain FX  | Terrain effect definitions (dust, tracks)         |
+| `.era`           | ERA         | Archive container for all file types              |

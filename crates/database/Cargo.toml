@@ -1,0 +1,17 @@
+[package]
+name = "database"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "HW1 game database parser — objects, squads, techs, visuals, tactics, physics"
+
+[dependencies]
+bdt = { workspace = true }
+xmb = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = ["std"]
+std = []

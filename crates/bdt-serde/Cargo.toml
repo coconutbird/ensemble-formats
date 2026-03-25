@@ -1,0 +1,16 @@
+[package]
+name = "bdt-serde"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Serde Deserializer for bdt::Node trees — derive-based XMB parsing with deny_unknown_fields support"
+
+[features]
+default = []
+std = []
+
+[dependencies]
+bdt = { workspace = true }
+serde = { workspace = true }

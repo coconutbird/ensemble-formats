@@ -18,6 +18,9 @@ members = [
     "crates/nostdio",
     "crates/pkg",
     "crates/pkg-cli",
+    "crates/bdt-serde",
+    "crates/database",
+    "crates/database-cli",
 ]
 
 [workspace.package]
@@ -30,6 +33,7 @@ authors = ["coconutbird"]
 [workspace.dependencies]
 # Internal crates
 bdt = { path = "crates/bdt" }
+bdt-serde = { path = "crates/bdt-serde" }
 ddx = { path = "crates/ddx" }
 ecf = { path = "crates/ecf" }
 nostdio = { path = "crates/nostdio" }
@@ -43,6 +47,7 @@ xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }
 ugx-cli = { path = "crates/ugx-cli" }
 pkg = { path = "crates/pkg" }
+database = { path = "crates/database" }
 
 # External dependencies
 byteorder = "1.5"
