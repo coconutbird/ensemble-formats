@@ -35,3 +35,11 @@ impl serde::de::Error for Error {
         }
     }
 }
+
+impl serde::ser::Error for Error {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Self {
+            msg: msg.to_string(),
+        }
+    }
+}

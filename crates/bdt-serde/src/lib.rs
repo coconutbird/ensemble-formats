@@ -35,11 +35,20 @@ extern crate std;
 
 mod de;
 mod error;
+mod ser;
 mod warn;
 
 pub use de::NodeDeserializer;
 pub use error::Error;
+pub use ser::NodeSerializer;
 pub use warn::Warning;
+
+/// Serialize a `T` into a [`bdt::Node`] with the given element name.
+///
+/// This is the inverse of [`from_node`].
+pub fn to_node<T: serde::Serialize>(name: &str, value: &T) -> Result<bdt::Node, Error> {
+    ser::to_node(name, value)
+}
 
 /// Deserialize a `T` from a [`bdt::Node`] reference.
 pub fn from_node<'de, T: serde::Deserialize<'de>>(node: &bdt::Node) -> Result<T, Error> {
