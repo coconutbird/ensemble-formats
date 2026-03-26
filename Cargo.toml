@@ -20,8 +20,6 @@ members = [
     "crates/pkg-cli",
     "crates/bdt-serde",
     "crates/xmb-serde",
-    "crates/database",
-    "crates/database-cli",
 ]
 
 [workspace.package]
@@ -32,7 +30,7 @@ repository = "https://github.com/coconutbird/ensemble-formats"
 authors = ["coconutbird"]
 
 [workspace.dependencies]
-# Internal crates
+# Internal dependencies
 bdt = { path = "crates/bdt" }
 bdt-serde = { path = "crates/bdt-serde" }
 ddx = { path = "crates/ddx" }
@@ -49,7 +47,6 @@ xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }
 ugx-cli = { path = "crates/ugx-cli" }
 pkg = { path = "crates/pkg" }
-database = { path = "crates/database" }
 
 # External dependencies
 byteorder = "1.5"
