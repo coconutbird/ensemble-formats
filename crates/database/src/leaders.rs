@@ -83,6 +83,12 @@ pub struct Leader {
     /// Population caps.
     #[serde(rename = "Pop", default)]
     pub pops: Vec<PopEntry>,
+    /// Reverse hot-drop resource cost.
+    #[serde(rename = "ReverseHotDropCost")]
+    pub reverse_hot_drop_cost: Option<f32>,
+    /// Test flag (debug/development).
+    #[serde(rename = "@Test")]
+    pub test: Option<bool>,
 }
 
 /// A resource entry (type + amount).

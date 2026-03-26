@@ -68,6 +68,21 @@ pub struct Ability {
     /// Icon path.
     #[serde(rename = "Icon")]
     pub icon: Option<String>,
+    /// Damage taken modifier while ability is active.
+    #[serde(rename = "DamageTakenModifier")]
+    pub damage_taken_modifier: Option<f32>,
+    /// Recovery animation attachment point.
+    #[serde(rename = "RecoverAnimAttachment")]
+    pub recover_anim_attachment: Option<String>,
+    /// Recovery end animation.
+    #[serde(rename = "RecoverEndAnim")]
+    pub recover_end_anim: Option<String>,
+    /// Recovery start animation.
+    #[serde(rename = "RecoverStartAnim")]
+    pub recover_start_anim: Option<String>,
+    /// Smart target range.
+    #[serde(rename = "SmartTargetRange")]
+    pub smart_target_range: Option<f32>,
 }
 
 /// Parse all abilities from an `abilities.xml.xmb` document.

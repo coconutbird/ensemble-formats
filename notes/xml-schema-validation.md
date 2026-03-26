@@ -126,16 +126,16 @@ then add them all to the struct in one edit. A typical batch:
 
 ## Known Loader Functions
 
-| File          | Loader Function           | Address       |
-| ------------- | ------------------------- | ------------- |
-| objects.xml   | BProtoObject::loadFromXml | `0x140341620` |
-| squads.xml    | BProtoSquad::loadFromXml  | TBD           |
-| techs.xml     | BProtoTech::loadFromXml   | TBD           |
-| powers.xml    | BPower::parseFromXml      | `0x14034cb00` |
-| abilities.xml | BAbility::parseFromXml    | `0x1400f53c0` |
-| civs.xml      | BCiv::parseFromXml        | `0x140193000` |
-| leaders.xml   | BLeader::loadFromXml      | TBD           |
-| gamedata.xml  | —                         | TBD           |
+| File          | Loader Function           | Address        |
+| ------------- | ------------------------- | -------------- |
+| objects.xml   | BProtoObject::loadFromXml | `0x140341620`  |
+| squads.xml    | BProtoSquad::loadFromXml  | TBD            |
+| techs.xml     | BTech::loadFromXml        | TBD            |
+| powers.xml    | BPower::parseFromXml      | `0x14034cb00`  |
+| abilities.xml | BAbility::parseFromXml    | `0x1400f53c0`  |
+| civs.xml      | BCiv::parseFromXml        | `0x140193000`  |
+| leaders.xml   | BLeader::parseFromXml     | `0x140253540`  |
+| gamedata.xml  | BDatabase::loadGameData   | `0x1401e8460`  |
 
 ## Per-File Schema Notes
 
@@ -152,18 +152,28 @@ Detailed findings for each file live in `notes/schema/`:
 
 ## Progress
 
-| File            | Warnings            | Verified  | Dead Data | Remaining   |
-| --------------- | ------------------- | --------- | --------- | ----------- |
-| objects.xml     | 11,443 → was 12,991 | 32 fields | 1 (LOS)   | ~108 unique |
-| squads.xml      | 813                 | 0         | 0         | TBD         |
-| techs.xml       | 2,395               | 0         | 0         | TBD         |
-| abilities.xml   | 12                  | 0         | 0         | TBD         |
-| powers.xml      | 114                 | 0         | 0         | TBD         |
-| civs.xml        | 0                   | —         | —         | Done        |
-| leaders.xml     | 5                   | 0         | 0         | TBD         |
-| weapontypes.xml | 0                   | —         | —         | Done        |
-| damagetypes.xml | 0                   | —         | —         | Done        |
-| gamedata.xml    | 129                 | 0         | 0         | TBD         |
+| File            | Warnings | Coverage | Notes |
+| --------------- | -------- | -------- | ----- |
+| objects.xml     | 0        | XML-complete | 6 dead fields added with comments (`@is`, `FlashUI`, `MinimapIconName`, `TrackInterceptDistance`, `DazeResist`, `UIVisual`). Full IDA audit of `BProtoObject::loadFromXml` NOT done yet. |
+| squads.xml      | 0        | XML-complete | Full IDA audit NOT done — only XML-gap fields added. |
+| techs.xml       | 0        | XML-complete | Full IDA audit NOT done — only XML-gap fields added. |
+| abilities.xml   | 0        | XML-complete | Full IDA audit NOT done — only XML-gap fields added. |
+| powers.xml      | 0        | XML-complete | `FlashUI` dead field added with comment (UI loader, not power loader). Full IDA audit NOT done. |
+| civs.xml        | 0        | XML-complete | Full IDA audit NOT done. |
+| leaders.xml     | 0        | XML-complete | Full IDA audit NOT done — only XML-gap fields added. |
+| weapontypes.xml | 0        | XML-complete | Full IDA audit NOT done. |
+| damagetypes.xml | 0        | XML-complete | Full IDA audit NOT done. |
+| gamedata.xml    | 0        | **IDA-audited** | 127 fields enumerated from `BDatabase::loadGameData`. Full coverage. |
+
+### Coverage levels
+
+- **XML-complete**: Every field present in the shipping XML data is captured.
+  0 warnings means the struct matches the data. However, the engine loader
+  may support additional fields that no shipping XML entry uses (category 3
+  above). A full IDA audit would find those.
+- **IDA-audited**: Every `_stricmp`/`getAttribute` in the loader function has
+  been enumerated. The struct covers both the shipping data AND all engine-
+  supported fields.
 
 ## Why This Matters
 

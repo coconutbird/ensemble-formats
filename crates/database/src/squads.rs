@@ -62,6 +62,51 @@ pub struct Squad {
     /// Sub-select sort priority.
     #[serde(rename = "SubSelectSort")]
     pub sub_select_sort: Option<i32>,
+    /// Formation type attribute.
+    #[serde(rename = "@formationType")]
+    pub formation_type: Option<String>,
+    /// Update flag (incremental data merge).
+    #[serde(rename = "@update")]
+    pub update: Option<bool>,
+    /// Ability recovery bar name.
+    #[serde(rename = "AbilityRecoveryBar")]
+    pub ability_recovery_bar: Option<String>,
+    /// Bobble head configuration.
+    #[serde(rename = "BobbleHead")]
+    pub bobble_head: Option<String>,
+    /// Whether the squad can attack while moving.
+    #[serde(rename = "CanAttackWhileMoving")]
+    pub can_attack_while_moving: Option<bool>,
+    /// Cryo points.
+    #[serde(rename = "CryoPoints")]
+    pub cryo_points: Option<f32>,
+    /// Daze resistance value.
+    #[serde(rename = "DazeResist")]
+    pub daze_resist: Option<f32>,
+    /// Leash deadzone distance.
+    #[serde(rename = "LeashDeadzone")]
+    pub leash_deadzone: Option<f32>,
+    /// Leash recall delay in seconds.
+    #[serde(rename = "LeashRecallDelay")]
+    pub leash_recall_delay: Option<f32>,
+    /// Minimap icon scale.
+    #[serde(rename = "MinimapScale")]
+    pub minimap_scale: Option<f32>,
+    /// Selection configuration.
+    #[serde(rename = "Selection")]
+    pub selection: Option<String>,
+    /// Sound configuration.
+    #[serde(rename = "Sound")]
+    pub sound: Option<String>,
+    /// Stats name string ID.
+    #[serde(rename = "StatsNameID")]
+    pub stats_name_id: Option<i32>,
+    /// Turn radius (with optional min attribute).
+    #[serde(rename = "TurnRadius")]
+    pub turn_radius: Option<TurnRadius>,
+    /// Veterancy bar name.
+    #[serde(rename = "VeterancyBar")]
+    pub veterancy_bar: Option<String>,
 }
 
 /// Wrapper for the `<Units>` element containing `<Unit>` children.
@@ -92,6 +137,17 @@ pub struct UnitEntry {
     /// Role: `"normal"`, etc.
     #[serde(rename = "@role")]
     pub role: Option<String>,
+}
+
+/// Turn radius element: `<TurnRadius min="..." max="...">value</TurnRadius>`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct TurnRadius {
+    #[serde(rename = "@min")]
+    pub min: Option<f32>,
+    #[serde(rename = "@max")]
+    pub max: Option<f32>,
+    #[serde(rename = "$text", default)]
+    pub value: f32,
 }
 
 fn default_one() -> i32 {

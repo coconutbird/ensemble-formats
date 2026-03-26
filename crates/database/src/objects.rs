@@ -23,6 +23,10 @@ pub struct ProtoObject {
     #[serde(rename = "@id")]
     pub id: Option<i32>,
 
+    /// Unused leftover from development — typo for `@id`, ignored by the engine.
+    #[serde(rename = "@is")]
+    pub is: Option<i32>,
+
     /// Database ID assigned by the engine (`dbid` attribute).
     #[serde(rename = "@dbid")]
     pub dbid: Option<i32>,
@@ -159,6 +163,10 @@ pub struct ProtoObject {
     #[serde(rename = "DamageType")]
     pub damage_type: Option<String>,
 
+    /// Unused leftover from development — `DazeResist` is read from squads, not objects.
+    #[serde(rename = "DazeResist")]
+    pub daze_resist: Option<f32>,
+
     /// Death fade delay before fading begins (seconds).
     #[serde(rename = "DeathFadeDelayTime")]
     pub death_fade_delay_time: Option<f32>,
@@ -196,9 +204,12 @@ pub struct ProtoObject {
     pub extended_sound_bank: Option<String>,
 
     /// Boolean flags (e.g. `"ForceToGaiaPlayer"`, `"Invulnerable"`, `"NoRender"`).
-    /// Engine reads the element text content; the `@is` XML attribute is dead data.
     #[serde(rename = "Flag", default)]
     pub flags: Vec<String>,
+
+    /// Unused leftover from development — loaded by the Flash UI system, not the object loader.
+    #[serde(rename = "FlashUI")]
+    pub flash_ui: Option<String>,
 
     /// Terrain flatten region 0 max X bound (building placement).
     #[serde(rename = "FlattenMaxX0")]
@@ -339,6 +350,10 @@ pub struct ProtoObject {
     /// Minimap icon path. Has `@size` sub-attr.
     #[serde(rename = "MinimapIcon")]
     pub minimap_icon: Option<String>,
+
+    /// Unused leftover from development — not read by `BProtoObject::loadFromXml`.
+    #[serde(rename = "MinimapIconName")]
+    pub minimap_icon_name: Option<String>,
 
     /// Movement type string: `"Land"`, `"Air"`, `"Flood"`, etc.
     #[serde(rename = "MovementType")]
@@ -564,6 +579,10 @@ pub struct ProtoObject {
     #[serde(rename = "TrackingDelay")]
     pub tracking_delay: Option<f32>,
 
+    /// Unused leftover from development — `TrackInterceptDistance` is read from gamedata, not objects.
+    #[serde(rename = "TrackInterceptDistance")]
+    pub track_intercept_distance: Option<f32>,
+
     /// Train animation type (resolved via `gVisualManager::getAnimType`).
     #[serde(rename = "TrainAnim")]
     pub train_anim: Option<String>,
@@ -583,6 +602,10 @@ pub struct ProtoObject {
     /// Turn rate (degrees per second).
     #[serde(rename = "TurnRate")]
     pub turn_rate: Option<f32>,
+
+    /// Unused leftover from development — not read by `BProtoObject::loadFromXml`.
+    #[serde(rename = "UIVisual")]
+    pub ui_visual: Option<String>,
 
     /// Desired velocity. Also auto-sets `MaxVelocity` and `Acceleration`.
     #[serde(rename = "Velocity")]

@@ -9,12 +9,28 @@
 //!
 //! # Confirmed ERA load order (from IDA `BArchiveManager`)
 //!
-//! 1. `root.era`                     — base game data
-//! 2. `root_update.era`              — base patches
-//! 3. `locale.era` / `locale_update.era` — localised strings
-//! 4. `scenarioshared.era`           — shared models/anims across scenarios
-//! 5. `{scenario}.era`              — per-scenario assets (highest priority)
-//! 6. `dlc01.era` / `dlc02.era`      — DLC content
+//! The engine loads archives across several init phases.  Archives loaded
+//! later have **higher priority** (last loaded wins).
+//!
+//! ## Phase 1 — Early init (`sub_140820B60`)
+//!  1. `locale.era`            — localised strings (lowest priority)
+//!  2. `locale_update.era`     — locale-specific patches
+//!  3. `root.era`              — base game data
+//!  4. `root_update.era`       — base patches
+//!  5. `shader.era`            — compiled shaders
+//!
+//! ## Phase 2 — Game init (`BArchiveManager::beginGameInit`)
+//!  6. `miniloader.era`        — mini loading screen assets
+//!  7. `pregameUI.era`         — pre-game menu UI
+//!
+//! ## Phase 3 — Scenario load (`BArchiveManager::beginScenarioPrefetch`)
+//!  8. `ingameUI.era`          — in-game UI
+//!  9. `scenarioshared.era`    — shared scenario models/anims
+//! 10. `{scenario}.era`        — per-scenario assets
+//!
+//! ## Phase 4 — DLC (`BArchiveManager::loadDLCArchives`)
+//! 11. `dlc01.era`             — DLC pack 1
+//! 12. `dlc02.era`             — DLC pack 2 (highest priority)
 //!
 //! All paths are normalised to **lowercase with backslash** separators before
 //! lookup, matching the engine's `tolower` pass in `resolveFile`.
@@ -122,6 +138,18 @@ impl AssetSource {
         self.archives
             .iter()
             .map(|a| (a.label.as_str(), a.index.len()))
+            .collect()
+    }
+
+    /// Return all filenames per archive (label → sorted file list).
+    pub fn files_per_archive(&self) -> Vec<(&str, Vec<&str>)> {
+        self.archives
+            .iter()
+            .map(|a| {
+                let mut files: Vec<&str> = a.index.keys().map(|k| k.as_str()).collect();
+                files.sort();
+                (a.label.as_str(), files)
+            })
             .collect()
     }
 }

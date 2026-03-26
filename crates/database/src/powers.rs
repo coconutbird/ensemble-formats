@@ -76,6 +76,64 @@ pub struct PowerAttributes {
     /// Data levels (inside Attributes).
     #[serde(rename = "DataLevel", default)]
     pub data_levels: Vec<DataLevel>,
+    /// Camera effect on power activation.
+    #[serde(rename = "CameraEffectIn")]
+    pub camera_effect_in: Option<String>,
+    /// Camera effect on power deactivation.
+    #[serde(rename = "CameraEffectOut")]
+    pub camera_effect_out: Option<String>,
+    /// Allow user camera scroll during power.
+    #[serde(rename = "CameraEnableUserScroll")]
+    pub camera_enable_user_scroll: Option<bool>,
+    /// Allow user camera yaw during power.
+    #[serde(rename = "CameraEnableUserYaw")]
+    pub camera_enable_user_yaw: Option<bool>,
+    /// Allow user camera zoom during power.
+    #[serde(rename = "CameraEnableUserZoom")]
+    pub camera_enable_user_zoom: Option<bool>,
+    /// Camera pitch maximum during power.
+    #[serde(rename = "CameraPitchMax")]
+    pub camera_pitch_max: Option<f32>,
+    /// Camera pitch minimum during power.
+    #[serde(rename = "CameraPitchMin")]
+    pub camera_pitch_min: Option<f32>,
+    /// Camera zoom maximum during power.
+    #[serde(rename = "CameraZoomMax")]
+    pub camera_zoom_max: Option<f32>,
+    /// Camera zoom minimum during power.
+    #[serde(rename = "CameraZoomMin")]
+    pub camera_zoom_min: Option<f32>,
+    /// Minigame name associated with this power.
+    #[serde(rename = "Minigame")]
+    pub minigame: Option<String>,
+    /// Multi-recharge power name.
+    #[serde(rename = "MultiRechargePower")]
+    pub multi_recharge_power: Option<String>,
+    /// Power cannot be disrupted.
+    #[serde(rename = "NotDisruptable")]
+    pub not_disruptable: Option<String>,
+    /// Sequential recharge flag.
+    #[serde(rename = "SequentialRecharge")]
+    pub sequential_recharge: Option<String>,
+    /// Show in power menu.
+    #[serde(rename = "ShowInPowerMenu")]
+    pub show_in_power_menu: Option<bool>,
+    /// Show target highlight effect.
+    #[serde(rename = "ShowTargetHighlight")]
+    pub show_target_highlight: Option<bool>,
+    /// Tech prerequisite name.
+    #[serde(rename = "TechPrereq")]
+    pub tech_prereq: Option<String>,
+    /// Whether this is a unit power.
+    #[serde(rename = "UnitPower")]
+    pub unit_power: Option<bool>,
+    /// Population type reference.
+    #[serde(rename = "Pop")]
+    pub pop: Option<String>,
+
+    /// Unused leftover from development — loaded by the Flash UI system, not the power loader.
+    #[serde(rename = "FlashUI")]
+    pub flash_ui: Option<String>,
 }
 
 /// Cost element with attribute-based supplies/power.

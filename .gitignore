@@ -45,3 +45,4 @@ root/
 
 # Environment
 .env
+objects.xml
