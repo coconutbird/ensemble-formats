@@ -195,6 +195,12 @@ impl UgxGeom {
         let all_rigid = self.sections.iter().all(&section_is_rigid);
         let all_skinned = self.sections.iter().all(|s| !section_is_rigid(s));
         let any_global = self.sections.iter().any(|s| s.global_bones);
+        // Geom-level global_bones: true when any section uses global_bones OR
+        // when all sections use global bone indices (empty bone_remap), meaning
+        // vertex bone indices refer directly to the skeleton rather than
+        // section-local remapped indices.
+        let all_global_indices =
+            !self.sections.is_empty() && self.sections.iter().all(|s| s.bone_remap.is_empty());
 
         // rigid_only: true when all sections are effectively rigid AND all bound
         // to the same bone (single rigid_bone_index across all sections).
@@ -207,7 +213,7 @@ impl UgxGeom {
         self.rigid_only = same_rigid_bone;
         // all_sections_rigid uses the broader "effectively rigid" test
         self.all_sections_rigid = all_rigid;
-        self.global_bones = any_global;
+        self.global_bones = any_global || all_global_indices;
 
         // all_sections_skinned: true only when every section is skinned AND
         // no section uses global_bones (matching original engine logic).
@@ -239,9 +245,13 @@ impl UgxGeom {
             .unwrap_or(1);
         self.instance_index_multiplier = max_verts.next_power_of_two() as i16;
 
-        // max_instances defaults to 1 (set by artist tooling, not derivable)
+        // max_instances is set by artist tooling, not derivable from mesh data.
+        // Preserve the existing value if already set (e.g. from glTF extras);
+        // only default to 1 when it hasn't been initialised yet (0 or negative).
+        if self.max_instances <= 0 {
+            self.max_instances = 1;
+        }
         // large_geom_bone_index defaults to i16::MAX (no large geom)
-        self.max_instances = 1;
         self.large_geom_bone_index = i16::MAX;
     }
 

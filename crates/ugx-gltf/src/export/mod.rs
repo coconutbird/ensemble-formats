@@ -343,9 +343,30 @@ pub fn export_to_gltf_with_buffer_name(
             Some(format!("mesh_{}", section_idx))
         };
 
+        // Store section-level flags in mesh extras so the import path doesn't
+        // need to guess via heuristic. Always written so the importer can
+        // distinguish explicit values from absent (third-party glTF).
+        let mesh_extras = {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "ugx_global_bones".into(),
+                serde_json::Value::Bool(section.global_bones),
+            );
+            map.insert(
+                "ugx_rigid_only".into(),
+                serde_json::Value::Bool(section.rigid_only),
+            );
+            map.insert(
+                "ugx_rigid_bone_index".into(),
+                serde_json::Value::Number(section.rigid_bone_index.into()),
+            );
+            let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
+            Some(serde_json::value::RawValue::from_string(raw).unwrap())
+        };
+
         meshes.push(json::Mesh {
             extensions: None,
-            extras: json::Extras::default(),
+            extras: mesh_extras,
             name: mesh_name,
             primitives: vec![primitive],
             weights: None,
@@ -469,9 +490,19 @@ pub fn export_to_gltf_with_buffer_name(
         scene_node_indices = (0..nodes.len() as u32).map(json::Index::new).collect();
     }
 
+    let scene_extras = {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "ugx_max_instances".into(),
+            serde_json::Value::Number(geom.max_instances.into()),
+        );
+        let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
+        Some(serde_json::value::RawValue::from_string(raw).unwrap())
+    };
+
     let scene = json::Scene {
         extensions: None,
-        extras: json::Extras::default(),
+        extras: scene_extras,
         name: None,
         nodes: scene_node_indices,
     };

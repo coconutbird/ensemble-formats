@@ -1414,3 +1414,765 @@ fn survey_dec3n_w_bits() {
         100.0 * tangent_oor_count as f64 / (3 * total_tangents).max(1) as f64
     );
 }
+
+// ---------------------------------------------------------------------------
+// Diagnostic: launcher_01.ugx roundtrip diff
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn diagnose_launcher_01() {
+    let data = match std::fs::read("../../launcher_01.ugx") {
+        Ok(d) => d,
+        Err(_) => {
+            eprintln!("launcher_01.ugx not found in repo root — skipping");
+            return;
+        }
+    };
+
+    let original = ugx::Reader::read(&data).unwrap();
+    // Detect version from signature in first 4 bytes of cached data (offset depends on ECF)
+    // Use the section packer presence as proxy: HW1 has packers, HW2 doesn't
+    let version = if original
+        .sections
+        .first()
+        .is_some_and(|s| s.base_vert_packer.is_some())
+    {
+        ugx::UgxVersion::Hw1
+    } else {
+        ugx::UgxVersion::Hw2
+    };
+    eprintln!("Version: {:?}", version);
+
+    eprintln!("\n=== ORIGINAL GEOM ===");
+    eprintln!(
+        "Sections:{} Mats:{} Bones:{} GrannyBones:{} GrannyMeshes:{}",
+        original.sections.len(),
+        original.materials.len(),
+        original.bones.len(),
+        original.granny_bones.len(),
+        original.granny_meshes.len()
+    );
+    eprintln!(
+        "Accessories:{} ValidAcc:{} AABB:{}",
+        original.accessories.len(),
+        original.valid_accessories.len(),
+        original.aabb_tree.is_some()
+    );
+    eprintln!(
+        "rigid_only={} rigid_bone_index={} max_inst={} iim={} lgbi={}",
+        original.rigid_only,
+        original.rigid_bone_index,
+        original.max_instances,
+        original.instance_index_multiplier,
+        original.large_geom_bone_index
+    );
+    eprintln!(
+        "all_sections_rigid={} all_sections_skinned={} global_bones={}",
+        original.all_sections_rigid, original.all_sections_skinned, original.global_bones
+    );
+    eprintln!(
+        "VB:{} IB:{}",
+        original.vertex_buffer.len(),
+        original.index_buffer.len()
+    );
+
+    for (si, s) in original.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: mat={} acc={} maxB={} rigB={} ibO={} tri={} vbO={} vbB={} vSz={} nV={} packer={} remap={:?} rig={} glb={}",
+            si,
+            s.material_index,
+            s.accessory_index,
+            s.max_bones,
+            s.rigid_bone_index,
+            s.ib_offset,
+            s.num_tris,
+            s.vb_offset,
+            s.vb_bytes,
+            s.vert_size,
+            s.num_verts,
+            s.base_vert_packer.is_some(),
+            s.bone_remap,
+            s.rigid_only,
+            s.global_bones
+        );
+    }
+
+    let export_opts = GltfExportOptions {
+        embed_buffers: false,
+        include_materials: true,
+        include_skeleton: true,
+    };
+    let export = export_to_gltf(&original, &export_opts).unwrap();
+    let import_opts = GltfImportOptions {
+        version,
+        include_skeleton: true,
+        include_materials: true,
+    };
+    let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+    let rt_bytes = ugx::Writer::write(&imported, version).unwrap();
+
+    eprintln!("\n=== ROUNDTRIPPED ===");
+    eprintln!(
+        "Sections:{} Mats:{} Bones:{} GrannyBones:{} GrannyMeshes:{}",
+        imported.sections.len(),
+        imported.materials.len(),
+        imported.bones.len(),
+        imported.granny_bones.len(),
+        imported.granny_meshes.len()
+    );
+    eprintln!(
+        "Accessories:{} ValidAcc:{} AABB:{}",
+        imported.accessories.len(),
+        imported.valid_accessories.len(),
+        imported.aabb_tree.is_some()
+    );
+    eprintln!(
+        "rigid_only={} rigid_bone_index={} max_inst={} iim={} lgbi={}",
+        imported.rigid_only,
+        imported.rigid_bone_index,
+        imported.max_instances,
+        imported.instance_index_multiplier,
+        imported.large_geom_bone_index
+    );
+
+    for (si, s) in imported.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: mat={} acc={} maxB={} rigB={} ibO={} tri={} vbO={} vbB={} vSz={} nV={} packer={} remap={:?} rig={} glb={}",
+            si,
+            s.material_index,
+            s.accessory_index,
+            s.max_bones,
+            s.rigid_bone_index,
+            s.ib_offset,
+            s.num_tris,
+            s.vb_offset,
+            s.vb_bytes,
+            s.vert_size,
+            s.num_verts,
+            s.base_vert_packer.is_some(),
+            s.bone_remap,
+            s.rigid_only,
+            s.global_bones
+        );
+    }
+
+    // Field-level diffs
+    eprintln!("\n=== FIELD DIFFS ===");
+    if original.rigid_only != imported.rigid_only {
+        eprintln!(
+            "DIFF rigid_only: {} -> {}",
+            original.rigid_only, imported.rigid_only
+        );
+    }
+    if original.rigid_bone_index != imported.rigid_bone_index {
+        eprintln!(
+            "DIFF rigid_bone_index: {} -> {}",
+            original.rigid_bone_index, imported.rigid_bone_index
+        );
+    }
+    if original.max_instances != imported.max_instances {
+        eprintln!(
+            "DIFF max_instances: {} -> {}",
+            original.max_instances, imported.max_instances
+        );
+    }
+    if original.instance_index_multiplier != imported.instance_index_multiplier {
+        eprintln!(
+            "DIFF iim: {} -> {}",
+            original.instance_index_multiplier, imported.instance_index_multiplier
+        );
+    }
+    if original.large_geom_bone_index != imported.large_geom_bone_index {
+        eprintln!(
+            "DIFF large_geom_bone_index: {} -> {}",
+            original.large_geom_bone_index, imported.large_geom_bone_index
+        );
+    }
+    if original.all_sections_rigid != imported.all_sections_rigid {
+        eprintln!(
+            "DIFF all_sections_rigid: {} -> {}",
+            original.all_sections_rigid, imported.all_sections_rigid
+        );
+    }
+    if original.all_sections_skinned != imported.all_sections_skinned {
+        eprintln!(
+            "DIFF all_sections_skinned: {} -> {}",
+            original.all_sections_skinned, imported.all_sections_skinned
+        );
+    }
+    if original.global_bones != imported.global_bones {
+        eprintln!(
+            "DIFF global_bones: {} -> {}",
+            original.global_bones, imported.global_bones
+        );
+    }
+    if original.bones.len() != imported.bones.len() {
+        eprintln!(
+            "DIFF bones count: {} -> {}",
+            original.bones.len(),
+            imported.bones.len()
+        );
+    }
+    if original.granny_bones.len() != imported.granny_bones.len() {
+        eprintln!(
+            "DIFF granny_bones count: {} -> {}",
+            original.granny_bones.len(),
+            imported.granny_bones.len()
+        );
+    }
+    if original.granny_meshes.len() != imported.granny_meshes.len() {
+        eprintln!(
+            "DIFF granny_meshes count: {} -> {}",
+            original.granny_meshes.len(),
+            imported.granny_meshes.len()
+        );
+    }
+    if original.accessories.len() != imported.accessories.len() {
+        eprintln!(
+            "DIFF accessories count: {} -> {}",
+            original.accessories.len(),
+            imported.accessories.len()
+        );
+    }
+
+    for (si, (os, rs)) in original
+        .sections
+        .iter()
+        .zip(imported.sections.iter())
+        .enumerate()
+    {
+        if os.material_index != rs.material_index {
+            eprintln!(
+                "DIFF sec[{}] mat: {} -> {}",
+                si, os.material_index, rs.material_index
+            );
+        }
+        if os.accessory_index != rs.accessory_index {
+            eprintln!(
+                "DIFF sec[{}] acc: {} -> {}",
+                si, os.accessory_index, rs.accessory_index
+            );
+        }
+        if os.max_bones != rs.max_bones {
+            eprintln!(
+                "DIFF sec[{}] maxBones: {} -> {}",
+                si, os.max_bones, rs.max_bones
+            );
+        }
+        if os.rigid_bone_index != rs.rigid_bone_index {
+            eprintln!(
+                "DIFF sec[{}] rigidBone: {} -> {}",
+                si, os.rigid_bone_index, rs.rigid_bone_index
+            );
+        }
+        if os.vert_size != rs.vert_size {
+            eprintln!(
+                "DIFF sec[{}] vert_size: {} -> {}",
+                si, os.vert_size, rs.vert_size
+            );
+        }
+        if os.bone_remap != rs.bone_remap {
+            eprintln!(
+                "DIFF sec[{}] bone_remap: {:?} -> {:?}",
+                si, os.bone_remap, rs.bone_remap
+            );
+        }
+        if os.rigid_only != rs.rigid_only {
+            eprintln!(
+                "DIFF sec[{}] rigid_only: {} -> {}",
+                si, os.rigid_only, rs.rigid_only
+            );
+        }
+        if os.global_bones != rs.global_bones {
+            eprintln!(
+                "DIFF sec[{}] global_bones: {} -> {}",
+                si, os.global_bones, rs.global_bones
+            );
+        }
+    }
+
+    // Check vertex data - bone weights/indices
+    eprintln!("\n=== VERTEX SKINNING CHECK ===");
+    for si in 0..original.sections.len().min(imported.sections.len()) {
+        let orig_verts = original.unpack_section_vertices(si).unwrap();
+        let rt_verts = imported.unpack_section_vertices(si).unwrap();
+        let mut orig_skinned = 0;
+        let mut rt_skinned = 0;
+        for v in &orig_verts {
+            if v.bone_weights.iter().any(|&w| w > 0.0) {
+                orig_skinned += 1;
+            }
+        }
+        for v in &rt_verts {
+            if v.bone_weights.iter().any(|&w| w > 0.0) {
+                rt_skinned += 1;
+            }
+        }
+        eprintln!(
+            "  sec[{}]: orig_skinned={}/{} rt_skinned={}/{}",
+            si,
+            orig_skinned,
+            orig_verts.len(),
+            rt_skinned,
+            rt_verts.len()
+        );
+
+        // Show first skinned vertex from original
+        if let Some(v) = orig_verts
+            .iter()
+            .find(|v| v.bone_weights.iter().any(|&w| w > 0.0))
+        {
+            eprintln!(
+                "    orig sample: indices={:?} weights={:?}",
+                v.bone_indices, v.bone_weights
+            );
+        }
+        if let Some(v) = rt_verts
+            .iter()
+            .find(|v| v.bone_weights.iter().any(|&w| w > 0.0))
+        {
+            eprintln!(
+                "    rt   sample: indices={:?} weights={:?}",
+                v.bone_indices, v.bone_weights
+            );
+        }
+
+        // Show packer info
+        if let Some(ref p) = original.sections[si].base_vert_packer {
+            eprintln!(
+                "    orig packer: pack='{}' decl='{}'",
+                p.pack_order, p.decl_order
+            );
+            eprintln!(
+                "    types: pos={:?} norm={:?} tan={:?} idx={:?} wt={:?}",
+                p.pos_type, p.normal_type, p.tangent_type, p.indices_type, p.weights_type
+            );
+        }
+        if let Some(ref p) = imported.sections[si].base_vert_packer {
+            eprintln!(
+                "    rt   packer: pack='{}' decl='{}'",
+                p.pack_order, p.decl_order
+            );
+            eprintln!(
+                "    types: pos={:?} norm={:?} tan={:?} idx={:?} wt={:?}",
+                p.pos_type, p.normal_type, p.tangent_type, p.indices_type, p.weights_type
+            );
+        }
+    }
+
+    // Byte-level diff of full files
+    eprintln!("\n=== BYTE-LEVEL DIFF ===");
+    let min_len = data.len().min(rt_bytes.len());
+    let mut diffs = 0usize;
+    for i in 0..min_len {
+        if data[i] != rt_bytes[i] {
+            diffs += 1;
+        }
+    }
+    diffs += data.len().abs_diff(rt_bytes.len());
+    eprintln!(
+        "{} byte diffs out of {} (orig={} rt={})",
+        diffs,
+        data.len().max(rt_bytes.len()),
+        data.len(),
+        rt_bytes.len()
+    );
+    // Show first 20 diffs
+    let mut shown = 0;
+    for i in 0..min_len {
+        if data[i] != rt_bytes[i] {
+            eprintln!("  @0x{:06X}: 0x{:02X} -> 0x{:02X}", i, data[i], rt_bytes[i]);
+            shown += 1;
+            if shown >= 20 {
+                break;
+            }
+        }
+    }
+
+    eprintln!("\nTotal: orig={} rt={}", data.len(), rt_bytes.len());
+    std::fs::write("launcher_01_rt.ugx", &rt_bytes).unwrap();
+    eprintln!("Wrote launcher_01_rt.ugx");
+}
+
+#[test]
+#[ignore]
+fn diagnose_hw1_vanilla() {
+    let game_dir = match load_game_dir("HW1_GAME_DIR") {
+        Some(d) => d,
+        None => {
+            eprintln!("HW1_GAME_DIR not set — skipping");
+            return;
+        }
+    };
+    let era_paths = find_files_flat(&game_dir, "era");
+
+    // Find a skinned UGX (e.g. marine) from the first ERA that has one
+    let mut found = None;
+    for era_path in &era_paths {
+        let mut archive = match open_era(era_path) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let entries = find_entries_in_era(&archive, ".ugx");
+        for (idx, filename) in &entries {
+            if (filename.contains("marine")
+                || filename.contains("warthog")
+                || filename.contains("scorpion"))
+                && let Ok(data) = archive.read_entry(*idx)
+            {
+                eprintln!(
+                    "Using: {} from {}",
+                    filename,
+                    era_path.file_name().unwrap().to_string_lossy()
+                );
+                found = Some((filename.clone(), data));
+                break;
+            }
+        }
+        if found.is_some() {
+            break;
+        }
+    }
+
+    let (filename, data) = match found {
+        Some(f) => f,
+        None => {
+            eprintln!("No suitable HW1 file found");
+            return;
+        }
+    };
+
+    let original = ugx::Reader::read(&data).unwrap();
+    eprintln!("\n=== ORIGINAL ({}) ===", filename);
+    eprintln!(
+        "Sections:{} Mats:{} Bones:{}",
+        original.sections.len(),
+        original.materials.len(),
+        original.bones.len()
+    );
+    eprintln!(
+        "rigid_only={} rigid_bone_index={} max_inst={} iim={} lgbi={}",
+        original.rigid_only,
+        original.rigid_bone_index,
+        original.max_instances,
+        original.instance_index_multiplier,
+        original.large_geom_bone_index
+    );
+    eprintln!(
+        "all_sections_rigid={} all_sections_skinned={} global_bones={}",
+        original.all_sections_rigid, original.all_sections_skinned, original.global_bones
+    );
+
+    for (si, s) in original.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: vSz={} glb={} rig={} rigB={} maxB={} nV={} remap={:?}",
+            si,
+            s.vert_size,
+            s.global_bones,
+            s.rigid_only,
+            s.rigid_bone_index,
+            s.max_bones,
+            s.num_verts,
+            s.bone_remap
+        );
+        if let Some(ref p) = s.base_vert_packer {
+            eprintln!(
+                "    packer: pack='{}' pos={:?} norm={:?} tan={:?} uv0={:?} idx={:?} wt={:?}",
+                p.pack_order,
+                p.pos_type,
+                p.normal_type,
+                p.tangent_type,
+                p.uv_types[0],
+                p.indices_type,
+                p.weights_type
+            );
+        }
+    }
+
+    let export_opts = GltfExportOptions {
+        embed_buffers: false,
+        include_materials: true,
+        include_skeleton: true,
+    };
+    let export = export_to_gltf(&original, &export_opts).unwrap();
+    let import_opts = GltfImportOptions {
+        version: ugx::UgxVersion::Hw1,
+        include_skeleton: true,
+        include_materials: true,
+    };
+    let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+    let rt_bytes = ugx::Writer::write(&imported, ugx::UgxVersion::Hw1).unwrap();
+    let re_read = ugx::Reader::read(&rt_bytes).unwrap();
+
+    eprintln!("\n=== ROUNDTRIPPED ===");
+    eprintln!(
+        "Sections:{} Mats:{} Bones:{}",
+        re_read.sections.len(),
+        re_read.materials.len(),
+        re_read.bones.len()
+    );
+    eprintln!(
+        "rigid_only={} rigid_bone_index={} max_inst={} iim={} lgbi={}",
+        re_read.rigid_only,
+        re_read.rigid_bone_index,
+        re_read.max_instances,
+        re_read.instance_index_multiplier,
+        re_read.large_geom_bone_index
+    );
+    eprintln!(
+        "all_sections_rigid={} all_sections_skinned={} global_bones={}",
+        re_read.all_sections_rigid, re_read.all_sections_skinned, re_read.global_bones
+    );
+
+    for (si, s) in re_read.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: vSz={} glb={} rig={} rigB={} maxB={} nV={}",
+            si,
+            s.vert_size,
+            s.global_bones,
+            s.rigid_only,
+            s.rigid_bone_index,
+            s.max_bones,
+            s.num_verts
+        );
+        if let Some(ref p) = s.base_vert_packer {
+            eprintln!(
+                "    packer: pack='{}' pos={:?} norm={:?} tan={:?}",
+                p.pack_order, p.pos_type, p.normal_type, p.tangent_type
+            );
+        }
+    }
+
+    eprintln!("\n=== DIFFS ===");
+    if original.rigid_only != re_read.rigid_only {
+        eprintln!(
+            "DIFF rigid_only: {} -> {}",
+            original.rigid_only, re_read.rigid_only
+        );
+    }
+    if original.rigid_bone_index != re_read.rigid_bone_index {
+        eprintln!(
+            "DIFF rigid_bone_index: {} -> {}",
+            original.rigid_bone_index, re_read.rigid_bone_index
+        );
+    }
+    if original.max_instances != re_read.max_instances {
+        eprintln!(
+            "DIFF max_instances: {} -> {}",
+            original.max_instances, re_read.max_instances
+        );
+    }
+    if original.instance_index_multiplier != re_read.instance_index_multiplier {
+        eprintln!(
+            "DIFF iim: {} -> {}",
+            original.instance_index_multiplier, re_read.instance_index_multiplier
+        );
+    }
+    if original.all_sections_rigid != re_read.all_sections_rigid {
+        eprintln!(
+            "DIFF all_sections_rigid: {} -> {}",
+            original.all_sections_rigid, re_read.all_sections_rigid
+        );
+    }
+    if original.all_sections_skinned != re_read.all_sections_skinned {
+        eprintln!(
+            "DIFF all_sections_skinned: {} -> {}",
+            original.all_sections_skinned, re_read.all_sections_skinned
+        );
+    }
+    if original.global_bones != re_read.global_bones {
+        eprintln!(
+            "DIFF global_bones: {} -> {}",
+            original.global_bones, re_read.global_bones
+        );
+    }
+    for (si, (os, rs)) in original
+        .sections
+        .iter()
+        .zip(re_read.sections.iter())
+        .enumerate()
+    {
+        if os.vert_size != rs.vert_size {
+            eprintln!(
+                "DIFF sec[{}] vert_size: {} -> {}",
+                si, os.vert_size, rs.vert_size
+            );
+        }
+        if os.max_bones != rs.max_bones {
+            eprintln!(
+                "DIFF sec[{}] maxBones: {} -> {}",
+                si, os.max_bones, rs.max_bones
+            );
+        }
+        if os.rigid_bone_index != rs.rigid_bone_index {
+            eprintln!(
+                "DIFF sec[{}] rigidBone: {} -> {}",
+                si, os.rigid_bone_index, rs.rigid_bone_index
+            );
+        }
+        if os.global_bones != rs.global_bones {
+            eprintln!(
+                "DIFF sec[{}] global_bones: {} -> {}",
+                si, os.global_bones, rs.global_bones
+            );
+        }
+        if os.rigid_only != rs.rigid_only {
+            eprintln!(
+                "DIFF sec[{}] rigid_only: {} -> {}",
+                si, os.rigid_only, rs.rigid_only
+            );
+        }
+    }
+
+    let min_len = data.len().min(rt_bytes.len());
+    let mut diffs = 0usize;
+    for i in 0..min_len {
+        if data[i] != rt_bytes[i] {
+            diffs += 1;
+        }
+    }
+    diffs += data.len().abs_diff(rt_bytes.len());
+    eprintln!(
+        "\n{} byte diffs (orig={} rt={})",
+        diffs,
+        data.len(),
+        rt_bytes.len()
+    );
+}
+
+#[test]
+#[ignore]
+fn diagnose_hw2_global_bones() {
+    let path = "/Users/dev/gamedepot/wstore/DUMP/data/archetypes/covenant/banish_cover_small/mesh_cover_small.ugx";
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => {
+            eprintln!("File not found — skipping");
+            return;
+        }
+    };
+    let original = ugx::Reader::read(&data).unwrap();
+    eprintln!("=== ORIGINAL ===");
+    for (si, s) in original.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: vSz={} glb={} rig={} rigB={} maxB={}",
+            si, s.vert_size, s.global_bones, s.rigid_only, s.rigid_bone_index, s.max_bones
+        );
+    }
+
+    let export_opts = GltfExportOptions {
+        embed_buffers: false,
+        include_materials: true,
+        include_skeleton: true,
+    };
+    let export = export_to_gltf(&original, &export_opts).unwrap();
+
+    // Check mesh extras
+    let root: serde_json::Value = serde_json::from_str(&export.json).unwrap();
+    if let Some(meshes) = root.get("meshes").and_then(|m| m.as_array()) {
+        for (i, m) in meshes.iter().enumerate() {
+            let gb = m.get("extras").and_then(|e| e.get("ugx_global_bones"));
+            eprintln!("  glTF mesh[{}] extras.ugx_global_bones = {:?}", i, gb);
+        }
+    }
+
+    let import_opts = GltfImportOptions {
+        version: ugx::UgxVersion::Hw2,
+        include_skeleton: true,
+        include_materials: true,
+    };
+    let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+    eprintln!("\n=== IMPORTED ===");
+    for (si, s) in imported.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: vSz={} glb={} rig={} rigB={} maxB={}",
+            si, s.vert_size, s.global_bones, s.rigid_only, s.rigid_bone_index, s.max_bones
+        );
+    }
+
+    let rt_bytes = ugx::Writer::write(&imported, ugx::UgxVersion::Hw2).unwrap();
+    let re_read = ugx::Reader::read(&rt_bytes).unwrap();
+    eprintln!("\n=== RE-READ ===");
+    for (si, s) in re_read.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: vSz={} glb={} rig={} rigB={} maxB={}",
+            si, s.vert_size, s.global_bones, s.rigid_only, s.rigid_bone_index, s.max_bones
+        );
+    }
+
+    // Check vertex weights
+    for si in 0..original.sections.len().min(re_read.sections.len()) {
+        let ov = original.unpack_section_vertices(si).unwrap();
+        let rv = re_read.unpack_section_vertices(si).unwrap();
+        eprintln!(
+            "\n  sec[{}] vert[0] orig weights={:?} indices={:?}",
+            si, ov[0].bone_weights, ov[0].bone_indices
+        );
+        eprintln!(
+            "  sec[{}] vert[0] re_read weights={:?} indices={:?}",
+            si, rv[0].bone_weights, rv[0].bone_indices
+        );
+    }
+}
+
+#[test]
+#[ignore]
+fn survey_max_instances() {
+    load_dotenv();
+    use std::collections::BTreeMap;
+
+    let mut counts: BTreeMap<i16, (usize, Vec<String>)> = BTreeMap::new();
+    let mut add = |val: i16, example: String| {
+        let entry = counts.entry(val).or_insert((0, Vec::new()));
+        entry.0 += 1;
+        if entry.1.len() < 3 {
+            entry.1.push(example);
+        }
+    };
+
+    // HW1
+    if let Some(hw1_dir) = load_game_dir("HW1_GAME_DIR") {
+        let era_paths = find_files_flat(&hw1_dir, "era");
+        for era_path in &era_paths {
+            let mut archive = match open_era(era_path) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+            let ugx_entries = find_entries_in_era(&archive, ".ugx");
+            for (idx, filename) in &ugx_entries {
+                let Ok(data) = archive.read_entry(*idx) else {
+                    continue;
+                };
+                let Ok(geom) = ugx::UgxGeom::from_bytes(&data) else {
+                    continue;
+                };
+                add(geom.max_instances, format!("HW1:{}", filename));
+            }
+        }
+    }
+
+    // HW2
+    if let Some(hw2_dir) = load_game_dir("HW2_GAME_DIR") {
+        let ugx_files = find_files_by_ext(&hw2_dir, "ugx");
+        for path in &ugx_files {
+            let Ok(data) = std::fs::read(path) else {
+                continue;
+            };
+            let Ok(geom) = ugx::UgxGeom::from_bytes(&data) else {
+                continue;
+            };
+            let fname = path.file_name().unwrap().to_string_lossy().to_string();
+            add(geom.max_instances, format!("HW2:{}", fname));
+        }
+    }
+
+    for (val, (count, examples)) in &counts {
+        eprintln!(
+            "max_instances={}: {} files  (e.g. {})",
+            val,
+            count,
+            examples.join(", ")
+        );
+    }
+}

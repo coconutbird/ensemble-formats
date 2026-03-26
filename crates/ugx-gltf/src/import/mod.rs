@@ -71,6 +71,17 @@ pub fn import_from_gltf(
         (Vec::new(), Vec::new())
     };
 
+    // Read geom-level extras from the default scene (if present).
+    let scene_extras_json: Option<serde_json::Value> = root
+        .scenes
+        .first()
+        .and_then(|s| s.extras.as_ref())
+        .and_then(|raw| serde_json::from_str(raw.get()).ok());
+    let extras_max_instances: Option<i16> = scene_extras_json
+        .as_ref()
+        .and_then(|v| v.get("ugx_max_instances").and_then(|n| n.as_i64()))
+        .map(|i| i as i16);
+
     // Import materials
     let materials = if options.include_materials {
         import_materials(&root)
@@ -97,6 +108,23 @@ pub fn import_from_gltf(
             .unwrap_or_else(|| format!("mesh_{}", mesh_idx));
         let mesh_start_vertex = all_vertices.len();
         let mesh_start_section = sections.len();
+
+        // Read section flags from mesh extras if present (written by our exporter).
+        // None means third-party glTF (Blender etc.) → fall back to heuristic.
+        let mesh_extras_json: Option<serde_json::Value> = mesh
+            .extras
+            .as_ref()
+            .and_then(|raw| serde_json::from_str(raw.get()).ok());
+        let extras_global_bones: Option<bool> = mesh_extras_json
+            .as_ref()
+            .and_then(|v| v.get("ugx_global_bones").and_then(|b| b.as_bool()));
+        let extras_rigid_only: Option<bool> = mesh_extras_json
+            .as_ref()
+            .and_then(|v| v.get("ugx_rigid_only").and_then(|b| b.as_bool()));
+        let extras_rigid_bone_index: Option<i32> = mesh_extras_json
+            .as_ref()
+            .and_then(|v| v.get("ugx_rigid_bone_index").and_then(|b| b.as_i64()))
+            .map(|i| i as i32);
 
         for primitive in &mesh.primitives {
             let (vertices, indices, material_index) =
@@ -138,15 +166,47 @@ pub fn import_from_gltf(
                 has_colors,
             );
 
-            // Detect whether this primitive's vertices form a global_bones section
-            // (all vertices bound to the same single bone — originally zero-weight).
-            let (is_global_bones, global_bone_idx, actual_max_bones) =
-                detect_global_bones(&vertices, has_skin);
+            // Determine global_bones / rigid_only: use extras if present,
+            // otherwise fall back to heuristic for third-party glTFs.
+            let (is_global_bones, is_rigid_only, global_bone_idx, actual_max_bones) =
+                if let Some(gb) = extras_global_bones {
+                    let ro = extras_rigid_only.unwrap_or(false);
+                    if gb || ro {
+                        // Explicitly rigid — use extras rigid_bone_index if present,
+                        // otherwise find the common bone from vertex data.
+                        let bone_idx = extras_rigid_bone_index.unwrap_or_else(|| {
+                            vertices
+                                .iter()
+                                .find(|v| v.bone_weights[0] > 0.0)
+                                .map(|v| (v.bone_indices[0] as i32) - 1)
+                                .unwrap_or(0)
+                        });
+                        (gb, ro, bone_idx, 1)
+                    } else {
+                        // Explicitly NOT global_bones/rigid — compute max influences.
+                        let max_inf = if has_skin {
+                            vertices
+                                .iter()
+                                .map(|v| v.bone_weights.iter().filter(|&&w| w > 0.0).count() as i32)
+                                .max()
+                                .unwrap_or(1)
+                                .max(1)
+                        } else {
+                            1
+                        };
+                        (false, false, i32::MAX, max_inf)
+                    }
+                } else {
+                    // No extras — third-party glTF, use heuristic.
+                    let (gb, idx, mb) = detect_global_bones(&vertices, has_skin);
+                    (gb, false, idx, mb)
+                };
 
-            // For global_bones sections, restore zero weights and use simpler pack order
-            let (final_packer, final_vertices) = if is_global_bones {
-                // Rebuild packer without skin data
-                let global_packer = build_packer(
+            // For global_bones or rigid_only sections, strip skin data and
+            // restore zero weights (the original buffer had no skin element).
+            let strip_skin = is_global_bones || is_rigid_only;
+            let (final_packer, final_vertices) = if strip_skin {
+                let rigid_packer = build_packer(
                     options.version,
                     max_texcoords,
                     has_tangents,
@@ -154,7 +214,6 @@ pub fn import_from_gltf(
                     has_colors,
                 );
 
-                // Restore zero weights for global_bones vertices
                 let restored_vertices: Vec<UnpackedVertex> = vertices
                     .iter()
                     .map(|v| {
@@ -165,7 +224,7 @@ pub fn import_from_gltf(
                     })
                     .collect();
 
-                (global_packer, restored_vertices)
+                (rigid_packer, restored_vertices)
             } else {
                 (packer, vertices)
             };
@@ -203,9 +262,7 @@ pub fn import_from_gltf(
                 num_verts: final_vertices.len() as i32,
                 base_vert_packer,
                 bone_remap: Vec::new(),
-                // rigid_only is always false from glTF import
-                // global_bones is true for sections where all vertices use same bone
-                rigid_only: false,
+                rigid_only: is_rigid_only,
                 global_bones: is_global_bones,
             });
 
@@ -284,7 +341,7 @@ pub fn import_from_gltf(
         index_buffer: all_index_buffer,
         rigid_only: all_rigid,
         rigid_bone_index: 0,
-        max_instances: 1,
+        max_instances: extras_max_instances.unwrap_or(1),
         instance_index_multiplier,
         large_geom_bone_index: i16::MAX,
         all_sections_rigid: all_rigid,
@@ -460,13 +517,13 @@ fn build_packer(
             }
 
             for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
-                *uv_type = VertexElementType::Float2;
+                *uv_type = VertexElementType::HalfFloat2;
             }
 
             UnivertPacker {
                 pack_order,
                 decl_order: String::new(),
-                pos_type: VertexElementType::Float3,
+                pos_type: VertexElementType::HalfFloat4,
                 basis_type: VertexElementType::Float3,
                 basis_scale_type: VertexElementType::Ignore,
                 tangent_type: VertexElementType::Float3,
