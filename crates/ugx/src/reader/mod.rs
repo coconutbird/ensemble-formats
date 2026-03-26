@@ -111,13 +111,14 @@ use alloc::vec::Vec;
 use zerocopy::Ref;
 
 use crate::bytes::read_u16_le;
-use crate::chunk_ids::*;
+use crate::constants::*;
 use crate::error::{Error, Result};
 use crate::raw::GeomHeaderRaw;
 use crate::types::*;
 
+use crate::types::UgxVersion;
 use cached_data::{
-    UgxVersion, read_bone_bounds, read_packed_accessories, read_packed_bones, read_packed_sections,
+    read_bone_bounds, read_packed_accessories, read_packed_bones, read_packed_sections,
     read_valid_accessory_indices,
 };
 use granny::{parse_granny_bones, parse_granny_meshes};
@@ -232,10 +233,10 @@ impl UgxGeom {
         };
 
         let accessories = read_packed_accessories(data, pos)?;
-        let valid_accessories = match version {
-            UgxVersion::Hw1 => read_packed_accessories(data, pos)?,
-            UgxVersion::Hw2 => read_valid_accessory_indices(data, pos, &accessories)?,
-        };
+        // IDA: BUGXGeomData::readCachedData uses BPackedArray_Simple__unpack for
+        // validAccessories (v6+28) in BOTH HW1 and HW2 — they are i32 indices into
+        // the accessories array, not full 24-byte AccessoryRaw structs.
+        let valid_accessories = read_valid_accessory_indices(data, pos, &accessories)?;
 
         let bone_bounds = read_bone_bounds(data, pos)?;
 
@@ -438,7 +439,7 @@ mod tests {
                             cached[next_base + 14],
                             cached[next_base + 15],
                         ]);
-                        if next_offset > offset && next_offset != 0xFFFFFFFFFFFFFFFF {
+                        if next_offset > offset && next_offset != EMPTY_OFFSET_SENTINEL {
                             let span = next_offset - offset;
                             eprintln!(
                                 "    -> span to next: {} bytes, per-element: {}",

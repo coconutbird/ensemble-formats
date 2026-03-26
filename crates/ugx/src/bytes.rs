@@ -76,6 +76,36 @@ pub(crate) fn read_f32_le(data: &[u8], pos: &mut usize) -> Result<f32> {
     Ok(f32::from_bits(read_u32_le(data, pos)?))
 }
 
+// ---------------------------------------------------------------------------
+// Big-endian readers (for big-endian AABB tree streams)
+// ---------------------------------------------------------------------------
+
+/// Read a big-endian `u32` from `data` at `*pos`, advancing `*pos` by 4.
+#[inline]
+pub(crate) fn read_u32_be(data: &[u8], pos: &mut usize) -> Result<u32> {
+    let end = *pos + 4;
+    if end > data.len() {
+        return Err(Error::UnexpectedEof {
+            context: String::from("u32"),
+        });
+    }
+    let v = u32::from_be_bytes(data[*pos..end].try_into().unwrap());
+    *pos = end;
+    Ok(v)
+}
+
+/// Read a big-endian `i32` from `data` at `*pos`, advancing `*pos` by 4.
+#[inline]
+pub(crate) fn read_i32_be(data: &[u8], pos: &mut usize) -> Result<i32> {
+    Ok(read_u32_be(data, pos)? as i32)
+}
+
+/// Read a big-endian `f32` from `data` at `*pos`, advancing `*pos` by 4.
+#[inline]
+pub(crate) fn read_f32_be(data: &[u8], pos: &mut usize) -> Result<f32> {
+    Ok(f32::from_bits(read_u32_be(data, pos)?))
+}
+
 /// Read a null-terminated string from `data`.
 ///
 /// Returns the string up to (but not including) the first NUL byte,

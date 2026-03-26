@@ -26,7 +26,7 @@ extern crate alloc;
 extern crate std;
 
 mod bytes;
-mod chunk_ids;
+mod constants;
 mod error;
 pub mod math;
 mod raw;

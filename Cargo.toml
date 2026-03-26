@@ -20,6 +20,7 @@ members = [
     "crates/pkg-cli",
     "crates/bdt-serde",
     "crates/xmb-serde",
+    "crates/test-utils",
 ]
 
 [workspace.package]
@@ -42,6 +43,7 @@ xmb = { path = "crates/xmb" }
 xmb-serde = { path = "crates/xmb-serde" }
 ugx = { path = "crates/ugx" }
 ugx-gltf = { path = "crates/ugx-gltf" }
+test-utils = { path = "crates/test-utils" }
 xtd = { path = "crates/xtd" }
 xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }

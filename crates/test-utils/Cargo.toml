@@ -1,0 +1,12 @@
+[package]
+name = "test-utils"
+description = "Shared test infrastructure for ensemble-formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+era = { workspace = true }
+dotenvy = { workspace = true }

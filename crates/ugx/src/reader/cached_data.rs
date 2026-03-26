@@ -11,20 +11,12 @@ use zerocopy::Ref;
 use crate::bytes::{
     read_f32_le, read_i32_le, read_null_terminated_string, read_u32_le, read_u64_le,
 };
+use crate::constants::{EMPTY_OFFSET_SENTINEL, EMPTY_OFFSET_SENTINEL_32};
 use crate::error::{Error, Result};
 use crate::raw::{AccessoryRaw, PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
-use crate::types::{AABB, Accessory, Bone, Matrix4x4, Section};
+use crate::types::{AABB, Accessory, Bone, Matrix4x4, Section, UgxVersion};
 use crate::vertex::element::VertexElementType;
 use crate::vertex::packer::UnivertPacker;
-
-/// UGX format version, derived from the geometry header signature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum UgxVersion {
-    /// Halo Wars: Definitive Edition (signature 0xC2340004).
-    Hw1,
-    /// Halo Wars 2 (signature 0xC2340006).
-    Hw2,
-}
 
 /// Read packed sections array from cached data.
 ///
@@ -88,7 +80,7 @@ fn read_packed_section_de(data: &[u8], pos: &mut usize) -> Result<Section> {
     *pos += core::mem::size_of::<PackedArrayRaw>();
 
     let bone_remap = if bone_remap_count > 0
-        && bone_remap_offset != 0xFFFFFFFFFFFFFFFF
+        && bone_remap_offset != EMPTY_OFFSET_SENTINEL as usize
         && bone_remap_offset + bone_remap_count <= data.len()
     {
         data[bone_remap_offset..bone_remap_offset + bone_remap_count].to_vec()
@@ -160,7 +152,7 @@ fn read_packed_section_hw2(data: &[u8], pos: &mut usize) -> Result<Section> {
     *pos += core::mem::size_of::<PackedArrayRaw>();
 
     let bone_remap = if bone_remap_count > 0
-        && bone_remap_offset != 0xFFFFFFFFFFFFFFFF
+        && bone_remap_offset != EMPTY_OFFSET_SENTINEL as usize
         && bone_remap_offset + bone_remap_count <= data.len()
     {
         data[bone_remap_offset..bone_remap_offset + bone_remap_count].to_vec()
@@ -191,17 +183,19 @@ fn read_packed_univert_packer(data: &[u8], pos: &mut usize) -> Result<UnivertPac
     let pack_order_offset = read_u64_le(data, pos)? as usize;
     let decl_order_offset = read_u64_le(data, pos)? as usize;
 
-    let pack_order = if pack_order_offset == 0xFFFFFFFFFFFFFFFF || pack_order_offset >= data.len() {
-        String::new()
-    } else {
-        read_null_terminated_string(&data[pack_order_offset..])?
-    };
+    let pack_order =
+        if pack_order_offset == EMPTY_OFFSET_SENTINEL as usize || pack_order_offset >= data.len() {
+            String::new()
+        } else {
+            read_null_terminated_string(&data[pack_order_offset..])?
+        };
 
-    let decl_order = if decl_order_offset == 0xFFFFFFFFFFFFFFFF || decl_order_offset >= data.len() {
-        String::new()
-    } else {
-        read_null_terminated_string(&data[decl_order_offset..])?
-    };
+    let decl_order =
+        if decl_order_offset == EMPTY_OFFSET_SENTINEL as usize || decl_order_offset >= data.len() {
+            String::new()
+        } else {
+            read_null_terminated_string(&data[decl_order_offset..])?
+        };
 
     let pos_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
     let basis_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
@@ -268,7 +262,7 @@ fn read_packed_bone(data: &[u8], pos: &mut usize) -> Result<Bone> {
     *pos += core::mem::size_of::<PackedBoneRaw>();
 
     let name_offset = u64::from_le_bytes(raw.name_offset) as usize;
-    let name = if name_offset == 0xFFFFFFFFFFFFFFFF || name_offset >= data.len() {
+    let name = if name_offset == EMPTY_OFFSET_SENTINEL as usize || name_offset >= data.len() {
         String::new()
     } else {
         read_null_terminated_string(&data[name_offset..])?
@@ -359,7 +353,10 @@ pub(super) fn read_packed_accessories(data: &[u8], pos: &mut usize) -> Result<Ve
     let offset = u64::from_le_bytes(arr.offset) as usize;
     *pos += core::mem::size_of::<PackedArrayRaw>();
 
-    if count == 0 || offset == 0xFFFFFFFF || offset == 0xFFFFFFFFFFFFFFFF {
+    if count == 0
+        || offset == EMPTY_OFFSET_SENTINEL_32 as usize
+        || offset == EMPTY_OFFSET_SENTINEL as usize
+    {
         return Ok(Vec::new());
     }
 
@@ -380,8 +377,8 @@ pub(super) fn read_packed_accessories(data: &[u8], pos: &mut usize) -> Result<Ve
         let inner_offset = u64::from_le_bytes(raw.object_indices.offset) as usize;
 
         let object_indices = if inner_count > 0
-            && inner_offset != 0xFFFFFFFF
-            && inner_offset != 0xFFFFFFFFFFFFFFFF
+            && inner_offset != EMPTY_OFFSET_SENTINEL_32 as usize
+            && inner_offset != EMPTY_OFFSET_SENTINEL as usize
             && inner_offset + inner_count * 4 <= data.len()
         {
             let mut indices = Vec::with_capacity(inner_count);
@@ -424,7 +421,10 @@ pub(super) fn read_valid_accessory_indices(
     let offset = u64::from_le_bytes(arr.offset) as usize;
     *pos += core::mem::size_of::<PackedArrayRaw>();
 
-    if count == 0 || offset == 0xFFFFFFFF || offset == 0xFFFFFFFFFFFFFFFF {
+    if count == 0
+        || offset == EMPTY_OFFSET_SENTINEL_32 as usize
+        || offset == EMPTY_OFFSET_SENTINEL as usize
+    {
         return Ok(Vec::new());
     }
 

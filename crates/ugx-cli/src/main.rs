@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use ecf::Reader as EcfReader;
 use std::fs;
 use std::path::PathBuf;
-use ugx::{Reader as UgxReader, Writer as UgxWriter};
+use ugx::{Reader as UgxReader, UgxVersion, Writer as UgxWriter};
 use ugx_gltf::{
     GltfExportOptions, GltfImportOptions, export_to_gltf_with_buffer_name, import_from_gltf,
 };
@@ -52,6 +52,9 @@ enum Commands {
         /// Exclude skeleton/bones from the import
         #[arg(long)]
         no_skeleton: bool,
+        /// Target game version: "hw1" for Halo Wars DE (v4) or "hw2" for Halo Wars 2 (v6)
+        #[arg(long, default_value = "hw2")]
+        version: String,
     },
     /// Dump ECF structure for debugging
     Dump {
@@ -76,7 +79,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             input,
             output,
             no_skeleton,
-        } => cmd_from_gltf(&input, &output, no_skeleton)?,
+            version,
+        } => {
+            let ugx_version = match version.to_lowercase().as_str() {
+                "hw1" | "de" | "v4" => UgxVersion::Hw1,
+                "hw2" | "v6" => UgxVersion::Hw2,
+                other => {
+                    eprintln!("Unknown version '{}', expected 'hw1' or 'hw2'", other);
+                    std::process::exit(1);
+                }
+            };
+            cmd_from_gltf(&input, &output, no_skeleton, ugx_version)?
+        }
         Commands::Dump { input } => cmd_dump(&input)?,
     }
 
@@ -342,6 +356,7 @@ fn cmd_from_gltf(
     input: &PathBuf,
     output: &PathBuf,
     no_skeleton: bool,
+    version: UgxVersion,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check if input is GLB or glTF based on extension
     let is_glb = input
@@ -396,12 +411,13 @@ fn cmd_from_gltf(
     let options = GltfImportOptions {
         include_skeleton: !no_skeleton,
         include_materials: true,
+        version,
     };
 
     let geom = import_from_gltf(&json_str, buffer_data.as_deref(), &options)?;
 
     // Write UGX
-    let ugx_data = UgxWriter::write(&geom)?;
+    let ugx_data = UgxWriter::write(&geom, version)?;
     fs::write(output, &ugx_data)?;
 
     println!("Wrote {}", output.display());

@@ -85,10 +85,14 @@ const NON_PBR_MAP_TYPES: &[MapType] = &[
 fn build_material_extras(mat: &Material) -> json::Extras {
     let mut extras = serde_json::Map::new();
 
-    // Always store flags (even if 0, for roundtrip fidelity)
+    // Always store flags and blend_type (even if 0, for roundtrip fidelity)
     extras.insert(
         "ugx_flags".into(),
         serde_json::Value::Number(mat.flags.into()),
+    );
+    extras.insert(
+        "ugx_blend_type".into(),
+        serde_json::Value::Number(mat.blend_type.into()),
     );
 
     // Store UVW velocity arrays that have non-zero values

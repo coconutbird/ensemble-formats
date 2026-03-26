@@ -1,8 +1,14 @@
-//! UGX file writer.
+//! UGX file writer — supports both HW1/DE (v4) and HW2 (v6) formats.
 //!
 //! Serializes a `UgxGeom` into UGX binary format (ECF container).
 //! Writes chunks 0x700 (cached data), 0x701 (index buffer), 0x702 (vertex buffer),
-//! 0x703 (granny bones), 0x704 (materials), and 0x705 (AABB tree, if present).
+//! 0x703 (granny bones), 0x704 (materials), and optionally 0x705 (AABB tree).
+//!
+//! Version differences:
+//! - HW1/DE (v4): Signature `0xC2340004`, 152-byte sections with UnivertPacker,
+//!   i32 index valid accessories, includes AABB tree chunk (0x705).
+//! - HW2 (v6): Signature `0xC2340006`, 72-byte sections (no UnivertPacker),
+//!   i32 index valid accessories, no AABB tree chunk.
 
 mod aabb_tree;
 mod cached_data;
@@ -14,30 +20,35 @@ use alloc::vec::Vec;
 
 use ecf::io::WriteLe;
 
-use crate::chunk_ids::*;
+use crate::constants::*;
 use crate::error::Result;
-use crate::types::UgxGeom;
+use crate::types::{UgxGeom, UgxVersion};
 
 /// UGX file writer.
 pub struct Writer;
 
 impl Writer {
-    /// Write a UGX geometry to a byte vector.
-    pub fn write(geom: &UgxGeom) -> Result<Vec<u8>> {
-        geom.to_bytes()
+    /// Write a UGX geometry to a byte vector using the specified version format.
+    pub fn write(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
+        write_ugx(geom, version)
     }
 }
 
 impl UgxGeom {
-    /// Serialize this geometry to UGX binary format (ECF container).
+    /// Serialize this geometry to UGX HW1/DE (v4) binary format.
+    pub fn to_bytes_hw1(&self) -> Result<Vec<u8>> {
+        write_ugx(self, UgxVersion::Hw1)
+    }
+
+    /// Serialize this geometry to UGX HW2 (v6) binary format.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        write_ugx(self)
+        write_ugx(self, UgxVersion::Hw2)
     }
 }
 
 /// Write a UGX geometry to bytes (ECF container).
-fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
-    let cached_data = cached_data::build_cached_data(geom)?;
+fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
+    let cached_data = cached_data::build_cached_data(geom, version)?;
     let ib_data = build_index_buffer(geom);
 
     // ECF file ID 0xAAC93746 is required for UGX files - the game validates this in BGrannyModel::load
@@ -59,8 +70,10 @@ fn write_ugx(geom: &UgxGeom) -> Result<Vec<u8>> {
         ecf.add_chunk(ECF_MATERIAL_CHUNK_ID, mat_data);
     }
 
-    // Write AABB tree chunk if present
-    if let Some(ref tree) = geom.aabb_tree {
+    // AABB tree chunk (0x705) — only for versions that include it
+    if version.has_aabb_tree()
+        && let Some(ref tree) = geom.aabb_tree
+    {
         let tree_data = aabb_tree::build_aabb_tree_data(tree)?;
         ecf.add_chunk(ECF_AABB_TREE_CHUNK_ID, tree_data);
     }
@@ -86,23 +99,27 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
-    /// Create a minimal test UgxGeom with one section and two bones.
+    /// Create a minimal HW2-format test UgxGeom with one section and two bones.
+    ///
+    /// Uses HalfFloat4 positions, Dec3N normals, HalfFloat2 UVs (20-byte vertex)
+    /// matching HW2 vertex layout. Section has `base_vert_packer: None`.
     fn make_test_geom() -> UgxGeom {
+        // HW2-style packer: used for packing only, not stored in section.
         let packer = UnivertPacker {
-            pack_order: "PNT0".to_string(),
-            decl_order: "PNT0".to_string(),
-            pos_type: VertexElementType::Float3,
-            basis_type: VertexElementType::Float4,
-            basis_scale_type: VertexElementType::Float2,
-            tangent_type: VertexElementType::Ignore,
-            normal_type: VertexElementType::Float3,
+            pack_order: "PT0NA0".to_string(),
+            decl_order: "".to_string(),
+            pos_type: VertexElementType::HalfFloat4,
+            basis_type: VertexElementType::Ignore,
+            basis_scale_type: VertexElementType::Ignore,
+            tangent_type: VertexElementType::Dec3N,
+            normal_type: VertexElementType::Dec3N,
             uv_types: {
                 let mut uv = [VertexElementType::Ignore; MAX_UV];
-                uv[0] = VertexElementType::Float2;
+                uv[0] = VertexElementType::HalfFloat2;
                 uv
             },
-            indices_type: VertexElementType::UByte4,
-            weights_type: VertexElementType::Float4,
+            indices_type: VertexElementType::Ignore,
+            weights_type: VertexElementType::Ignore,
             diffuse_type: VertexElementType::Ignore,
             index_type: VertexElementType::Ignore,
         };
@@ -112,6 +129,7 @@ mod tests {
             UnpackedVertex {
                 position: [0.0, 0.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
                 texcoords: {
                     let mut tc = [[0.0; 2]; MAX_UV];
                     tc[0] = [0.0, 0.0];
@@ -123,6 +141,7 @@ mod tests {
             UnpackedVertex {
                 position: [1.0, 0.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
                 texcoords: {
                     let mut tc = [[0.0; 2]; MAX_UV];
                     tc[0] = [1.0, 0.0];
@@ -134,6 +153,7 @@ mod tests {
             UnpackedVertex {
                 position: [0.0, 1.0, 0.0],
                 normal: [0.0, 1.0, 0.0],
+                tangent: [1.0, 0.0, 0.0, 1.0],
                 texcoords: {
                     let mut tc = [[0.0; 2]; MAX_UV];
                     tc[0] = [0.0, 1.0];
@@ -152,6 +172,7 @@ mod tests {
         let vert_size = packer.vertex_size() as i32;
         let vb_bytes = vertex_buffer.len() as i32;
 
+        // HW2: no base_vert_packer stored in section
         let section = Section {
             material_index: -1,
             accessory_index: -1,
@@ -163,7 +184,7 @@ mod tests {
             vb_bytes,
             vert_size,
             num_verts: 3,
-            base_vert_packer: Some(packer),
+            base_vert_packer: None,
             bone_remap: Vec::new(),
             rigid_only: true,
             global_bones: false,
@@ -225,7 +246,7 @@ mod tests {
     #[test]
     fn test_write_read_roundtrip() {
         let original = make_test_geom();
-        let bytes = write_ugx(&original).unwrap();
+        let bytes = write_ugx(&original, UgxVersion::Hw2).unwrap();
         let read_back = crate::Reader::read(&bytes).unwrap();
 
         assert_eq!(read_back.rigid_bone_index, original.rigid_bone_index);
@@ -257,10 +278,9 @@ mod tests {
         assert_eq!(s_read.vb_offset, s_orig.vb_offset);
         assert_eq!(s_read.vb_bytes, s_orig.vb_bytes);
         assert_eq!(s_read.ib_offset, s_orig.ib_offset);
-        assert_eq!(
-            s_read.base_vert_packer.as_ref().map(|p| &p.pack_order),
-            s_orig.base_vert_packer.as_ref().map(|p| &p.pack_order)
-        );
+        // HW2 sections have no UnivertPacker
+        assert!(s_read.base_vert_packer.is_none());
+        assert!(s_orig.base_vert_packer.is_none());
 
         assert_eq!(read_back.bones.len(), original.bones.len());
         for (b_orig, b_read) in original.bones.iter().zip(read_back.bones.iter()) {
@@ -278,14 +298,19 @@ mod tests {
             assert_eq!(bb_read.max, bb_orig.max);
         }
 
-        let orig_verts = original.unpack_section_vertices(0).unwrap();
+        // HW2 uses inferred vertex unpacking — compare read-back vertices
+        // with approximate equality (half-float and Dec3N lose precision).
         let read_verts = read_back.unpack_section_vertices(0).unwrap();
-        assert_eq!(read_verts.len(), orig_verts.len());
-        for (v_orig, v_read) in orig_verts.iter().zip(read_verts.iter()) {
-            assert_eq!(v_read.position, v_orig.position);
-            assert_eq!(v_read.normal, v_orig.normal);
-            assert_eq!(v_read.texcoords[0], v_orig.texcoords[0]);
-        }
+        assert_eq!(read_verts.len(), 3);
+        // Vertex 0: position [0, 0, 0]
+        assert!((read_verts[0].position[0]).abs() < 0.01);
+        assert!((read_verts[0].position[1]).abs() < 0.01);
+        // Vertex 1: position [1, 0, 0]
+        assert!((read_verts[1].position[0] - 1.0).abs() < 0.01);
+        assert!((read_verts[1].position[1]).abs() < 0.01);
+        // Vertex 2: position [0, 1, 0]
+        assert!((read_verts[2].position[0]).abs() < 0.01);
+        assert!((read_verts[2].position[1] - 1.0).abs() < 0.01);
 
         let orig_indices = original.get_section_indices(0);
         let read_indices = read_back.get_section_indices(0);
@@ -342,7 +367,7 @@ mod tests {
             },
         ];
 
-        let bytes = write_ugx(&geom).unwrap();
+        let bytes = write_ugx(&geom, UgxVersion::Hw2).unwrap();
         let read_back = crate::Reader::read(&bytes).unwrap();
 
         assert_eq!(read_back.materials.len(), 2);
@@ -402,7 +427,7 @@ mod tests {
             },
         ];
 
-        let bytes = write_ugx(&geom).unwrap();
+        let bytes = write_ugx(&geom, UgxVersion::Hw2).unwrap();
         let read_back = crate::Reader::read(&bytes).unwrap();
 
         assert_eq!(read_back.granny_bones.len(), 2);

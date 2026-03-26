@@ -73,18 +73,21 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 }
             }
 
-            // Alpha mode → blend_type
-            let blend_type = if let gltf_json::validation::Checked::Valid(
-                gltf_json::material::AlphaMode::Blend,
-            ) = mat.alpha_mode
-            {
-                1
-            } else {
-                0
-            };
+            // Read UGX extras (flags, blend_type, uvw_velocity, non-PBR maps)
+            let (flags, extras_blend_type, uvw_velocity, extra_maps) =
+                read_material_extras(&mat.extras, &maps);
 
-            // Read UGX extras (flags, uvw_velocity, non-PBR maps)
-            let (flags, uvw_velocity, extra_maps) = read_material_extras(&mat.extras, &maps);
+            // Use blend_type from extras if present, otherwise infer from alpha mode
+            let blend_type = extras_blend_type.unwrap_or({
+                if let gltf_json::validation::Checked::Valid(
+                    gltf_json::material::AlphaMode::Blend,
+                ) = mat.alpha_mode
+                {
+                    1
+                } else {
+                    0
+                }
+            });
 
             // Merge extra maps into the maps array
             let mut final_maps = maps;
@@ -107,35 +110,47 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
 
 /// Read UGX material extras from glTF extras JSON.
 ///
-/// Returns (flags, uvw_velocity, extra_maps) where extra_maps is a vec of
-/// (map_type_index, Vec<Map>) for non-PBR map types.
+/// Returns (flags, blend_type, uvw_velocity, extra_maps) where extra_maps is a vec of
+/// (map_type_index, Vec<Map>) for non-PBR map types. blend_type is None if not
+/// present in extras (caller should fall back to alpha_mode heuristic).
 #[allow(clippy::type_complexity)]
 fn read_material_extras(
     extras: &gltf_json::Extras,
     _existing_maps: &[Vec<Map>; MapType::NUM_TYPES],
-) -> (u32, [[f32; 3]; MapType::NUM_TYPES], Vec<(usize, Vec<Map>)>) {
+) -> (
+    u32,
+    Option<u8>,
+    [[f32; 3]; MapType::NUM_TYPES],
+    Vec<(usize, Vec<Map>)>,
+) {
     let mut flags = 0u32;
+    let mut blend_type: Option<u8> = None;
     let mut uvw_velocity = [[0.0f32; 3]; MapType::NUM_TYPES];
     let mut extra_maps: Vec<(usize, Vec<Map>)> = Vec::new();
 
     let raw = match extras {
         Some(raw_value) => raw_value,
-        None => return (flags, uvw_velocity, extra_maps),
+        None => return (flags, blend_type, uvw_velocity, extra_maps),
     };
 
     let parsed: serde_json::Value = match serde_json::from_str(raw.get()) {
         Ok(v) => v,
-        Err(_) => return (flags, uvw_velocity, extra_maps),
+        Err(_) => return (flags, blend_type, uvw_velocity, extra_maps),
     };
 
     let obj = match parsed.as_object() {
         Some(o) => o,
-        None => return (flags, uvw_velocity, extra_maps),
+        None => return (flags, blend_type, uvw_velocity, extra_maps),
     };
 
     // Read flags
     if let Some(v) = obj.get("ugx_flags") {
         flags = v.as_u64().unwrap_or(0) as u32;
+    }
+
+    // Read blend_type
+    if let Some(v) = obj.get("ugx_blend_type") {
+        blend_type = Some(v.as_u64().unwrap_or(0) as u8);
     }
 
     // Read UVW velocity
@@ -183,5 +198,5 @@ fn read_material_extras(
         }
     }
 
-    (flags, uvw_velocity, extra_maps)
+    (flags, blend_type, uvw_velocity, extra_maps)
 }

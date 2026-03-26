@@ -14,8 +14,8 @@ mod primitive;
 mod skeleton;
 
 use ugx::{
-    Error, GrannyBone, GrannyMesh, MAX_UV, Result, Section, UgxGeom, UnivertPacker, UnpackedVertex,
-    VertexElementType,
+    Error, GrannyBone, GrannyMesh, MAX_UV, Result, Section, UgxGeom, UgxVersion, UnivertPacker,
+    UnpackedVertex, VertexElementType,
 };
 
 use accessor::resolve_buffer;
@@ -31,6 +31,13 @@ pub struct GltfImportOptions {
     pub include_skeleton: bool,
     /// Import materials if present (default: true).
     pub include_materials: bool,
+    /// Target UGX version (default: HW2).
+    ///
+    /// - `Hw1`: Float3 positions, Float3 normals/tangents, PNA0ST0 byte order,
+    ///   embedded `base_vert_packer` in sections.
+    /// - `Hw2`: HalfFloat4 positions, Dec3N normals/tangents, PT0NA0S byte order,
+    ///   `base_vert_packer: None`.
+    pub version: UgxVersion,
 }
 
 impl Default for GltfImportOptions {
@@ -38,6 +45,7 @@ impl Default for GltfImportOptions {
         Self {
             include_skeleton: true,
             include_materials: true,
+            version: UgxVersion::Hw2,
         }
     }
 }
@@ -114,146 +122,37 @@ pub fn import_from_gltf(
             });
             let max_texcoords = vertices.iter().map(|v| v.num_texcoords).max().unwrap_or(0);
 
-            // Build pack order - game format: PNA0ST0 (skin before texcoords for skinned meshes)
-            // For rigid meshes: PNA0T0 (no skin data)
-            let mut pack_order = String::from("PN");
-            if has_tangents {
-                pack_order.push_str("A0");
-            }
-            // Skin data comes before texcoords in game format
-            if has_skin {
-                pack_order.push('S');
-            }
-            for i in 0..max_texcoords {
-                pack_order.push('T');
-                pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
-            }
-            if has_colors {
-                pack_order.push('D');
-            }
-
-            // Use compact vertex types matching game format
-            let mut uv_types = [VertexElementType::Ignore; MAX_UV];
-            for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
-                *uv_type = VertexElementType::HalfFloat2; // Game uses HalfFloat2 for UVs
-            }
-
-            // UnivertPacker with game-standard defaults for ALL fields.
-            // The game sets these defaults regardless of whether they're used in pack_order:
-            //   setPos(eHALFFLOAT4), setNorm(eDEC3N), setBasis(eDEC3N), setBasisScales(eHALFFLOAT2)
-            //   setTangent(eDEC3N), setIndices(eUBYTE4), setWeights(eUBYTE4N), setDiffuse(eD3DCOLOR)
-            //   setUV(eHALFFLOAT2)
-            // The actual marine_01.ugx uses Float3 for tangent/basis/normal instead of DEC3N.
-            // We match the original file values exactly.
-            let packer = UnivertPacker {
-                pack_order: pack_order.clone(),
-                decl_order: String::new(), // Original has empty decl_order
-                pos_type: VertexElementType::HalfFloat4,
-                basis_type: VertexElementType::Float3, // Game default, even if unused
-                basis_scale_type: VertexElementType::Float2,
-                tangent_type: VertexElementType::Float3, // Game default, even if unused
-                normal_type: VertexElementType::Float3,
-                uv_types,
-                indices_type: VertexElementType::UByte4, // Game default, even if unused
-                weights_type: VertexElementType::UByte4N, // Game default, even if unused
-                diffuse_type: VertexElementType::D3DColor, // Game default, even if unused
-                index_type: VertexElementType::Ignore,
-            };
-
-            // Analyze bone usage for this section
-            // Detect global_bones sections:
-            // If ALL vertices have weight[0]=1.0 and weights[1..3]=0.0 on the SAME bone,
-            // this was originally a global_bones=true section with zero weights.
-            // glTF export transforms zero-weight vertices to weight=1.0 on rigid bone.
+            // Build pack order and vertex types based on target version.
             //
-            // We detect this pattern and restore the original behavior:
-            // - global_bones=true
-            // - Zero weights on all vertices
-            // - Pack order without skin data (PNT0 instead of PNST0)
+            // HW1/DE (v4) — PNA0ST0 byte order, Float3 types:
+            //   Position(Float3) → Normal(Float3) → Tangent(Float3) → Skin → UV(Float2) → Color
             //
-            // NOTE: max_bones is the maximum number of bone influences on ANY SINGLE VERTEX,
-            // NOT the total unique bones in the section. This controls shader selection:
-            // - max_bones=1 → ONE_BONE_REG=true (single bone optimization)
-            // - max_bones=2 → neither flag set (2 bones)
-            // - max_bones>2 → FOUR_BONES_REG=true (4 bones)
-            let (is_global_bones, global_bone_idx, actual_max_bones) = if has_skin {
-                let mut all_single_bone = true;
-                let mut common_bone: Option<u16> = None;
-                let mut max_influences_per_vertex = 0i32;
+            // HW2 (v6) — PT0NA0S byte order, compact types:
+            //   Position(HalfFloat4) → UV(HalfFloat2) → Normal(Dec3N) →
+            //   Tangent(Dec3N) → Skin(UByte4+UByte4N) → Color
+            let packer = build_packer(
+                options.version,
+                max_texcoords,
+                has_tangents,
+                has_skin,
+                has_colors,
+            );
 
-                for v in &vertices {
-                    // Count how many non-zero weights this vertex has
-                    let mut num_influences = 0;
-                    for k in 0..4 {
-                        if v.bone_weights[k] > 0.0 {
-                            num_influences += 1;
-                        }
-                    }
-                    max_influences_per_vertex = max_influences_per_vertex.max(num_influences);
-
-                    // Check if this vertex has exactly weight[0]=1.0 and rest=0.0
-                    let is_single_bone_vertex = v.bone_weights[0] > 0.99
-                        && v.bone_weights[1] < 0.01
-                        && v.bone_weights[2] < 0.01
-                        && v.bone_weights[3] < 0.01;
-
-                    if is_single_bone_vertex {
-                        let bone = v.bone_indices[0];
-                        match common_bone {
-                            None => common_bone = Some(bone),
-                            Some(cb) if cb != bone => all_single_bone = false,
-                            _ => {}
-                        }
-                    } else {
-                        all_single_bone = false;
-                    }
-                }
-
-                let max_bones = max_influences_per_vertex.max(1);
-
-                // If all vertices use the same single bone, this is a global_bones section
-                if let Some(bone) = common_bone.filter(|_| all_single_bone) {
-                    // Convert 1-based bone index to 0-based for rigid_bone_index
-                    let bone_idx = (bone as i32) - 1;
-                    (true, bone_idx, 1)
-                } else {
-                    (false, i32::MAX, max_bones)
-                }
-            } else {
-                (false, i32::MAX, 1)
-            };
+            // Detect whether this primitive's vertices form a global_bones section
+            // (all vertices bound to the same single bone — originally zero-weight).
+            let (is_global_bones, global_bone_idx, actual_max_bones) =
+                detect_global_bones(&vertices, has_skin);
 
             // For global_bones sections, restore zero weights and use simpler pack order
             let (final_packer, final_vertices) = if is_global_bones {
-                // Rebuild packer without skin data for global_bones sections
-                let mut global_pack_order = String::from("PN");
-                if has_tangents {
-                    global_pack_order.push_str("A0");
-                }
-                for i in 0..max_texcoords {
-                    global_pack_order.push('T');
-                    global_pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
-                }
-                if has_colors {
-                    global_pack_order.push('D');
-                }
-
-                // Global bones packer - pack_order is PNT0 (no skin data), but we still
-                // set game-standard defaults for ALL fields to match original file
-                let global_packer = UnivertPacker {
-                    pack_order: global_pack_order,
-                    decl_order: String::new(), // Original has empty decl_order
-                    pos_type: VertexElementType::HalfFloat4,
-                    basis_type: VertexElementType::Float3, // Game default
-                    basis_scale_type: VertexElementType::Float2,
-                    tangent_type: VertexElementType::Float3, // Game default
-                    normal_type: VertexElementType::Float3,
-                    uv_types,
-                    indices_type: VertexElementType::UByte4, // Game default, even for PNT0
-                    weights_type: VertexElementType::UByte4N, // Game default, even for PNT0
-                    diffuse_type: VertexElementType::D3DColor, // Game default
-                    index_type: VertexElementType::Ignore,
-                };
+                // Rebuild packer without skin data
+                let global_packer = build_packer(
+                    options.version,
+                    max_texcoords,
+                    has_tangents,
+                    false, // no skin
+                    has_colors,
+                );
 
                 // Restore zero weights for global_bones vertices
                 let restored_vertices: Vec<UnpackedVertex> = vertices
@@ -284,6 +183,13 @@ pub fn import_from_gltf(
             all_index_buffer.extend_from_slice(&indices);
             let num_tris = (indices.len() / 3) as i32;
 
+            // For HW1/DE, embed the UnivertPacker in the section.
+            // For HW2, vertex format is inferred from vert_size — no packer stored.
+            let base_vert_packer = match options.version {
+                UgxVersion::Hw1 => Some(final_packer.clone()),
+                UgxVersion::Hw2 => None,
+            };
+
             sections.push(Section {
                 material_index,
                 accessory_index: 0, // Default accessory index (0 = none)
@@ -295,7 +201,7 @@ pub fn import_from_gltf(
                 vb_bytes,
                 vert_size,
                 num_verts: final_vertices.len() as i32,
-                base_vert_packer: Some(final_packer),
+                base_vert_packer,
                 bone_remap: Vec::new(),
                 // rigid_only is always false from glTF import
                 // global_bones is true for sections where all vertices use same bone
@@ -455,4 +361,159 @@ fn generate_granny_meshes_from_vertices(
     }
 
     granny_meshes
+}
+
+/// Detect whether a set of vertices forms a "global_bones" section.
+///
+/// A global_bones section is one where *all* vertices are bound to a single
+/// common bone with weight ≈ 1.0 (the pattern produced when the exporter
+/// converts zero-weight vertices to explicit single-bone weighting).
+///
+/// Returns `(is_global_bones, rigid_bone_index, max_bones_per_vertex)`.
+///
+/// `max_bones` is the maximum number of **non-zero** weight influences on any
+/// single vertex (controls shader selection: 1 → ONE_BONE_REG, >2 →
+/// FOUR_BONES_REG).
+fn detect_global_bones(vertices: &[UnpackedVertex], has_skin: bool) -> (bool, i32, i32) {
+    if !has_skin {
+        return (false, i32::MAX, 1);
+    }
+
+    let mut all_single_bone = true;
+    let mut common_bone: Option<u16> = None;
+    let mut max_influences = 0i32;
+
+    for v in vertices {
+        let mut num_influences = 0;
+        for k in 0..4 {
+            if v.bone_weights[k] > 0.0 {
+                num_influences += 1;
+            }
+        }
+        max_influences = max_influences.max(num_influences);
+
+        let is_single = v.bone_weights[0] > 0.99
+            && v.bone_weights[1] < 0.01
+            && v.bone_weights[2] < 0.01
+            && v.bone_weights[3] < 0.01;
+
+        if is_single {
+            let bone = v.bone_indices[0];
+            match common_bone {
+                None => common_bone = Some(bone),
+                Some(cb) if cb != bone => all_single_bone = false,
+                _ => {}
+            }
+        } else {
+            all_single_bone = false;
+        }
+    }
+
+    let max_bones = max_influences.max(1);
+
+    if let Some(bone) = common_bone.filter(|_| all_single_bone) {
+        // Convert 1-based bone index to 0-based for rigid_bone_index
+        (true, (bone as i32) - 1, 1)
+    } else {
+        (false, i32::MAX, max_bones)
+    }
+}
+
+/// Build a `UnivertPacker` for the target version.
+///
+/// HW1/DE (v4) — `PNA0ST0` byte order, Float3 types:
+///   Position(Float3, 12B) → Normal(Float3, 12B) → Tangent(Float3, 12B) →
+///   Skin(UByte4+UByte4N, 8B) → UV(Float2, 8B)
+///
+/// HW2 (v6) — `PT0NA0S` byte order, compact types:
+///   Position(HalfFloat4, 8B) → UV(HalfFloat2, 4B) → Normal(Dec3N, 4B) →
+///   Tangent(Dec3N, 4B) → Skin(UByte4+UByte4N, 8B)
+fn build_packer(
+    version: UgxVersion,
+    max_texcoords: usize,
+    has_tangents: bool,
+    has_skin: bool,
+    has_colors: bool,
+) -> UnivertPacker {
+    let mut uv_types = [VertexElementType::Ignore; MAX_UV];
+
+    match version {
+        UgxVersion::Hw1 => {
+            // HW1/DE pack order: P N A0 S T0 D (same order as marine_01.ugx)
+            let mut pack_order = String::from("P");
+            pack_order.push('N');
+            if has_tangents {
+                pack_order.push_str("A0");
+            }
+
+            if has_skin {
+                pack_order.push('S');
+            }
+
+            for i in 0..max_texcoords {
+                pack_order.push('T');
+                pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+            }
+
+            if has_colors {
+                pack_order.push('D');
+            }
+
+            for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
+                *uv_type = VertexElementType::Float2;
+            }
+
+            UnivertPacker {
+                pack_order,
+                decl_order: String::new(),
+                pos_type: VertexElementType::Float3,
+                basis_type: VertexElementType::Float3,
+                basis_scale_type: VertexElementType::Ignore,
+                tangent_type: VertexElementType::Float3,
+                normal_type: VertexElementType::Float3,
+                uv_types,
+                indices_type: VertexElementType::UByte4,
+                weights_type: VertexElementType::UByte4N,
+                diffuse_type: VertexElementType::D3DColor,
+                index_type: VertexElementType::Ignore,
+            }
+        }
+        UgxVersion::Hw2 => {
+            // HW2 pack order: P T0 N A0 S D
+            let mut pack_order = String::from("P");
+            for i in 0..max_texcoords {
+                pack_order.push('T');
+                pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+            }
+            pack_order.push('N');
+            if has_tangents {
+                pack_order.push_str("A0");
+            }
+            if has_skin {
+                pack_order.push('S');
+            }
+            if has_colors {
+                pack_order.push('D');
+            }
+
+            for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
+                *uv_type = VertexElementType::HalfFloat2;
+            }
+
+            UnivertPacker {
+                pack_order,
+                decl_order: String::new(),
+                pos_type: VertexElementType::HalfFloat4,
+                basis_type: VertexElementType::Dec3N,
+                basis_scale_type: VertexElementType::HalfFloat2,
+                tangent_type: VertexElementType::Dec3N,
+                normal_type: VertexElementType::Dec3N,
+                uv_types,
+                indices_type: VertexElementType::UByte4,
+                weights_type: VertexElementType::UByte4N,
+                diffuse_type: VertexElementType::D3DColor,
+                index_type: VertexElementType::Ignore,
+            }
+        }
+    }
 }

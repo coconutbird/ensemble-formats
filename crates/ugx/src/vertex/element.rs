@@ -243,12 +243,18 @@ impl VertexElementType {
             }
             Self::Dec3N => {
                 let packed = read_u32_le(data, pos)?;
-                Ok([
-                    sign_extend_10bit((packed & 0x3FF) as i32) as f32 / 511.0,
-                    sign_extend_10bit(((packed >> 10) & 0x3FF) as i32) as f32 / 511.0,
-                    sign_extend_10bit(((packed >> 20) & 0x3FF) as i32) as f32 / 511.0,
-                    1.0,
-                ])
+
+                // X:10, Y:10, Z:10 signed normalized, W:2 (handedness flag).
+                // No clamp — preserve raw value so unpack→repack is byte-identical.
+                // -512/511 = -1.00196; downstream (glTF export) normalizes as needed.
+                let x = sign_extend_10bit((packed & 0x3FF) as i32) as f32 / 511.0;
+                let y = sign_extend_10bit(((packed >> 10) & 0x3FF) as i32) as f32 / 511.0;
+                let z = sign_extend_10bit(((packed >> 20) & 0x3FF) as i32) as f32 / 511.0;
+
+                // Bits 30–31: handedness (00 = +1, 10 = -1)
+                let wbits = (packed >> 30) & 0x3;
+                let w = if wbits == 0b10 { -1.0 } else { 1.0 };
+                Ok([x, y, z, w])
             }
             Self::HalfFloat2 => {
                 let x = f16::from_bits(read_u16_le(data, pos)?).to_f32();
@@ -404,12 +410,17 @@ impl VertexElementType {
                 out.extend_from_slice(&packed.to_le_bytes());
             }
             Self::Dec3N => {
-                let x = (value[0].clamp(-1.0, 1.0) * 511.0).round() as i32;
-                let y = (value[1].clamp(-1.0, 1.0) * 511.0).round() as i32;
-                let z = (value[2].clamp(-1.0, 1.0) * 511.0).round() as i32;
+                // No float clamp — preserve -512 from raw data. Integer clamp
+                // to [-512, 511] is just a safety net for bad input.
+                let x = (value[0] * 511.0).round() as i32;
+                let y = (value[1] * 511.0).round() as i32;
+                let z = (value[2] * 511.0).round() as i32;
+                // Bits 30-31: W handedness flag. Negative → 0b10, positive → 0b00.
+                let w_bits: u32 = if value[3] < 0.0 { 0b10 } else { 0b00 };
                 let packed = ((x as u32) & 0x3FF)
                     | (((y as u32) & 0x3FF) << 10)
-                    | (((z as u32) & 0x3FF) << 20);
+                    | (((z as u32) & 0x3FF) << 20)
+                    | (w_bits << 30);
                 out.extend_from_slice(&packed.to_le_bytes());
             }
             Self::HalfFloat2 => {
@@ -636,6 +647,28 @@ mod tests {
             r[1]
         );
         assert!((r[2] - 1.0).abs() < 0.01, "z: expected ~1.0, got {}", r[2]);
+        assert_eq!(r[3], 1.0, "w: positive handedness should roundtrip");
+    }
+
+    #[test]
+    fn test_dec3n_negative_handedness() {
+        let v = [0.5, -0.5, 1.0, -1.0];
+        let r = roundtrip_pack_unpack(VertexElementType::Dec3N, v);
+        assert!((r[0] - 0.5).abs() < 0.01, "x: expected ~0.5, got {}", r[0]);
+        assert_eq!(r[3], -1.0, "w: negative handedness should roundtrip");
+    }
+
+    #[test]
+    fn test_dec3n_preserves_minus_512() {
+        // Manually pack with -512 in X component (raw 0x200 in bits 0-9)
+        let raw: u32 = 0x200; // X = -512, Y = 0, Z = 0, W = 0b00
+        let data = raw.to_le_bytes();
+        let mut pos = 0;
+        let r = VertexElementType::Dec3N.unpack(&data, &mut pos).unwrap();
+        // -512/511 = -1.00196 — preserved so unpack→repack is byte-identical
+        let expected = -512.0f32 / 511.0;
+        assert_eq!(r[0], expected, "x: -512/511 should be preserved");
+        assert_eq!(r[3], 1.0, "w: bits 30-31 = 0b00 → +1.0");
     }
 
     #[test]

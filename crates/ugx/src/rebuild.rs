@@ -20,14 +20,18 @@ impl UgxGeom {
     /// - Global bounding volumes (`bounds`, `bounding_sphere`)
     /// - Per-bone bounding boxes (`bone_bounds`)
     /// - Metadata flags (`rigid_only`, `all_sections_rigid`, etc.)
-    /// - Accessories and valid accessories
     /// - AABB tree (spatial acceleration structure)
+    /// - Accessories (must be built AFTER the tree — accessories are indexed
+    ///   by tree node index at runtime)
     pub fn rebuild_derived_data(&mut self) {
         self.rebuild_bounds();
         self.rebuild_bone_bounds();
         self.rebuild_metadata_flags();
-        self.rebuild_accessories();
-        self.rebuild_aabb_tree();
+        // Tree must be built first — the per-node section mapping it produces
+        // is consumed by rebuild_accessories to satisfy the engine invariant:
+        //   accessories[node_index].object_indices == sections for that node.
+        let node_section_map = self.rebuild_aabb_tree();
+        self.rebuild_accessories(node_section_map);
     }
 
     /// Recompute global `bounds` (AABB) and `bounding_sphere` from all vertices.
@@ -241,20 +245,53 @@ impl UgxGeom {
         self.large_geom_bone_index = i16::MAX;
     }
 
-    /// Rebuild accessories from section `accessory_index` fields.
+    /// Rebuild accessories from the AABB tree's per-node section mapping.
     ///
-    /// Each section stores an `accessory_index` that identifies which
-    /// accessory group it belongs to. We group sections by this index,
-    /// then compute the bone range (`first_bone`, `num_bones`) for each
-    /// group from the bones referenced by that group's sections.
+    /// `node_section_map[i]` contains the section indices that belong to
+    /// tree node `i`. The engine indexes into the accessories array by
+    /// tree node index at runtime (`accessories[node_index]`), so we must
+    /// produce exactly `tree.nodes.len()` entries.
     ///
-    /// For rigid sections (no skin data or `rigid_only`), the bone is
-    /// `rigid_bone_index`. For skinned sections, we scan vertex bone
-    /// indices using the same 1-based / remap logic as `rebuild_bone_bounds`.
+    /// For each node:
+    /// - Internal nodes (empty section list): `object_indices = []`
+    /// - Leaf nodes: `object_indices = [section indices]`
+    /// - `first_bone` / `num_bones`: computed from the bones referenced by
+    ///   the node's sections (union of all bone influences).
+    ///
+    /// If no tree was built (e.g. HW2, or no sections), falls back to
+    /// the legacy group-by-`accessory_index` strategy.
     ///
     /// `valid_accessories` is left empty — the original files contain
     /// uninitialized data in this field.
-    pub fn rebuild_accessories(&mut self) {
+    pub fn rebuild_accessories(&mut self, node_section_map: Vec<Vec<i32>>) {
+        let bone_count = self.bones.len();
+
+        // If no tree was built, fall back to legacy accessory grouping.
+        if node_section_map.is_empty() {
+            self.rebuild_accessories_legacy();
+            return;
+        }
+
+        // Build one accessory per tree node.
+        self.accessories = node_section_map
+            .iter()
+            .map(|sec_indices| {
+                let (first_bone, num_bones) =
+                    self.compute_bone_range_for_sections(sec_indices, bone_count);
+                Accessory {
+                    first_bone,
+                    num_bones,
+                    object_indices: sec_indices.clone(),
+                }
+            })
+            .collect();
+        self.valid_accessories = Vec::new();
+    }
+
+    /// Legacy accessory rebuild: group sections by `accessory_index`.
+    ///
+    /// Used when no AABB tree is present (e.g. HW2 files).
+    fn rebuild_accessories_legacy(&mut self) {
         let bone_count = self.bones.len();
         if bone_count == 0 || self.sections.is_empty() {
             self.accessories = Vec::new();
@@ -262,7 +299,6 @@ impl UgxGeom {
             return;
         }
 
-        // Find number of accessory groups
         let num_groups = self
             .sections
             .iter()
@@ -271,18 +307,51 @@ impl UgxGeom {
             .unwrap_or(0) as usize
             + 1;
 
-        // Collect section indices per group, and track min/max bone per group
         let mut group_sections: Vec<Vec<i32>> = vec![Vec::new(); num_groups];
-        let mut group_bone_min: Vec<usize> = vec![usize::MAX; num_groups];
-        let mut group_bone_max: Vec<usize> = vec![0; num_groups];
-
         for (si, section) in self.sections.iter().enumerate() {
             let gi = section.accessory_index as usize;
-            if gi >= num_groups {
+            if gi < num_groups {
+                group_sections[gi].push(si as i32);
+            }
+        }
+
+        self.accessories = (0..num_groups)
+            .map(|gi| {
+                let (first_bone, num_bones) =
+                    self.compute_bone_range_for_sections(&group_sections[gi], bone_count);
+                Accessory {
+                    first_bone,
+                    num_bones,
+                    object_indices: group_sections[gi].clone(),
+                }
+            })
+            .collect();
+        self.valid_accessories = Vec::new();
+    }
+
+    /// Compute the bone range (first_bone, num_bones) for a set of sections.
+    ///
+    /// Scans vertex bone influences across all given sections and returns
+    /// the contiguous range [first_bone, first_bone + num_bones) that
+    /// covers all referenced bones.
+    fn compute_bone_range_for_sections(
+        &self,
+        sec_indices: &[i32],
+        bone_count: usize,
+    ) -> (i32, i32) {
+        if bone_count == 0 || sec_indices.is_empty() {
+            return (0, bone_count as i32);
+        }
+
+        let mut bmin = usize::MAX;
+        let mut bmax = 0usize;
+
+        for &si in sec_indices {
+            let si = si as usize;
+            if si >= self.sections.len() {
                 continue;
             }
-            group_sections[gi].push(si as i32);
-
+            let section = &self.sections[si];
             let rigid_bone = section.rigid_bone_index as usize;
             let has_skin = section
                 .base_vert_packer
@@ -293,8 +362,8 @@ impl UgxGeom {
             let use_rigid = (!has_skin || section.rigid_only) && rigid_bone < bone_count;
 
             if use_rigid {
-                group_bone_min[gi] = group_bone_min[gi].min(rigid_bone);
-                group_bone_max[gi] = group_bone_max[gi].max(rigid_bone);
+                bmin = bmin.min(rigid_bone);
+                bmax = bmax.max(rigid_bone);
             } else if let Ok(verts) = self.unpack_section_vertices(si) {
                 let bone_remap = &section.bone_remap;
                 for v in &verts {
@@ -313,8 +382,8 @@ impl UgxGeom {
                                 continue;
                             };
                             if global_idx < bone_count {
-                                group_bone_min[gi] = group_bone_min[gi].min(global_idx);
-                                group_bone_max[gi] = group_bone_max[gi].max(global_idx);
+                                bmin = bmin.min(global_idx);
+                                bmax = bmax.max(global_idx);
                             }
                         }
                     }
@@ -322,165 +391,140 @@ impl UgxGeom {
             }
         }
 
-        // Single-accessory models always use the full skeleton range.
-        // Multi-accessory models use the vertex-scanned bone range per group.
-        if num_groups == 1 {
-            self.accessories = vec![Accessory {
-                first_bone: 0,
-                num_bones: bone_count as i32,
-                object_indices: group_sections[0].clone(),
-            }];
+        if bmin <= bmax {
+            (bmin as i32, (bmax - bmin + 1) as i32)
         } else {
-            self.accessories = (0..num_groups)
-                .map(|gi| {
-                    let first = if group_bone_min[gi] <= group_bone_max[gi] {
-                        group_bone_min[gi] as i32
-                    } else {
-                        0
-                    };
-                    let num = if group_bone_min[gi] <= group_bone_max[gi] {
-                        (group_bone_max[gi] - group_bone_min[gi] + 1) as i32
-                    } else {
-                        bone_count as i32
-                    };
-                    Accessory {
-                        first_bone: first,
-                        num_bones: num,
-                        object_indices: group_sections[gi].clone(),
-                    }
-                })
-                .collect();
+            (0, bone_count as i32)
         }
-        self.valid_accessories = Vec::new();
     }
 }
 
-/// A triangle with precomputed centroid for BVH construction.
-struct TriInfo {
-    /// Global triangle index (into the full index buffer).
-    global_tri_idx: i32,
-    /// Vertex positions [v0, v1, v2].
-    positions: [[f32; 3]; 3],
-    /// Centroid of the triangle.
+/// Per-section AABB + centroid used for section-level BVH construction.
+struct SectionAABB {
+    section_idx: usize,
+    min: [f32; 3],
+    max: [f32; 3],
     centroid: [f32; 3],
 }
 
 impl UgxGeom {
-    /// Rebuild the AABB tree from triangle data.
+    /// Rebuild the AABB tree as a section-level spatial hierarchy.
     ///
-    /// Builds a top-down BVH (bounding volume hierarchy) by recursively
-    /// splitting triangles along the longest axis of their centroid bounds.
-    /// Leaf nodes contain up to `MAX_LEAF_TRIS` triangle indices.
-    pub fn rebuild_aabb_tree(&mut self) {
-        const MAX_LEAF_TRIS: usize = 8;
-
-        // Collect all triangles with their positions
-        let mut tris = Vec::new();
-        self.collect_all_triangles(&mut tris);
-
-        if tris.is_empty() {
+    /// Returns a per-node section mapping: `result[node_idx]` contains the
+    /// section indices that belong to that node (empty for internal nodes,
+    /// populated for leaf nodes). This mapping must be passed to
+    /// `rebuild_accessories` to satisfy the engine invariant:
+    ///   `accessories.len() == tree.nodes.len()`
+    ///   `accessories[i].object_indices == sections drawn when node i is visible`
+    ///
+    /// Produces a tree matching the original engine's pattern:
+    /// - Node `obj_indices` are always empty (the engine reads section mappings
+    ///   from the accessories array at runtime, not from the tree nodes).
+    /// - `node.index` is always 0 (matching originals).
+    /// - Leaf nodes group spatially-close sections; internal nodes are pure
+    ///   bounding volumes.
+    pub fn rebuild_aabb_tree(&mut self) -> Vec<Vec<i32>> {
+        if self.sections.is_empty() {
             self.aabb_tree = None;
-            return;
+            return Vec::new();
         }
 
-        // Build the tree recursively
-        let mut nodes = Vec::new();
-        build_bvh_node(
-            &tris,
-            &mut (0..tris.len()).collect::<Vec<_>>(),
+        // Compute per-section AABBs
+        let mut sec_aabbs = Vec::new();
+        for si in 0..self.sections.len() {
+            let verts = match self.unpack_section_vertices(si) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if verts.is_empty() {
+                continue;
+            }
+            let mut smin = [f32::MAX; 3];
+            let mut smax = [f32::MIN; 3];
+            for v in &verts {
+                for k in 0..3 {
+                    smin[k] = smin[k].min(v.position[k]);
+                    smax[k] = smax[k].max(v.position[k]);
+                }
+            }
+            sec_aabbs.push(SectionAABB {
+                section_idx: si,
+                min: smin,
+                max: smax,
+                centroid: [
+                    (smin[0] + smax[0]) * 0.5,
+                    (smin[1] + smax[1]) * 0.5,
+                    (smin[2] + smax[2]) * 0.5,
+                ],
+            });
+        }
+
+        if sec_aabbs.is_empty() {
+            self.aabb_tree = None;
+            return Vec::new();
+        }
+
+        // Build a section-level BVH. Each leaf holds a set of section indices.
+        let mut nodes: Vec<AabbTreeNode> = Vec::new();
+        let mut node_sections: Vec<Vec<i32>> = Vec::new();
+        let indices: Vec<usize> = (0..sec_aabbs.len()).collect();
+        build_section_bvh(
+            &sec_aabbs,
+            &indices,
             &mut nodes,
+            &mut node_sections,
             AABB_NULL_INDEX,
-            MAX_LEAF_TRIS,
         );
 
-        // Assign sequential indices to each node
-        for (i, node) in nodes.iter_mut().enumerate() {
-            node.index = i as u32;
-        }
-
         self.aabb_tree = Some(AabbTree { nodes });
-    }
-
-    /// Collect all triangle positions across all sections.
-    fn collect_all_triangles(&self, out: &mut Vec<TriInfo>) {
-        let mut global_tri_offset = 0i32;
-
-        for section_idx in 0..self.sections.len() {
-            let section = &self.sections[section_idx];
-            let verts = match self.unpack_section_vertices(section_idx) {
-                Ok(v) => v,
-                Err(_) => {
-                    global_tri_offset += section.num_tris;
-                    continue;
-                }
-            };
-            let indices = self.get_section_indices(section_idx);
-
-            for tri in 0..section.num_tris as usize {
-                let i0 = indices[tri * 3] as usize;
-                let i1 = indices[tri * 3 + 1] as usize;
-                let i2 = indices[tri * 3 + 2] as usize;
-
-                if i0 >= verts.len() || i1 >= verts.len() || i2 >= verts.len() {
-                    global_tri_offset += 1;
-                    continue;
-                }
-
-                let p0 = verts[i0].position;
-                let p1 = verts[i1].position;
-                let p2 = verts[i2].position;
-                let centroid = [
-                    (p0[0] + p1[0] + p2[0]) / 3.0,
-                    (p0[1] + p1[1] + p2[1]) / 3.0,
-                    (p0[2] + p1[2] + p2[2]) / 3.0,
-                ];
-
-                out.push(TriInfo {
-                    global_tri_idx: global_tri_offset,
-                    positions: [p0, p1, p2],
-                    centroid,
-                });
-                global_tri_offset += 1;
-            }
-        }
+        node_sections
     }
 }
 
-/// Compute the AABB enclosing a set of triangles.
-fn compute_tri_aabb(tris: &[TriInfo], indices: &[usize]) -> ([f32; 3], [f32; 3]) {
-    let mut min = [f32::MAX; 3];
-    let mut max = [f32::MIN; 3];
-    for &idx in indices {
-        for p in &tris[idx].positions {
-            for k in 0..3 {
-                min[k] = min[k].min(p[k]);
-                max[k] = max[k].max(p[k]);
-            }
-        }
-    }
-    (min, max)
-}
-
-/// Recursively build a BVH node. Returns the index of the created node.
-fn build_bvh_node(
-    tris: &[TriInfo],
-    indices: &mut [usize],
+/// Recursively build a section-level BVH. Returns the index of the created node.
+///
+/// `leaf_sections[node_idx]` will contain section indices for leaf nodes,
+/// and an empty vec for internal nodes.
+fn build_section_bvh(
+    secs: &[SectionAABB],
+    indices: &[usize],
     nodes: &mut Vec<AabbTreeNode>,
+    leaf_sections: &mut Vec<Vec<i32>>,
     parent_idx: u32,
-    max_leaf: usize,
 ) -> u32 {
-    let (min, max) = compute_tri_aabb(tris, indices);
-
-    // This node's index
+    let (min, max) = compute_section_aabb(secs, indices);
     let node_idx = nodes.len() as u32;
 
-    // Determine the longest axis of the centroid spread
+    // Leaf: 1-2 sections or can't split
+    if indices.len() <= 2 {
+        let sec_indices: Vec<i32> = indices
+            .iter()
+            .map(|&i| secs[i].section_idx as i32)
+            .collect();
+        nodes.push(AabbTreeNode {
+            min,
+            max,
+            parent: parent_idx,
+            children: [AABB_NULL_INDEX, AABB_NULL_INDEX],
+            index: 0,
+            obj_indices: Vec::new(), // always empty — matches originals
+            split_plane: 0.0,
+        });
+        // Pad leaf_sections to match node index
+        while leaf_sections.len() < node_idx as usize {
+            leaf_sections.push(Vec::new());
+        }
+        leaf_sections.push(sec_indices);
+        return node_idx;
+    }
+
+    // Find longest axis of centroid spread
     let mut c_min = [f32::MAX; 3];
     let mut c_max = [f32::MIN; 3];
-    for &idx in indices.iter() {
+    for &i in indices {
         for k in 0..3 {
-            c_min[k] = c_min[k].min(tris[idx].centroid[k]);
-            c_max[k] = c_max[k].max(tris[idx].centroid[k]);
+            c_min[k] = c_min[k].min(secs[i].centroid[k]);
+            c_max[k] = c_max[k].max(secs[i].centroid[k]);
         }
     }
     let extents = [
@@ -495,47 +539,56 @@ fn build_bvh_node(
     } else {
         2
     };
-    let split_value = (c_min[split_axis] + c_max[split_axis]) * 0.5;
 
-    // Leaf node condition: few enough triangles or can't split further
-    if indices.len() <= max_leaf || extents[split_axis] < 1e-7 {
-        let obj_indices: Vec<i32> = indices.iter().map(|&i| tris[i].global_tri_idx).collect();
+    // If no spatial spread, make a single leaf with all sections
+    if extents[split_axis] < 1e-7 {
+        let sec_indices: Vec<i32> = indices
+            .iter()
+            .map(|&i| secs[i].section_idx as i32)
+            .collect();
         nodes.push(AabbTreeNode {
             min,
             max,
             parent: parent_idx,
             children: [AABB_NULL_INDEX, AABB_NULL_INDEX],
-            index: 0, // will be set later
-            obj_indices,
-            split_plane: split_value,
+            index: 0,
+            obj_indices: Vec::new(),
+            split_plane: 0.0,
         });
+        while leaf_sections.len() < node_idx as usize {
+            leaf_sections.push(Vec::new());
+        }
+        leaf_sections.push(sec_indices);
         return node_idx;
     }
 
-    // Partition indices into left/right by centroid position vs split plane
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    for &idx in indices.iter() {
-        if tris[idx].centroid[split_axis] <= split_value {
-            left.push(idx);
+    let split_value = (c_min[split_axis] + c_max[split_axis]) * 0.5;
+
+    // Partition
+    let mut left: Vec<usize> = Vec::new();
+    let mut right: Vec<usize> = Vec::new();
+    for &i in indices {
+        if secs[i].centroid[split_axis] <= split_value {
+            left.push(i);
         } else {
-            right.push(idx);
+            right.push(i);
         }
     }
 
-    // Fallback: if one side is empty, split in half
+    // Fallback: if one side empty, split sorted in half
     if left.is_empty() || right.is_empty() {
-        indices.sort_by(|&a, &b| {
-            tris[a].centroid[split_axis]
-                .partial_cmp(&tris[b].centroid[split_axis])
+        let mut sorted: Vec<usize> = indices.to_vec();
+        sorted.sort_by(|&a, &b| {
+            secs[a].centroid[split_axis]
+                .partial_cmp(&secs[b].centroid[split_axis])
                 .unwrap_or(core::cmp::Ordering::Equal)
         });
-        let mid = indices.len() / 2;
-        left = indices[..mid].to_vec();
-        right = indices[mid..].to_vec();
+        let mid = sorted.len() / 2;
+        left = sorted[..mid].to_vec();
+        right = sorted[mid..].to_vec();
     }
 
-    // Push placeholder node (children will be filled after recursion)
+    // Push internal node (children filled after recursion)
     nodes.push(AabbTreeNode {
         min,
         max,
@@ -543,16 +596,33 @@ fn build_bvh_node(
         children: [AABB_NULL_INDEX, AABB_NULL_INDEX],
         index: 0,
         obj_indices: Vec::new(),
-        split_plane: split_value,
+        split_plane: 0.0,
     });
+    // Internal nodes have empty section lists
+    while leaf_sections.len() < node_idx as usize {
+        leaf_sections.push(Vec::new());
+    }
 
-    // Recurse left
-    let left_idx = build_bvh_node(tris, &mut left, nodes, node_idx, max_leaf);
+    leaf_sections.push(Vec::new());
+
+    let left_idx = build_section_bvh(secs, &left, nodes, leaf_sections, node_idx);
     nodes[node_idx as usize].children[0] = left_idx;
 
-    // Recurse right
-    let right_idx = build_bvh_node(tris, &mut right, nodes, node_idx, max_leaf);
+    let right_idx = build_section_bvh(secs, &right, nodes, leaf_sections, node_idx);
     nodes[node_idx as usize].children[1] = right_idx;
 
     node_idx
+}
+
+/// Compute the AABB enclosing a set of section AABBs.
+fn compute_section_aabb(secs: &[SectionAABB], indices: &[usize]) -> ([f32; 3], [f32; 3]) {
+    let mut min = [f32::MAX; 3];
+    let mut max = [f32::MIN; 3];
+    for &idx in indices {
+        for k in 0..3 {
+            min[k] = min[k].min(secs[idx].min[k]);
+            max[k] = max[k].max(secs[idx].max[k]);
+        }
+    }
+    (min, max)
 }
