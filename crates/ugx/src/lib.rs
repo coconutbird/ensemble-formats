@@ -40,7 +40,7 @@ pub use types::*;
 
 mod reader;
 mod rebuild;
-pub use reader::Reader;
+pub use reader::{Reader, read_materials};
 
 mod writer;
 pub use writer::Writer;

@@ -121,7 +121,7 @@ use cached_data::{
     read_valid_accessory_indices,
 };
 use granny::{parse_granny_bones, parse_granny_meshes};
-use material::read_materials;
+use material::read_materials as parse_materials;
 
 impl UgxGeom {
     /// Parse UGX geometry from a byte slice (ECF container).
@@ -240,7 +240,7 @@ impl UgxGeom {
         let bone_bounds = read_bone_bounds(data, pos)?;
 
         let materials = if let Some(ref mat_data) = material_data {
-            read_materials(mat_data).unwrap_or_default()
+            parse_materials(mat_data).unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -274,6 +274,19 @@ impl UgxGeom {
             global_bones,
             aabb_tree,
         })
+    }
+}
+
+/// Read only the materials from a UGX file, skipping geometry, bones, etc.
+///
+/// Opens the ECF container, extracts chunk 0x704 (materials), and parses
+/// the BBinaryDataTree document. This is much cheaper than a full
+/// [`UgxGeom::from_bytes`] parse when you only need texture/material info.
+pub fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
+    let ecf = ecf::Reader::new(data)?;
+    match ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID) {
+        Ok(mat_data) => parse_materials(&mat_data),
+        Err(_) => Ok(Vec::new()),
     }
 }
 

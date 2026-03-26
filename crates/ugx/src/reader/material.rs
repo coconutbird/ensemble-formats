@@ -12,7 +12,7 @@ use crate::types::{Map, MapType, Material};
 /// The root node's children are individual material nodes. Each material
 /// has a "Name" attribute, map type children (Diffuse, Normal, etc.),
 /// UVW velocity children, and a Properties child (BNameValueMap).
-pub(super) fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
+pub(crate) fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
     let root = match bdt::Reader::read(data, bdt::Endian::Little)? {
         Some(root) => root,
         None => return Ok(Vec::new()),
