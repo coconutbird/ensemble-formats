@@ -13,15 +13,16 @@
 //! Key insight: column-major storage of `M_gl` = row-major storage of `M_dx`,
 //! because `M_gl = M_dx^T`. So we just write DX matrix rows flat for glTF.
 
+mod material;
 mod primitive;
 mod skeleton;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use gltf_json as json;
-use json::validation::Checked::Valid;
 
-use ugx::{MapType, Material, Result, UgxGeom};
+use ugx::{Result, UgxGeom};
 
+use material::build_materials;
 use primitive::create_primitive;
 use skeleton::{
     build_section_to_mesh_mapping, create_skeleton_nodes, create_skeleton_nodes_from_granny,
@@ -64,87 +65,6 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
     export_to_gltf_with_buffer_name(geom, options, "buffer.bin")
 }
 
-/// Build glTF material extras JSON for UGX-specific data.
-///
-/// Stores material flags, UVW velocity, and non-PBR texture maps
-/// so they survive a glTF roundtrip.
-fn build_material_extras(mat: &Material) -> json::Extras {
-    use crate::extras::{HoganExtrasJson, MapEntryJson, MaterialExtrasJson, ShaderPermJson};
-    use ugx::types::MaterialData;
-
-    let mut ext = MaterialExtrasJson {
-        ugx_material_version: mat.material_version,
-        ..Default::default()
-    };
-
-    match &mat.data {
-        MaterialData::Legacy(legacy) => {
-            ext.ugx_flags = Some(legacy.flags);
-            ext.ugx_blend_type = Some(legacy.blend_type);
-            ext.ugx_spec_power = Some(legacy.spec_power);
-            ext.ugx_spec_color = Some(legacy.spec_color);
-            ext.ugx_env_reflectivity = Some(legacy.env_reflectivity);
-            ext.ugx_env_sharpness = Some(legacy.env_sharpness);
-            ext.ugx_env_fresnel = Some(legacy.env_fresnel);
-            ext.ugx_env_fresnel_power = Some(legacy.env_fresnel_power);
-            ext.ugx_accessory_index = Some(legacy.accessory_index);
-            ext.ugx_opacity = Some(legacy.opacity);
-
-            // UVW velocity (only if any non-zero)
-            let has_any_uvw = legacy
-                .uvw_velocity
-                .iter()
-                .any(|v| v[0] != 0.0 || v[1] != 0.0 || v[2] != 0.0);
-            if has_any_uvw {
-                ext.ugx_uvw_velocity = Some(legacy.uvw_velocity.to_vec());
-            }
-
-            // Texture maps
-            let mut maps = std::collections::BTreeMap::new();
-            for map_type in MapType::ALL {
-                let idx = map_type as usize;
-                if !legacy.maps[idx].is_empty() {
-                    let entries: Vec<MapEntryJson> = legacy.maps[idx]
-                        .iter()
-                        .map(|m| MapEntryJson {
-                            name: m.name.clone(),
-                            channel: m.channel,
-                            flags: m.flags,
-                        })
-                        .collect();
-                    maps.insert(map_type.name().to_string(), entries);
-                }
-            }
-            if !maps.is_empty() {
-                ext.ugx_maps = Some(maps);
-            }
-        }
-        MaterialData::Hogan(hogan) => {
-            ext.ugx_hogan = Some(HoganExtrasJson {
-                shader_permutations: hogan
-                    .shader_permutations
-                    .iter()
-                    .map(|p| ShaderPermJson {
-                        name: p.name.clone(),
-                        hash: p.hash,
-                    })
-                    .collect(),
-                ufx_version: hogan.ufx_version,
-                blend_mode: hogan.blend_mode,
-                shadow_requires_consts: hogan.shadow_requires_consts,
-                skinned: hogan.skinned,
-                terrain_blending: hogan.terrain_blending,
-                vs_cb_data: hogan.vs_cb_data,
-                ps_cb_data: hogan.ps_cb_data,
-                textures: hogan.textures.clone(),
-            });
-        }
-    }
-
-    let json_str = serde_json::to_string(&ext).unwrap();
-    Some(serde_json::value::RawValue::from_string(json_str).unwrap())
-}
-
 /// Export UGX geometry to glTF format with a specific external buffer filename.
 pub fn export_to_gltf_with_buffer_name(
     geom: &UgxGeom,
@@ -164,136 +84,10 @@ pub fn export_to_gltf_with_buffer_name(
 
     // Create materials with texture references if requested
     if options.include_materials {
-        // Pass 1: Build texture registry (deduplicated image/texture objects)
-        // Only legacy materials have texture maps.
-        let mut texture_map: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
-        for mat in &geom.materials {
-            if let Some(legacy) = mat.legacy() {
-                for map_type in MapType::ALL {
-                    for map in &legacy.maps[map_type as usize] {
-                        if !map.name.is_empty() && !texture_map.contains_key(&map.name) {
-                            let image_idx = images_json.len() as u32;
-                            images_json.push(json::Image {
-                                buffer_view: None,
-                                mime_type: None,
-                                name: Some(map.name.clone()),
-                                uri: Some(map.name.clone()),
-                                extensions: None,
-                                extras: json::Extras::default(),
-                            });
-                            let texture_idx = textures_json.len() as u32;
-                            textures_json.push(json::Texture {
-                                name: None,
-                                sampler: None,
-                                source: json::Index::new(image_idx),
-                                extensions: None,
-                                extras: json::Extras::default(),
-                            });
-                            texture_map.insert(map.name.clone(), texture_idx);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Pass 2: Create glTF materials with texture references
-        for mat in &geom.materials {
-            // Legacy materials get full PBR mapping; Hogan materials get defaults + extras
-            let (base_color_texture, normal_texture, occlusion_texture, emissive_texture) =
-                if let Some(legacy) = mat.legacy() {
-                    let bct = legacy.maps[MapType::Diffuse as usize]
-                        .first()
-                        .filter(|m| !m.name.is_empty())
-                        .map(|m| json::texture::Info {
-                            index: json::Index::new(texture_map[&m.name]),
-                            tex_coord: m.channel as u32,
-                            extensions: None,
-                            extras: json::Extras::default(),
-                        });
-                    let nt = legacy.maps[MapType::Normal as usize]
-                        .first()
-                        .filter(|m| !m.name.is_empty())
-                        .map(|m| json::material::NormalTexture {
-                            index: json::Index::new(texture_map[&m.name]),
-                            scale: 1.0,
-                            tex_coord: m.channel as u32,
-                            extensions: None,
-                            extras: json::Extras::default(),
-                        });
-                    let ot = legacy.maps[MapType::AO as usize]
-                        .first()
-                        .filter(|m| !m.name.is_empty())
-                        .map(|m| json::material::OcclusionTexture {
-                            index: json::Index::new(texture_map[&m.name]),
-                            strength: json::material::StrengthFactor(1.0),
-                            tex_coord: m.channel as u32,
-                            extensions: None,
-                            extras: json::Extras::default(),
-                        });
-                    let et = legacy.maps[MapType::Emissive as usize]
-                        .first()
-                        .filter(|m| !m.name.is_empty())
-                        .map(|m| json::texture::Info {
-                            index: json::Index::new(texture_map[&m.name]),
-                            tex_coord: m.channel as u32,
-                            extensions: None,
-                            extras: json::Extras::default(),
-                        });
-                    (bct, nt, ot, et)
-                } else {
-                    (None, None, None, None)
-                };
-
-            // Emissive factor must be [1,1,1] for emissive texture to have effect
-            let emissive_factor = if emissive_texture.is_some() {
-                json::material::EmissiveFactor([1.0, 1.0, 1.0])
-            } else {
-                json::material::EmissiveFactor([0.0, 0.0, 0.0])
-            };
-
-            // Alpha mode and PBR values from legacy data, or defaults for Hogan
-            let (blend_type, opacity, spec_power) = if let Some(legacy) = mat.legacy() {
-                (legacy.blend_type, legacy.opacity, legacy.spec_power)
-            } else {
-                (0u8, 1.0f32, 10.0f32)
-            };
-
-            let alpha_mode = if blend_type > 0 || opacity < 1.0 {
-                Valid(json::material::AlphaMode::Blend)
-            } else {
-                Valid(json::material::AlphaMode::Opaque)
-            };
-
-            let pbr = json::material::PbrMetallicRoughness {
-                base_color_factor: json::material::PbrBaseColorFactor([1.0, 1.0, 1.0, opacity]),
-                base_color_texture,
-                metallic_factor: json::material::StrengthFactor(0.0),
-                roughness_factor: json::material::StrengthFactor(
-                    1.0 - (spec_power / 100.0).clamp(0.0, 1.0),
-                ),
-                metallic_roughness_texture: None,
-                extensions: None,
-                extras: json::Extras::default(),
-            };
-
-            // Build extras JSON for UGX-specific data that doesn't map to PBR
-            let extras = build_material_extras(mat);
-
-            materials_json.push(json::Material {
-                alpha_cutoff: None,
-                alpha_mode,
-                double_sided: false,
-                pbr_metallic_roughness: pbr,
-                normal_texture,
-                occlusion_texture,
-                emissive_texture,
-                emissive_factor,
-                extensions: None,
-                extras,
-                name: Some(mat.name.clone()),
-            });
-        }
+        let mat_result = build_materials(&geom.materials);
+        materials_json = mat_result.materials;
+        images_json = mat_result.images;
+        textures_json = mat_result.textures;
     }
 
     // Check if we have bones and should include skeleton
@@ -599,6 +393,7 @@ pub fn export_to_gltf_with_buffer_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use json::validation::Checked::Valid;
     use ugx::UnpackedVertex;
 
     /// Helper: build a minimal vertex with position only.

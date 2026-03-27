@@ -360,7 +360,10 @@ pub(super) fn validate_granny_chunk(data: &[u8]) -> Result<()> {
 ///   +0x94: variant ExtendedData (16 bytes)
 pub(super) fn parse_granny_bones(granny: &[u8]) -> Result<(Vec<GrannyBone>, u32)> {
     if granny.len() < 0x40 {
-        return Ok((Vec::new(), 0));
+        return Err(Error::UnsupportedFormat(format!(
+            "Granny chunk too small for skeleton header ({} < 0x40)",
+            granny.len()
+        )));
     }
 
     let mut sc = SliceCursor::new(&granny[0x30..]);
@@ -371,13 +374,21 @@ pub(super) fn parse_granny_bones(granny: &[u8]) -> Result<(Vec<GrannyBone>, u32)
 
     let skeleton_ptr_array_offs = sc.read_u64_le()? as usize;
     if skeleton_ptr_array_offs + 8 > granny.len() {
-        return Ok((Vec::new(), 0));
+        return Err(Error::UnsupportedFormat(format!(
+            "Granny skeleton pointer array out of bounds (0x{:X} + 8 > 0x{:X})",
+            skeleton_ptr_array_offs,
+            granny.len()
+        )));
     }
 
     let mut sc = SliceCursor::new(&granny[skeleton_ptr_array_offs..]);
     let skeleton_offs = sc.read_u64_le()? as usize;
     if skeleton_offs + 0x28 > granny.len() {
-        return Ok((Vec::new(), 0));
+        return Err(Error::UnsupportedFormat(format!(
+            "Granny skeleton data out of bounds (0x{:X} + 0x28 > 0x{:X})",
+            skeleton_offs,
+            granny.len()
+        )));
     }
 
     let mut sc = SliceCursor::new(&granny[skeleton_offs + 0x08..]);
@@ -495,7 +506,10 @@ pub(super) fn parse_granny_bones(granny: &[u8]) -> Result<(Vec<GrannyBone>, u32)
 ///   +0x00: u64 BoneName ptr
 pub(super) fn parse_granny_meshes(granny: &[u8]) -> Result<Vec<GrannyMesh>> {
     if granny.len() < 0x70 {
-        return Ok(Vec::new());
+        return Err(Error::UnsupportedFormat(format!(
+            "Granny chunk too small for model header ({} < 0x70)",
+            granny.len()
+        )));
     }
 
     let mut sc = SliceCursor::new(&granny[0x60..]);
@@ -506,13 +520,21 @@ pub(super) fn parse_granny_meshes(granny: &[u8]) -> Result<Vec<GrannyMesh>> {
 
     let models_ptr_offs = sc.read_u64_le()? as usize;
     if models_ptr_offs + 8 > granny.len() {
-        return Ok(Vec::new());
+        return Err(Error::UnsupportedFormat(format!(
+            "Granny model pointer array out of bounds (0x{:X} + 8 > 0x{:X})",
+            models_ptr_offs,
+            granny.len()
+        )));
     }
 
     let mut sc = SliceCursor::new(&granny[models_ptr_offs..]);
     let model_offs = sc.read_u64_le()? as usize;
     if model_offs + 0x60 > granny.len() {
-        return Ok(Vec::new());
+        return Err(Error::UnsupportedFormat(format!(
+            "Granny model data out of bounds (0x{:X} + 0x60 > 0x{:X})",
+            model_offs,
+            granny.len()
+        )));
     }
 
     let mut sc = SliceCursor::new(&granny[model_offs + 0x54..]);
