@@ -2,10 +2,11 @@
 //!
 //! Reads materials from BBinaryDataTree packed document.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::error::Result;
-use crate::types::{Map, MapType, Material};
+use crate::types::{HoganMaterialData, Map, MapType, Material, ShaderPermutation};
 
 /// Read materials from BBinaryDataTree packed document (chunk 0x704).
 ///
@@ -27,15 +28,37 @@ pub(crate) fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
 }
 
 /// Read a single material from a BBinaryDataTree node.
+///
+/// Supports two formats:
+/// - **Legacy** (HW1 + some HW2): `<Material @Name @Ver>` with `<NameValues>` + `<Maps>` children.
+/// - **Hogan** (HW2): `<Material>` with a single `<HoganMaterial>` child containing
+///   shader permutations, constant buffer data, and texture paths.
 fn read_material(node: &bdt::Node) -> Material {
     let mut mat = Material::default();
 
-    // Name from attribute
+    // Name from attribute (legacy format; absent for Hogan)
     if let Some(attr) = node.get_attribute("Name") {
         mat.name = attr.value.to_string_value();
     }
 
-    // Read properties from "NameValues" child
+    // Ver from attribute (4 = HW1, 5 = HW2 legacy; absent for Hogan)
+    if let Some(attr) = node.get_attribute("Ver") {
+        mat.material_version = variant_to_u32(&attr.value);
+    }
+
+    // Check for HW2 Hogan material format
+    if let Some(hogan_node) = node.children.iter().find(|c| c.name == "HoganMaterial") {
+        mat.hogan = Some(read_hogan_material(hogan_node));
+        return mat;
+    }
+
+    // Legacy format: read NameValues + Maps
+    read_legacy_material(node, &mut mat);
+    mat
+}
+
+/// Parse the legacy material format (NameValues + Maps children).
+fn read_legacy_material(node: &bdt::Node, mat: &mut Material) {
     if let Some(nv_node) = node.children.iter().find(|c| c.name == "NameValues") {
         for prop in &nv_node.children {
             match prop.name.as_str() {
@@ -59,7 +82,6 @@ fn read_material(node: &bdt::Node) -> Material {
         }
     }
 
-    // Read maps from "Maps" child
     if let Some(maps_node) = node.children.iter().find(|c| c.name == "Maps") {
         for map_type in MapType::ALL {
             if let Some(type_node) = maps_node
@@ -67,12 +89,10 @@ fn read_material(node: &bdt::Node) -> Material {
                 .iter()
                 .find(|c| c.name == map_type.name())
             {
-                // UVWVel is an attribute on the map type node
                 if let Some(uvw_attr) = type_node.get_attribute("UVWVel") {
                     mat.uvw_velocity[map_type as usize][0] = variant_to_f32(&uvw_attr.value);
                 }
 
-                // Each <Map> child is a texture reference
                 for map_child in &type_node.children {
                     if map_child.name == "Map" {
                         let mut map = Map::default();
@@ -91,8 +111,70 @@ fn read_material(node: &bdt::Node) -> Material {
             }
         }
     }
+}
 
-    mat
+/// Parse HW2 Hogan material data from a `<HoganMaterial>` BDT node.
+fn read_hogan_material(node: &bdt::Node) -> HoganMaterialData {
+    let mut perms = Vec::new();
+    // Read up to 4 shader permutation pairs (name0/hash0 .. name3/hash3)
+    for i in 0..4 {
+        let name_key = alloc::format!("shaderPermutationName{i}");
+        let hash_key = alloc::format!("shaderPermutationHash{i}");
+        if let (Some(name_attr), Some(hash_attr)) =
+            (node.get_attribute(&name_key), node.get_attribute(&hash_key))
+        {
+            perms.push(ShaderPermutation {
+                name: name_attr.value.to_string_value(),
+                hash: variant_to_u32(&hash_attr.value),
+            });
+        }
+    }
+
+    let ufx_version = node
+        .get_attribute("ufxVersion")
+        .map(|a| variant_to_u32(&a.value))
+        .unwrap_or(9);
+    let blend_mode = node
+        .get_attribute("blendMode")
+        .map(|a| variant_to_u32(&a.value))
+        .unwrap_or(0);
+    let shadow_requires_consts = node
+        .get_attribute("shadowRequiresConsts")
+        .map(|a| variant_to_bool(&a.value))
+        .unwrap_or(false);
+    let skinned = node
+        .get_attribute("skinned")
+        .map(|a| variant_to_bool(&a.value))
+        .unwrap_or(false);
+    let terrain_blending = node
+        .get_attribute("terrainBlending")
+        .map(|a| variant_to_bool(&a.value))
+        .unwrap_or(false);
+
+    let mut vs_cb_data = 0u32;
+    let mut ps_cb_data = 0u32;
+    let mut textures = String::new();
+
+    for child in &node.children {
+        match child.name.as_str() {
+            "VSCBData" => vs_cb_data = variant_to_u32(&child.text),
+            "PSCBData" => ps_cb_data = variant_to_u32(&child.text),
+            "textures" => textures = child.text.to_string_value(),
+            _ => {}
+        }
+    }
+
+    HoganMaterialData {
+        shader_permutations: perms,
+        ufx_version,
+        blend_mode,
+        shadow_requires_consts,
+        skinned,
+        terrain_blending,
+        vs_cb_data,
+        ps_cb_data,
+        textures,
+    }
 }
 
 fn variant_to_f32(v: &bdt::Variant) -> f32 {
@@ -127,5 +209,14 @@ fn variant_to_u8(v: &bdt::Variant) -> u8 {
         bdt::Variant::UInt(u) => *u as u8,
         bdt::Variant::Int(i) => *i as u8,
         _ => 0,
+    }
+}
+
+fn variant_to_bool(v: &bdt::Variant) -> bool {
+    match v {
+        bdt::Variant::Bool(b) => *b,
+        bdt::Variant::UInt(u) => *u != 0,
+        bdt::Variant::Int(i) => *i != 0,
+        _ => false,
     }
 }

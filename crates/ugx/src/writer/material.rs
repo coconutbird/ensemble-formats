@@ -1,7 +1,9 @@
 //! Material chunk (0x704) builder.
 //!
 //! Serializes materials as a BBinaryDataTree (BDT) packed document.
+//! Supports both HW1 legacy format and HW2 Hogan shader-based format.
 
+use alloc::format;
 use alloc::vec::Vec;
 
 use crate::error::Result;
@@ -9,19 +11,27 @@ use crate::types::{MapType, Material, UgxGeom};
 
 /// Build the material chunk (0x704) as a BBinaryDataTree packed document.
 ///
-/// Tree structure:
+/// Tree structure (legacy):
 /// ```text
 /// <Materials>
 ///   <Material @Name="name" @Ver=4>
 ///     <NameValues>
 ///       <SpecPower> text=Float(...)
-///       <Flags> text=UInt(...)
-///       <BlendType> text=UInt(...)
-///       <Opacity> text=UInt(0-255)
+///       ...
 ///     <Maps>
 ///       <diffuse @UVWVel=Float(0.0)>
 ///         <Map @Name="texture_path" @Channel=Int(0) @Flags=UInt(7)>
 ///       ...
+/// ```
+///
+/// Tree structure (Hogan / HW2):
+/// ```text
+/// <Materials>
+///   <Material>
+///     <HoganMaterial @shaderPermutationName0=... @ufxVersion=9 ...>
+///       <VSCBData text=UInt(0)>
+///       <PSCBData text=UInt(0)>
+///       <textures text=String("...")>
 /// ```
 pub(super) fn build_material_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let mut root = bdt::Node::new("Materials");
@@ -35,14 +45,31 @@ pub(super) fn build_material_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 }
 
 /// Build a single material BDT node.
+///
+/// If the material has `hogan` data, writes the Hogan format.
+/// Otherwise writes the legacy format using `material_version`.
 fn build_material_node(mat: &Material) -> bdt::Node {
     let mut node = bdt::Node::new("Material");
-    node.attributes
-        .push(bdt::Attribute::with_string("Name", &mat.name));
-    node.attributes
-        .push(bdt::Attribute::new("Ver", bdt::Variant::UInt(4)));
 
-    // NameValues child with all material properties (matching engine order)
+    if let Some(ref hogan) = mat.hogan {
+        // HW2 Hogan format: <Material> with <HoganMaterial> child, no @Name/@Ver
+        node.children.push(build_hogan_node(hogan));
+    } else {
+        // Legacy format: <Material @Name @Ver> with <NameValues> + <Maps>
+        node.attributes
+            .push(bdt::Attribute::with_string("Name", &mat.name));
+        node.attributes.push(bdt::Attribute::new(
+            "Ver",
+            bdt::Variant::UInt(mat.material_version),
+        ));
+        build_legacy_children(mat, &mut node);
+    }
+
+    node
+}
+
+/// Build legacy NameValues + Maps children for a material node.
+fn build_legacy_children(mat: &Material, node: &mut bdt::Node) {
     let mut nv = bdt::Node::new("NameValues");
 
     fn push_float(nv: &mut bdt::Node, name: &str, val: f32) {
@@ -103,6 +130,57 @@ fn build_material_node(mat: &Material) -> bdt::Node {
     }
 
     node.children.push(maps);
+}
+
+/// Build a `<HoganMaterial>` BDT node from HW2 Hogan data.
+fn build_hogan_node(hogan: &crate::types::HoganMaterialData) -> bdt::Node {
+    let mut node = bdt::Node::new("HoganMaterial");
+
+    // Shader permutation attributes (name0/hash0 .. name3/hash3)
+    for (i, perm) in hogan.shader_permutations.iter().enumerate() {
+        node.attributes.push(bdt::Attribute::with_string(
+            format!("shaderPermutationName{i}"),
+            &perm.name,
+        ));
+        node.attributes.push(bdt::Attribute::new(
+            format!("shaderPermutationHash{i}"),
+            bdt::Variant::UInt(perm.hash),
+        ));
+    }
+
+    node.attributes.push(bdt::Attribute::new(
+        "ufxVersion",
+        bdt::Variant::UInt(hogan.ufx_version),
+    ));
+    node.attributes.push(bdt::Attribute::new(
+        "blendMode",
+        bdt::Variant::UInt(hogan.blend_mode),
+    ));
+    node.attributes.push(bdt::Attribute::new(
+        "shadowRequiresConsts",
+        bdt::Variant::Bool(hogan.shadow_requires_consts),
+    ));
+    node.attributes.push(bdt::Attribute::new(
+        "skinned",
+        bdt::Variant::Bool(hogan.skinned),
+    ));
+    node.attributes.push(bdt::Attribute::new(
+        "terrainBlending",
+        bdt::Variant::Bool(hogan.terrain_blending),
+    ));
+
+    // Child nodes: VSCBData, PSCBData, textures
+    let mut vscb = bdt::Node::new("VSCBData");
+    vscb.text = bdt::Variant::UInt(hogan.vs_cb_data);
+    node.children.push(vscb);
+
+    let mut pscb = bdt::Node::new("PSCBData");
+    pscb.text = bdt::Variant::UInt(hogan.ps_cb_data);
+    node.children.push(pscb);
+
+    let mut tex = bdt::Node::new("textures");
+    tex.text = bdt::Variant::String(hogan.textures.clone());
+    node.children.push(tex);
 
     node
 }

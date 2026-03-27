@@ -33,7 +33,7 @@ pub use bone::{
     Bone, GrannyBone, GrannyBoneBinding, GrannyLocalTransform, GrannyMemberType, GrannyMesh,
     GrannyTypeMember, GrannyVariant,
 };
-pub use material::{Map, MapType, Material};
+pub use material::{HoganMaterialData, Map, MapType, Material, ShaderPermutation};
 pub use primitives::{AABB, Keyframe, Sphere};
 pub use section::Section;
 

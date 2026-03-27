@@ -116,6 +116,61 @@ fn build_material_extras(mat: &Material) -> json::Extras {
     );
     extras.insert("ugx_opacity".into(), serde_json::Value::from(mat.opacity));
 
+    // Store material version for roundtrip (4 = HW1, 5 = HW2 legacy)
+    extras.insert(
+        "ugx_material_version".into(),
+        serde_json::Value::Number(mat.material_version.into()),
+    );
+
+    // Store HW2 Hogan material data if present
+    if let Some(ref hogan) = mat.hogan {
+        let mut hogan_obj = serde_json::Map::new();
+        let perms: Vec<serde_json::Value> = hogan
+            .shader_permutations
+            .iter()
+            .map(|p| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("name".into(), serde_json::Value::String(p.name.clone()));
+                obj.insert("hash".into(), serde_json::Value::Number(p.hash.into()));
+                serde_json::Value::Object(obj)
+            })
+            .collect();
+        hogan_obj.insert(
+            "shader_permutations".into(),
+            serde_json::Value::Array(perms),
+        );
+        hogan_obj.insert(
+            "ufx_version".into(),
+            serde_json::Value::Number(hogan.ufx_version.into()),
+        );
+        hogan_obj.insert(
+            "blend_mode".into(),
+            serde_json::Value::Number(hogan.blend_mode.into()),
+        );
+        hogan_obj.insert(
+            "shadow_requires_consts".into(),
+            serde_json::Value::Bool(hogan.shadow_requires_consts),
+        );
+        hogan_obj.insert("skinned".into(), serde_json::Value::Bool(hogan.skinned));
+        hogan_obj.insert(
+            "terrain_blending".into(),
+            serde_json::Value::Bool(hogan.terrain_blending),
+        );
+        hogan_obj.insert(
+            "vs_cb_data".into(),
+            serde_json::Value::Number(hogan.vs_cb_data.into()),
+        );
+        hogan_obj.insert(
+            "ps_cb_data".into(),
+            serde_json::Value::Number(hogan.ps_cb_data.into()),
+        );
+        hogan_obj.insert(
+            "textures".into(),
+            serde_json::Value::String(hogan.textures.clone()),
+        );
+        extras.insert("ugx_hogan".into(), serde_json::Value::Object(hogan_obj));
+    }
+
     // Store UVW velocity arrays that have non-zero values
     let has_any_uvw = mat
         .uvw_velocity

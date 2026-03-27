@@ -73,15 +73,56 @@ pub struct Map {
     pub flags: u8,
 }
 
+/// A shader permutation entry used in HW2 Hogan materials.
+#[derive(Debug, Clone)]
+pub struct ShaderPermutation {
+    /// Permutation name (e.g. `"HOGAN_STANDARD_00000000003009A0"`).
+    pub name: String,
+    /// Permutation hash.
+    pub hash: u32,
+}
+
+/// HW2 "Hogan" material data — a shader-based material system used by
+/// Halo Wars 2 in place of the legacy NameValues+Maps format.
+///
+/// Stored as a `<HoganMaterial>` child node in the BDT material tree.
+#[derive(Debug, Clone)]
+pub struct HoganMaterialData {
+    /// Up to 4 shader permutations (name + hash pairs).
+    pub shader_permutations: Vec<ShaderPermutation>,
+    /// UFX version (typically 9).
+    pub ufx_version: u32,
+    /// Blend mode.
+    pub blend_mode: u32,
+    /// Whether the shadow pass requires constant buffer data.
+    pub shadow_requires_consts: bool,
+    /// Whether the material is used on a skinned mesh.
+    pub skinned: bool,
+    /// Whether terrain blending is enabled.
+    pub terrain_blending: bool,
+    /// Vertex shader constant buffer data (0 = none).
+    pub vs_cb_data: u32,
+    /// Pixel shader constant buffer data (0 = none).
+    pub ps_cb_data: u32,
+    /// Texture path pattern (e.g. `"bespoke\\archetypes\\...\\model_[al]"`).
+    pub textures: String,
+}
+
 /// Material definition (from BBinaryDataTree packed document).
 ///
 /// Materials are stored in UGX chunk 0x704 as a BBinaryDataTree document.
 /// Each material has 13 map type slots, UVW velocities per map type,
 /// and properties from a BNameValueMap.
+///
+/// HW2 files may use either the legacy format (same as HW1 but `@Ver=5`)
+/// or the Hogan shader-based format. When `hogan` is `Some`, the material
+/// uses the Hogan format and legacy fields may contain defaults.
 #[derive(Debug, Clone)]
 pub struct Material {
-    /// Material name.
+    /// Material name (from `@Name` attribute; empty for Hogan materials).
     pub name: String,
+    /// Material version from `@Ver` attribute (4 = HW1, 5 = HW2 legacy).
+    pub material_version: u32,
     /// Texture maps indexed by MapType (13 slots, each can have multiple maps).
     pub maps: [Vec<Map>; MapType::NUM_TYPES],
     /// UVW velocity per map type.
@@ -106,12 +147,15 @@ pub struct Material {
     pub blend_type: u8,
     /// Opacity (default: 1.0).
     pub opacity: f32,
+    /// HW2 Hogan material data (if present, this material uses the Hogan format).
+    pub hogan: Option<HoganMaterialData>,
 }
 
 impl Default for Material {
     fn default() -> Self {
         Self {
             name: String::new(),
+            material_version: 4,
             maps: Default::default(),
             uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
             spec_power: 10.0,
@@ -124,6 +168,7 @@ impl Default for Material {
             flags: 0,
             blend_type: 0,
             opacity: 1.0,
+            hogan: None,
         }
     }
 }

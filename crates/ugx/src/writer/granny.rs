@@ -866,7 +866,20 @@ fn compute_fallback_local_transforms(geom: &UgxGeom) -> Vec<FallbackTransform> {
                 Matrix4x4::identity()
             };
 
-            let orientation = rot_matrix.to_quaternion();
+            let mut orientation = rot_matrix.to_quaternion();
+            // Granny stores quaternions in conjugate form (negated xyz).
+            // Standard matrix decomposition gives q where v' = q*v*q⁻¹,
+            // but Granny uses q⁻¹*v*q, so we conjugate (negate xyz).
+            orientation[0] = -orientation[0];
+            orientation[1] = -orientation[1];
+            orientation[2] = -orientation[2];
+            // Canonical sign: ensure w >= 0 (q and -q are the same rotation).
+            if orientation[3] < 0.0 {
+                orientation[0] = -orientation[0];
+                orientation[1] = -orientation[1];
+                orientation[2] = -orientation[2];
+                orientation[3] = -orientation[3];
+            }
             let rt = rot_matrix.transpose();
             let scale_shear = [
                 [
@@ -886,26 +899,36 @@ fn compute_fallback_local_transforms(geom: &UgxGeom) -> Vec<FallbackTransform> {
                 ],
             ];
 
+            // Flag thresholds: matrix inversion + multiply + decomposition
+            // can introduce drift up to ~1e-5 for values that should be zero
+            // or identity. Use 1e-4 to comfortably absorb this drift without
+            // incorrectly marking real transforms as identity (real bone
+            // offsets are orders of magnitude larger).
+            const FLAG_EPS: f32 = 1e-4;
+
             let mut flags = 0u32;
-            if position[0].abs() > 1e-7 || position[1].abs() > 1e-7 || position[2].abs() > 1e-7 {
+            if position[0].abs() > FLAG_EPS
+                || position[1].abs() > FLAG_EPS
+                || position[2].abs() > FLAG_EPS
+            {
                 flags |= GRANNY_HAS_POSITION;
             }
-            if (orientation[0].abs() > 1e-7)
-                || (orientation[1].abs() > 1e-7)
-                || (orientation[2].abs() > 1e-7)
-                || ((orientation[3] - 1.0).abs() > 1e-7)
+            if (orientation[0].abs() > FLAG_EPS)
+                || (orientation[1].abs() > FLAG_EPS)
+                || (orientation[2].abs() > FLAG_EPS)
+                || ((orientation[3] - 1.0).abs() > FLAG_EPS)
             {
                 flags |= GRANNY_HAS_ORIENTATION;
             }
-            let is_identity_scale = (scale_shear[0][0] - 1.0).abs() < 1e-5
-                && scale_shear[0][1].abs() < 1e-5
-                && scale_shear[0][2].abs() < 1e-5
-                && scale_shear[1][0].abs() < 1e-5
-                && (scale_shear[1][1] - 1.0).abs() < 1e-5
-                && scale_shear[1][2].abs() < 1e-5
-                && scale_shear[2][0].abs() < 1e-5
-                && scale_shear[2][1].abs() < 1e-5
-                && (scale_shear[2][2] - 1.0).abs() < 1e-5;
+            let is_identity_scale = (scale_shear[0][0] - 1.0).abs() < FLAG_EPS
+                && scale_shear[0][1].abs() < FLAG_EPS
+                && scale_shear[0][2].abs() < FLAG_EPS
+                && scale_shear[1][0].abs() < FLAG_EPS
+                && (scale_shear[1][1] - 1.0).abs() < FLAG_EPS
+                && scale_shear[1][2].abs() < FLAG_EPS
+                && scale_shear[2][0].abs() < FLAG_EPS
+                && scale_shear[2][1].abs() < FLAG_EPS
+                && (scale_shear[2][2] - 1.0).abs() < FLAG_EPS;
             if !is_identity_scale {
                 flags |= GRANNY_HAS_SCALE_SHEAR;
             }

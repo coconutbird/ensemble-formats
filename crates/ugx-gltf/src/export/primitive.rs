@@ -80,17 +80,28 @@ pub(crate) fn create_primitive(
         json::Index::new(pos_accessor_idx),
     );
 
-    // Write normals (normalized to unit length for glTF compliance)
+    // Write normals (normalized to unit length for glTF compliance).
+    //
+    // Skip normalization when the length is already within 0.5% of 1.0.
+    // This preserves Dec3N (10-bit) packed normals through the glTF roundtrip:
+    // Dec3N unpack gives values ≈ ±int/511, whose vector length deviates from
+    // 1.0 by at most ~0.2%.  Re-normalizing would change the float values just
+    // enough to produce different 10-bit integers when re-packed.
     let norm_view_idx = buffer_views.len() as u32;
     let norm_offset = buffer_data.len();
     for v in vertices {
-        let len =
-            (v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1] + v.normal[2] * v.normal[2])
-                .sqrt();
-        let (nx, ny, nz) = if len > 1e-6 {
-            (v.normal[0] / len, v.normal[1] / len, v.normal[2] / len)
-        } else {
+        let len_sq =
+            v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1] + v.normal[2] * v.normal[2];
+        let (nx, ny, nz) = if len_sq < 1e-12 {
+            // Zero-length → fall back to up
             (0.0, 1.0, 0.0)
+        } else if (len_sq - 1.0).abs() < 0.01 {
+            // Already near unit length — pass through unchanged
+            (v.normal[0], v.normal[1], v.normal[2])
+        } else {
+            // Genuinely non-unit — normalize
+            let len = len_sq.sqrt();
+            (v.normal[0] / len, v.normal[1] / len, v.normal[2] / len)
         };
         buffer_data.extend_from_slice(&nx.to_le_bytes());
         buffer_data.extend_from_slice(&ny.to_le_bytes());
@@ -187,16 +198,18 @@ pub(crate) fn create_primitive(
         let tangent_view_idx = buffer_views.len() as u32;
         let tangent_offset = buffer_data.len();
         for v in vertices {
-            // glTF requires unit-length tangent xyz. UGX tangents may not be
-            // normalized (e.g. HWDE stores them at length 0.5).
-            let len = (v.tangent[0] * v.tangent[0]
+            // glTF requires unit-length tangent xyz.
+            // Same near-unit tolerance as normals to preserve Dec3N fidelity.
+            let len_sq = v.tangent[0] * v.tangent[0]
                 + v.tangent[1] * v.tangent[1]
-                + v.tangent[2] * v.tangent[2])
-                .sqrt();
-            let (tx, ty, tz) = if len > 1e-6 {
-                (v.tangent[0] / len, v.tangent[1] / len, v.tangent[2] / len)
-            } else {
+                + v.tangent[2] * v.tangent[2];
+            let (tx, ty, tz) = if len_sq < 1e-12 {
                 (1.0, 0.0, 0.0)
+            } else if (len_sq - 1.0).abs() < 0.01 {
+                (v.tangent[0], v.tangent[1], v.tangent[2])
+            } else {
+                let len = len_sq.sqrt();
+                (v.tangent[0] / len, v.tangent[1] / len, v.tangent[2] / len)
             };
             buffer_data.extend_from_slice(&tx.to_le_bytes());
             buffer_data.extend_from_slice(&ty.to_le_bytes());

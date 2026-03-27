@@ -1,6 +1,6 @@
 //! Material import from glTF.
 
-use ugx::{Map, MapType, Material};
+use ugx::{HoganMaterialData, Map, MapType, Material, ShaderPermutation};
 
 /// Resolve a glTF texture index to the image URI (or name as fallback).
 fn resolve_texture_uri(root: &gltf_json::Root, texture_idx: usize) -> String {
@@ -96,6 +96,7 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
 
             Material {
                 name: mat.name.clone().unwrap_or_default(),
+                material_version: mat_extras.material_version.unwrap_or(4),
                 maps: final_maps,
                 // Prefer extras values; fall back to PBR-derived
                 spec_power: mat_extras.spec_power.unwrap_or((1.0 - roughness) * 100.0),
@@ -109,6 +110,7 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 env_fresnel: mat_extras.env_fresnel.unwrap_or(0.5),
                 env_fresnel_power: mat_extras.env_fresnel_power.unwrap_or(4.0),
                 accessory_index: mat_extras.accessory_index.unwrap_or(0),
+                hogan: mat_extras.hogan,
             }
         })
         .collect()
@@ -128,6 +130,8 @@ struct MaterialExtras {
     env_fresnel_power: Option<f32>,
     accessory_index: Option<u32>,
     opacity: Option<f32>,
+    material_version: Option<u32>,
+    hogan: Option<HoganMaterialData>,
 }
 
 /// Read UGX material extras from glTF extras JSON.
@@ -148,6 +152,8 @@ fn read_material_extras(
         env_fresnel_power: None,
         accessory_index: None,
         opacity: None,
+        material_version: None,
+        hogan: None,
     };
 
     let raw = match extras {
@@ -207,6 +213,16 @@ fn read_material_extras(
         result.opacity = Some(v.as_f64().unwrap_or(1.0) as f32);
     }
 
+    // Read material version
+    if let Some(v) = obj.get("ugx_material_version") {
+        result.material_version = Some(v.as_u64().unwrap_or(4) as u32);
+    }
+
+    // Read Hogan material data (HW2)
+    if let Some(serde_json::Value::Object(hogan_obj)) = obj.get("ugx_hogan") {
+        result.hogan = Some(parse_hogan_extras(hogan_obj));
+    }
+
     // Read UVW velocity
     if let Some(serde_json::Value::Array(arr)) = obj.get("ugx_uvw_velocity") {
         for (i, val) in arr.iter().enumerate() {
@@ -253,4 +269,47 @@ fn read_material_extras(
     }
 
     result
+}
+
+/// Parse HW2 Hogan material data from glTF extras JSON.
+fn parse_hogan_extras(obj: &serde_json::Map<String, serde_json::Value>) -> HoganMaterialData {
+    let mut perms = Vec::new();
+    if let Some(serde_json::Value::Array(arr)) = obj.get("shader_permutations") {
+        for entry in arr {
+            if let serde_json::Value::Object(p) = entry {
+                let name = p
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let hash = p.get("hash").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                perms.push(ShaderPermutation { name, hash });
+            }
+        }
+    }
+
+    HoganMaterialData {
+        shader_permutations: perms,
+        ufx_version: obj.get("ufx_version").and_then(|v| v.as_u64()).unwrap_or(9) as u32,
+        blend_mode: obj.get("blend_mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        shadow_requires_consts: obj
+            .get("shadow_requires_consts")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        skinned: obj
+            .get("skinned")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        terrain_blending: obj
+            .get("terrain_blending")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        vs_cb_data: obj.get("vs_cb_data").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        ps_cb_data: obj.get("ps_cb_data").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        textures: obj
+            .get("textures")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    }
 }

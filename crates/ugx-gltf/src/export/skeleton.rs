@@ -435,14 +435,13 @@ pub(crate) fn create_skeleton_nodes_from_granny(
 
 /// Build glTF node extras for a bone's Granny data.
 ///
-/// Stores local_transform, lod_error, and extended data (type + variant)
-/// as JSON so they survive a glTF roundtrip.
+/// Stores lod_error and extended data (type + variant) as JSON so they
+/// survive a glTF roundtrip. Local transforms are NOT stored — the writer
+/// recomputes them from inverse world matrices on import.
 fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
     let has_extended = bone.extended_data.is_some() && bone.extended_data_type.is_some();
     let has_lod_error = bone.lod_error != 0.0;
 
-    // granny_local_transform is NOT stored — the writer recomputes it from
-    // inverse world matrices via compute_fallback_local_transforms().
     if !has_extended && !has_lod_error {
         return json::Extras::default();
     }
