@@ -400,15 +400,34 @@ fn generate_granny_meshes_from_vertices(
             continue;
         }
 
-        // Convert bone indices to bone names (with default OBB)
-        // bone_indices are 1-based, so subtract 1 to get the granny_bones index
+        // Collect rigid bone indices that implicitly own all their section's vertices
+        let mut rigid_bone_indices: std::collections::BTreeSet<u16> =
+            std::collections::BTreeSet::new();
+        for section in &sections[*start_section..*end_section] {
+            if (section.global_bones || section.rigid_only) && section.rigid_bone_index >= 0 {
+                let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
+                rigid_bone_indices.insert(bone_idx_1based);
+            }
+        }
+
+        // Convert bone indices to bone names and calculate OBBs from vertex data.
+        // bone_indices are 1-based, so subtract 1 to get the granny_bones index.
+        // OBB = bounding box of all vertices weighted to this bone, in bone-local space.
+        let mesh_verts = &vertices[*start_vertex..*end_vertex];
         let bone_bindings: Vec<GrannyBoneBinding> = used_bones
             .iter()
             .filter_map(|&idx| {
                 let idx_0based = (idx as usize).saturating_sub(1);
-                granny_bones.get(idx_0based).map(|b| GrannyBoneBinding {
-                    bone_name: b.name.clone(),
-                    ..Default::default()
+                granny_bones.get(idx_0based).map(|b| {
+                    let owns_all = rigid_bone_indices.contains(&idx);
+                    let (obb_min, obb_max) =
+                        compute_bone_obb(mesh_verts, idx, &b.inverse_world_matrix, owns_all);
+                    GrannyBoneBinding {
+                        bone_name: b.name.clone(),
+                        obb_min,
+                        obb_max,
+                        triangle_indices: Vec::new(),
+                    }
                 })
             })
             .collect();
@@ -422,6 +441,65 @@ fn generate_granny_meshes_from_vertices(
     }
 
     granny_meshes
+}
+
+/// Compute the OBB (oriented bounding box) for a bone from vertex data.
+///
+/// Finds all vertices weighted to `bone_idx_1based`, transforms their positions
+/// into bone-local space using the bone's `inverse_world_matrix`, and returns
+/// the axis-aligned min/max in that space.
+///
+/// When `owns_all` is true (rigid/global_bones sections), all vertices are
+/// considered bound to this bone regardless of their weight values.
+///
+/// If no vertices reference this bone, returns zeroed min/max.
+fn compute_bone_obb(
+    vertices: &[UnpackedVertex],
+    bone_idx_1based: u16,
+    inverse_world_matrix: &ugx::Matrix4x4,
+    owns_all: bool,
+) -> ([f32; 3], [f32; 3]) {
+    let mut min = [f32::MAX; 3];
+    let mut max = [f32::MIN; 3];
+    let mut found = false;
+
+    let m = &inverse_world_matrix.rows;
+
+    for v in vertices {
+        // Check if this vertex is weighted to this bone
+        let weighted = if owns_all {
+            true
+        } else {
+            (0..4).any(|k| v.bone_indices[k] == bone_idx_1based && v.bone_weights[k] > 0.0)
+        };
+        if !weighted {
+            continue;
+        }
+
+        // Transform position into bone-local space: p' = inverse_world_matrix * p
+        let px = v.position[0];
+        let py = v.position[1];
+        let pz = v.position[2];
+        let lx = m[0][0] * px + m[0][1] * py + m[0][2] * pz + m[0][3];
+        let ly = m[1][0] * px + m[1][1] * py + m[1][2] * pz + m[1][3];
+        let lz = m[2][0] * px + m[2][1] * py + m[2][2] * pz + m[2][3];
+
+        for (i, &val) in [lx, ly, lz].iter().enumerate() {
+            if val < min[i] {
+                min[i] = val;
+            }
+            if val > max[i] {
+                max[i] = val;
+            }
+        }
+        found = true;
+    }
+
+    if found {
+        (min, max)
+    } else {
+        ([0.0; 3], [0.0; 3])
+    }
 }
 
 /// Detect whether a set of vertices forms a "global_bones" section.

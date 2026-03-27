@@ -389,6 +389,34 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
         }
     }
 
+    // Granny mesh bone binding OBBs — verify non-zero when original has them
+    for (mi, om) in original.granny_meshes.iter().enumerate() {
+        let rm = re_read.granny_meshes.get(mi);
+        for ob in &om.bone_bindings {
+            let has_orig_obb =
+                ob.obb_min.iter().any(|&v| v != 0.0) || ob.obb_max.iter().any(|&v| v != 0.0);
+            if !has_orig_obb {
+                continue;
+            }
+            // The roundtripped mesh should also have a non-zero OBB for this bone
+            if let Some(rm) = rm
+                && let Some(rb) = rm
+                    .bone_bindings
+                    .iter()
+                    .find(|b| b.bone_name == ob.bone_name)
+            {
+                let has_rt_obb =
+                    rb.obb_min.iter().any(|&v| v != 0.0) || rb.obb_max.iter().any(|&v| v != 0.0);
+                if !has_rt_obb {
+                    fail!(
+                        "{label}: mesh {mi} bone '{}' OBB zeroed after roundtrip",
+                        ob.bone_name
+                    );
+                }
+            }
+        }
+    }
+
     // Material flags and UVW velocity
     for (mi, (om, rm)) in original
         .materials
