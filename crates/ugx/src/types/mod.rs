@@ -29,7 +29,7 @@ pub mod section;
 
 // Re-export all public types for convenient access.
 pub use aabb_tree::{AabbTree, AabbTreeNode};
-pub use bone::{Bone, GrannyBone, GrannyMesh};
+pub use bone::{Bone, GrannyBone, GrannyMemberType, GrannyMesh, GrannyTypeMember, GrannyVariant};
 pub use material::{Map, MapType, Material};
 pub use primitives::{AABB, Keyframe, Sphere};
 pub use section::Section;

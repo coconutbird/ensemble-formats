@@ -17,5 +17,7 @@
 mod export;
 pub use export::{GltfExport, GltfExportOptions, export_to_gltf, export_to_gltf_with_buffer_name};
 
+mod granny_json;
+
 mod import;
 pub use import::{GltfImportOptions, import_from_gltf};

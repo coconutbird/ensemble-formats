@@ -59,6 +59,17 @@ impl Writer {
 
     /// Add an uncompressed chunk with specific alignment.
     pub fn add_chunk_with_alignment(&mut self, id: u64, data: Vec<u8>, alignment_log2: u8) {
+        self.add_chunk_full(id, data, alignment_log2, 0);
+    }
+
+    /// Add an uncompressed chunk with specific alignment and resource flags.
+    pub fn add_chunk_full(
+        &mut self,
+        id: u64,
+        data: Vec<u8>,
+        alignment_log2: u8,
+        resource_flags: u16,
+    ) {
         let chunk = EcfChunkHeader {
             id,
             offset: 0,
@@ -66,7 +77,7 @@ impl Writer {
             adler32: adler32(&data),
             flags: 0,
             alignment_log2,
-            resource_flags: 0,
+            resource_flags,
         };
         self.chunks.push((chunk, data));
     }

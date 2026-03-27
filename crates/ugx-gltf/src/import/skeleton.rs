@@ -2,6 +2,8 @@
 
 use ugx::{Bone, GrannyBone, Matrix4x4, Result};
 
+use crate::granny_json::{json_to_type_members, json_to_variant};
+
 use super::accessor::read_accessor_f32;
 
 /// Import skeleton from glTF skin.
@@ -86,12 +88,57 @@ pub(crate) fn import_skeleton(
             model_to_bone: model_to_bone.clone(),
         });
 
+        // Restore extended data from node extras if present
+        let (extended_data, extended_data_type) = read_bone_extras(&node.extras);
+
         granny_bones.push(GrannyBone {
             name,
             parent_index,
             inverse_world_matrix: model_to_bone,
+            extended_data,
+            extended_data_type,
         });
     }
 
     Ok((bones, granny_bones))
+}
+
+/// Read bone extended data from glTF node extras.
+///
+/// Returns `(extended_data, extended_data_type)` if the extras contain
+/// `granny_ext_type` and `granny_ext_data` keys written by our exporter.
+fn read_bone_extras(
+    extras: &gltf_json::Extras,
+) -> (
+    Option<ugx::GrannyVariant>,
+    Option<Vec<ugx::GrannyTypeMember>>,
+) {
+    let raw = match extras.as_ref() {
+        Some(raw) => raw,
+        None => return (None, None),
+    };
+
+    let val: serde_json::Value = match serde_json::from_str(raw.get()) {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
+
+    let type_val = match val.get("granny_ext_type") {
+        Some(v) => v,
+        None => return (None, None),
+    };
+
+    let data_val = match val.get("granny_ext_data") {
+        Some(v) => v,
+        None => return (None, None),
+    };
+
+    let type_members = match json_to_type_members(type_val) {
+        Some(m) => m,
+        None => return (None, None),
+    };
+
+    let variant = json_to_variant(data_val, &type_members);
+
+    (variant, Some(type_members))
 }

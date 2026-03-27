@@ -1,7 +1,8 @@
 //! Granny bones chunk (0x703) builder.
 //!
 //! Produces a Granny2-compatible serialized chunk with file info header,
-//! skeleton, bone array, mesh structs, bone bindings, and string table.
+//! skeleton, bone array, mesh structs, bone bindings, string table,
+//! and bone ExtendedData (type definitions + variant data).
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -15,7 +16,13 @@ use crate::raw::{
     GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_SIZE, GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION,
     GRANNY_HAS_SCALE_SHEAR, GRANNY_MESH_SIZE,
 };
-use crate::types::{Matrix4x4, UgxGeom};
+use crate::types::{GrannyMemberType, GrannyTypeMember, GrannyVariant, Matrix4x4, UgxGeom};
+
+/// Size of a single GrannyDataTypeDefinition on disk.
+const GRANNY_TYPE_DEF_STRIDE: usize = 44;
+
+/// Offset within a bone struct where ExtendedData {type_ptr, data_ptr} lives.
+const GRANNY_BONE_EXTENDED_DATA_OFFSET: usize = 0x94;
 
 /// Build the granny bones chunk (0x703).
 ///
@@ -351,5 +358,433 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // ---- Build string table and patch offsets ----
     strings.write(&mut buf);
 
+    // ---- Emit bone ExtendedData (type definitions + data blobs) ----
+    //
+    // For each bone that has extended_data, we emit:
+    //   1. A GrannyDataTypeDefinition[] array (type schema)
+    //   2. A data blob described by that schema
+    // Then patch the bone's ExtendedData pointers at bone+0x94.
+    //
+    // To deduplicate type definitions: bones that share the same type layout
+    // (same member names/types) share the same type def array.
+
+    // Collect unique type definitions and assign indices
+    let mut unique_type_defs: Vec<Vec<GrannyTypeMember>> = Vec::new();
+    let mut bone_ext_type_index: Vec<Option<usize>> = Vec::with_capacity(bone_count);
+
+    for bone in &geom.granny_bones {
+        if let Some(ref type_members) = bone.extended_data_type {
+            // Check if we already have this type layout
+            let idx = unique_type_defs
+                .iter()
+                .position(|existing| type_defs_equal(existing, type_members));
+            if let Some(idx) = idx {
+                bone_ext_type_index.push(Some(idx));
+            } else {
+                bone_ext_type_index.push(Some(unique_type_defs.len()));
+                unique_type_defs.push(type_members.clone());
+            }
+        } else {
+            bone_ext_type_index.push(None);
+        }
+    }
+
+    // Emit type definitions and collect their offsets
+    let mut type_def_offsets: Vec<usize> = Vec::with_capacity(unique_type_defs.len());
+    for type_members in &unique_type_defs {
+        // Align to 4 bytes
+        while !buf.len().is_multiple_of(4) {
+            buf.push(0);
+        }
+        let type_def_offset = buf.len();
+        type_def_offsets.push(type_def_offset);
+
+        // Emit each member + end terminator
+        // String pointers in type defs need fixups too
+        let mut type_strings = super::string_table::StringTable::new();
+        emit_type_def_array(&mut buf, &mut type_strings, type_members);
+
+        // Patch type def name pointers
+        type_strings.write(&mut buf);
+    }
+
+    // Emit data blobs for each bone's extended data
+    let mut bone_data_offsets: Vec<Option<usize>> = vec![None; bone_count];
+    for (i, bone) in geom.granny_bones.iter().enumerate() {
+        if let (Some(variant), Some(type_members)) = (&bone.extended_data, &bone.extended_data_type)
+        {
+            // Align to 4 bytes
+            while !buf.len().is_multiple_of(4) {
+                buf.push(0);
+            }
+            let data_offset = buf.len();
+            bone_data_offsets[i] = Some(data_offset);
+
+            let mut data_strings = super::string_table::StringTable::new();
+            emit_variant_data(&mut buf, &mut data_strings, variant, type_members);
+            data_strings.write(&mut buf);
+        }
+    }
+
+    // Patch bone ExtendedData pointers: bone+0x94 = {type_def_ptr, data_ptr}
+    for i in 0..bone_count {
+        let bone_base = bones_start + i * GRANNY_BONE_SIZE;
+        let ext_offset = bone_base + GRANNY_BONE_EXTENDED_DATA_OFFSET;
+
+        if let (Some(type_idx), Some(data_off)) = (bone_ext_type_index[i], bone_data_offsets[i]) {
+            let type_off = type_def_offsets[type_idx];
+            buf[ext_offset..ext_offset + 8].copy_from_slice(&(type_off as u64).to_le_bytes());
+            buf[ext_offset + 8..ext_offset + 16].copy_from_slice(&(data_off as u64).to_le_bytes());
+        }
+        // If no extended data, the 16 bytes at bone+0x94 stay as zeros (already initialized)
+    }
+
     Ok(buf)
+}
+
+// ---------------------------------------------------------------------------
+// ExtendedData emission helpers
+// ---------------------------------------------------------------------------
+
+/// Check if two type definition arrays have the same layout.
+fn type_defs_equal(a: &[GrannyTypeMember], b: &[GrannyTypeMember]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (ma, mb) in a.iter().zip(b.iter()) {
+        if ma.member_type != mb.member_type
+            || ma.name != mb.name
+            || ma.array_width != mb.array_width
+        {
+            return false;
+        }
+        match (&ma.reference_type, &mb.reference_type) {
+            (Some(ra), Some(rb)) => {
+                if !type_defs_equal(ra, rb) {
+                    return false;
+                }
+            }
+            (None, None) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Emit a GrannyDataTypeDefinition[] array (with End terminator) into `buf`.
+///
+/// Two-pass approach: first emit all entries contiguously (engine traverses
+/// with stride=44), then emit nested type arrays afterward and patch the
+/// ReferenceType pointers.
+fn emit_type_def_array(
+    buf: &mut Vec<u8>,
+    strings: &mut super::string_table::StringTable,
+    members: &[GrannyTypeMember],
+) {
+    // Pass 1: emit all 44-byte entries contiguously + End terminator.
+    // Collect (ref_type_pos, nested_members) for deferred emission.
+    let mut deferred: Vec<(usize, &[GrannyTypeMember])> = Vec::new();
+
+    for m in members {
+        let entry_start = buf.len();
+        // MemberType (u32)
+        buf.extend_from_slice(&(m.member_type as u32).to_le_bytes());
+        // Name (u64) — placeholder, patched by StringTable
+        let name_pos = buf.len();
+        buf.extend_from_slice(&0u64.to_le_bytes());
+        if !m.name.is_empty() {
+            strings.add(name_pos, m.name.clone());
+        }
+        // ReferenceType (u64) — placeholder, patched in pass 2
+        let ref_type_pos = buf.len();
+        buf.extend_from_slice(&0u64.to_le_bytes());
+        // ArrayWidth (u32)
+        buf.extend_from_slice(&m.array_width.to_le_bytes());
+        // Extra[3] (12 bytes)
+        for &e in &m.extra {
+            buf.extend_from_slice(&e.to_le_bytes());
+        }
+        // Unused[2] (8 bytes)
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+
+        debug_assert_eq!(buf.len() - entry_start, GRANNY_TYPE_DEF_STRIDE);
+
+        if let Some(ref nested) = m.reference_type
+            && !nested.is_empty()
+        {
+            deferred.push((ref_type_pos, nested));
+        }
+    }
+
+    // End terminator (44 bytes of zeros)
+    buf.extend_from_slice(&[0u8; GRANNY_TYPE_DEF_STRIDE]);
+
+    // Pass 2: emit deferred nested type arrays and patch ReferenceType pointers.
+    for (ref_type_pos, nested) in deferred {
+        let nested_offset = buf.len();
+        emit_type_def_array(buf, strings, nested);
+        buf[ref_type_pos..ref_type_pos + 8].copy_from_slice(&(nested_offset as u64).to_le_bytes());
+    }
+}
+
+/// Deferred pointer fixup for Reference/ReferenceToArray fields.
+struct DeferredRef<'a> {
+    ptr_pos: usize,
+    variant: &'a GrannyVariant,
+    nested_type: &'a [GrannyTypeMember],
+}
+
+struct DeferredRefArray<'a> {
+    ptr_pos: usize,
+    elements: &'a [(String, GrannyVariant)],
+    nested_type: &'a [GrannyTypeMember],
+}
+
+/// Emit variant data described by `members` into `buf`.
+///
+/// Two-pass approach: first emit all top-level fields contiguously (flat
+/// record), then emit deferred nested data (Reference, ReferenceToArray)
+/// and patch pointers back. This ensures the reader can traverse the flat
+/// record without hitting interleaved nested data.
+fn emit_variant_data(
+    buf: &mut Vec<u8>,
+    strings: &mut super::string_table::StringTable,
+    variant: &GrannyVariant,
+    members: &[GrannyTypeMember],
+) {
+    let fields = match variant {
+        GrannyVariant::Struct(fields) => fields,
+        _ => return,
+    };
+
+    // Pass 1: emit all flat fields; collect deferred refs.
+    let mut deferred_refs: Vec<DeferredRef> = Vec::new();
+    let mut deferred_arrs: Vec<DeferredRefArray> = Vec::new();
+
+    for (i, m) in members.iter().enumerate() {
+        let value = fields.get(i).map(|(_, v)| v);
+
+        match m.member_type {
+            GrannyMemberType::Real32 => {
+                let width = if m.array_width == 0 {
+                    1
+                } else {
+                    m.array_width as usize
+                };
+                if let Some(GrannyVariant::Real32(vals)) = value {
+                    for j in 0..width {
+                        let v = vals.get(j).copied().unwrap_or(0.0);
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                } else {
+                    for _ in 0..width {
+                        buf.extend_from_slice(&0.0f32.to_le_bytes());
+                    }
+                }
+            }
+            GrannyMemberType::Int8 | GrannyMemberType::BinormalInt8 => {
+                let width = if m.array_width == 0 {
+                    1
+                } else {
+                    m.array_width as usize
+                };
+                if let Some(GrannyVariant::Int8(vals)) = value {
+                    for j in 0..width {
+                        buf.push(vals.get(j).copied().unwrap_or(0) as u8);
+                    }
+                } else {
+                    buf.extend_from_slice(&vec![0u8; width]);
+                }
+            }
+            GrannyMemberType::UInt8 | GrannyMemberType::NormalUInt8 => {
+                let width = if m.array_width == 0 {
+                    1
+                } else {
+                    m.array_width as usize
+                };
+                if let Some(GrannyVariant::UInt8(vals)) = value {
+                    for j in 0..width {
+                        buf.push(vals.get(j).copied().unwrap_or(0));
+                    }
+                } else {
+                    buf.extend_from_slice(&vec![0u8; width]);
+                }
+            }
+            GrannyMemberType::Int16 | GrannyMemberType::BinormalInt16 => {
+                let width = if m.array_width == 0 {
+                    1
+                } else {
+                    m.array_width as usize
+                };
+                if let Some(GrannyVariant::Int16(vals)) = value {
+                    for j in 0..width {
+                        let v = vals.get(j).copied().unwrap_or(0);
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                } else {
+                    for _ in 0..width {
+                        buf.extend_from_slice(&0i16.to_le_bytes());
+                    }
+                }
+            }
+            GrannyMemberType::UInt16
+            | GrannyMemberType::NormalUInt16
+            | GrannyMemberType::Real16 => {
+                let width = if m.array_width == 0 {
+                    1
+                } else {
+                    m.array_width as usize
+                };
+                if let Some(GrannyVariant::UInt16(vals)) = value {
+                    for j in 0..width {
+                        let v = vals.get(j).copied().unwrap_or(0);
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                } else {
+                    for _ in 0..width {
+                        buf.extend_from_slice(&0u16.to_le_bytes());
+                    }
+                }
+            }
+            GrannyMemberType::StringMember => {
+                let str_pos = buf.len();
+                buf.extend_from_slice(&0u64.to_le_bytes());
+                if let Some(GrannyVariant::StringVal(s)) = value
+                    && !s.is_empty()
+                {
+                    strings.add(str_pos, s.clone());
+                }
+            }
+            GrannyMemberType::Reference => {
+                // 8-byte pointer placeholder
+                let ptr_pos = buf.len();
+                buf.extend_from_slice(&0u64.to_le_bytes());
+                if let Some(GrannyVariant::Reference(Some(nested))) = value
+                    && let Some(ref nested_type) = m.reference_type
+                {
+                    deferred_refs.push(DeferredRef {
+                        ptr_pos,
+                        variant: nested,
+                        nested_type,
+                    });
+                }
+            }
+            GrannyMemberType::VariantReference => {
+                // 16 bytes: type_def_ptr + data_ptr (leave as zeros)
+                buf.extend_from_slice(&0u64.to_le_bytes());
+                buf.extend_from_slice(&0u64.to_le_bytes());
+            }
+            GrannyMemberType::Inline => {
+                if let Some(ref nested_type) = m.reference_type {
+                    if let Some(nested_val) = value {
+                        emit_variant_data(buf, strings, nested_val, nested_type);
+                    } else {
+                        let size = compute_type_size(nested_type);
+                        buf.extend_from_slice(&vec![0u8; size]);
+                    }
+                }
+            }
+            GrannyMemberType::Transform => {
+                let size = 68
+                    * (if m.array_width == 0 {
+                        1
+                    } else {
+                        m.array_width as usize
+                    });
+                if let Some(GrannyVariant::RawBytes(raw)) = value {
+                    buf.extend_from_slice(raw);
+                    if raw.len() < size {
+                        buf.extend_from_slice(&vec![0u8; size - raw.len()]);
+                    }
+                } else {
+                    buf.extend_from_slice(&vec![0u8; size]);
+                }
+            }
+            GrannyMemberType::ReferenceToArray => {
+                // u32 count + u64 pointer placeholders
+                let count_pos = buf.len();
+                buf.extend_from_slice(&0u32.to_le_bytes());
+                let ptr_pos = buf.len();
+                buf.extend_from_slice(&0u64.to_le_bytes());
+
+                if let Some(GrannyVariant::Reference(Some(nested))) = value
+                    && let GrannyVariant::Struct(elements) = nested.as_ref()
+                    && let Some(ref nested_type) = m.reference_type
+                {
+                    // Patch count now (it's part of the flat record)
+                    buf[count_pos..count_pos + 4]
+                        .copy_from_slice(&(elements.len() as u32).to_le_bytes());
+                    deferred_arrs.push(DeferredRefArray {
+                        ptr_pos,
+                        elements,
+                        nested_type,
+                    });
+                }
+            }
+            GrannyMemberType::EmptyReference | GrannyMemberType::End => {
+                // No data to emit
+            }
+            _ => {
+                // Unknown type — emit zeros based on unit size
+                let size = m.member_type.unit_size().unwrap_or(0)
+                    * (if m.array_width == 0 {
+                        1
+                    } else {
+                        m.array_width as usize
+                    });
+                buf.extend_from_slice(&vec![0u8; size]);
+            }
+        }
+    }
+
+    // Pass 2: emit deferred Reference data and patch pointers.
+    for dr in deferred_refs {
+        while !buf.len().is_multiple_of(4) {
+            buf.push(0);
+        }
+        let nested_offset = buf.len();
+        let mut nested_strings = super::string_table::StringTable::new();
+        emit_variant_data(buf, &mut nested_strings, dr.variant, dr.nested_type);
+        nested_strings.write(buf);
+        buf[dr.ptr_pos..dr.ptr_pos + 8].copy_from_slice(&(nested_offset as u64).to_le_bytes());
+    }
+
+    // Pass 2b: emit deferred ReferenceToArray data and patch pointers.
+    for da in deferred_arrs {
+        while !buf.len().is_multiple_of(4) {
+            buf.push(0);
+        }
+        let arr_offset = buf.len();
+        buf[da.ptr_pos..da.ptr_pos + 8].copy_from_slice(&(arr_offset as u64).to_le_bytes());
+        for (_, elem) in da.elements {
+            let mut elem_strings = super::string_table::StringTable::new();
+            emit_variant_data(buf, &mut elem_strings, elem, da.nested_type);
+            elem_strings.write(buf);
+        }
+    }
+}
+
+/// Compute the total byte size of a type definition (sum of all member sizes).
+fn compute_type_size(members: &[GrannyTypeMember]) -> usize {
+    let mut total = 0;
+    for m in members {
+        let unit = match m.member_type {
+            GrannyMemberType::Inline => {
+                if let Some(ref nested) = m.reference_type {
+                    compute_type_size(nested)
+                } else {
+                    0
+                }
+            }
+            other => other.unit_size().unwrap_or(0),
+        };
+        let width = if m.array_width == 0 {
+            1
+        } else {
+            m.array_width as usize
+        };
+        total += unit * width;
+    }
+    total
 }

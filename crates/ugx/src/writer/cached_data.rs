@@ -184,14 +184,32 @@ fn write_sections(
     let num_sections = geom.sections.len() as u32;
     let mut bone_remap_fixups: Vec<(usize, usize)> = Vec::new();
 
+    // Compute instanced ib_offsets: when max_instances > 1, the index buffer
+    // contains repeated copies of each section's indices, so the offset for
+    // section N = sum of (num_tris * 3 * max_instances) for sections 0..N.
+    let max_inst = geom.max_instances.max(1) as i32;
+    let mut instanced_ib_offsets = Vec::with_capacity(geom.sections.len());
+    let mut running_ib_offset = 0i32;
+    for section in &geom.sections {
+        instanced_ib_offsets.push(running_ib_offset);
+        running_ib_offset += section.num_tris * 3 * max_inst;
+    }
+
     for (section_idx, section) in geom.sections.iter().enumerate() {
+        // Use instanced ib_offset when max_instances > 1, otherwise use as-is.
+        let ib_offset = if max_inst > 1 {
+            instanced_ib_offsets[section_idx]
+        } else {
+            section.ib_offset
+        };
+
         // Fixed section fields (40 bytes, shared by both versions).
         let fixed = crate::raw::PackedSectionFixedRaw {
             material_index: section.material_index.to_le_bytes(),
             accessory_index: section.accessory_index.to_le_bytes(),
             max_bones: section.max_bones.to_le_bytes(),
             rigid_bone_index: section.rigid_bone_index.to_le_bytes(),
-            ib_offset: section.ib_offset.to_le_bytes(),
+            ib_offset: ib_offset.to_le_bytes(),
             num_tris: section.num_tris.to_le_bytes(),
             vb_offset: section.vb_offset.to_le_bytes(),
             vb_bytes: section.vb_bytes.to_le_bytes(),

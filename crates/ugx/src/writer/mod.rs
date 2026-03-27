@@ -47,6 +47,12 @@ impl UgxGeom {
 }
 
 /// Write a UGX geometry to bytes (ECF container).
+///
+/// Chunk ordering matches the original engine output:
+///   0x703 (granny) → 0x700 (cached) → 0x702 (VB) → 0x701 (IB) → 0x704 (materials) [→ 0x705 (AABB)]
+///
+/// VB and IB chunks use CONTIGUOUS resource flag and 32-byte alignment (align=5)
+/// to match the original layout expected by the engine.
 fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
     let cached_data = cached_data::build_cached_data(geom, version)?;
     let ib_data = build_index_buffer(geom);
@@ -54,23 +60,41 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
     // ECF file ID 0xAAC93746 is required for UGX files - the game validates this in BGrannyModel::load
     let mut ecf = ecf::Writer::new(0xAAC93746);
 
-    ecf.add_chunk(ECF_CACHED_DATA_CHUNK_ID, cached_data);
-    ecf.add_chunk(ECF_IB_CHUNK_ID, ib_data);
-    ecf.add_chunk(ECF_VB_CHUNK_ID, geom.vertex_buffer.clone());
+    // Chunk order: granny → cached → VB → IB → materials [→ AABB]
+    // This matches the original engine output ordering.
 
-    // Write granny bones chunk if we have granny bone data
+    // 0x703 — granny bones (first, no special flags)
     if !geom.granny_bones.is_empty() {
         let granny_data = granny::build_granny_data(geom)?;
         ecf.add_chunk(ECF_GRANNY_CHUNK_ID, granny_data);
     }
 
-    // Write materials chunk if we have materials
+    // 0x700 — cached data (header, sections, bones, accessories)
+    ecf.add_chunk(ECF_CACHED_DATA_CHUNK_ID, cached_data);
+
+    // 0x702 — vertex buffer (CONTIGUOUS, 32-byte aligned)
+    ecf.add_chunk_full(
+        ECF_VB_CHUNK_ID,
+        geom.vertex_buffer.clone(),
+        5, // align=5 → 32-byte alignment
+        ecf::resource_flags::CONTIGUOUS,
+    );
+
+    // 0x701 — index buffer (CONTIGUOUS, 32-byte aligned)
+    ecf.add_chunk_full(
+        ECF_IB_CHUNK_ID,
+        ib_data,
+        5, // align=5 → 32-byte alignment
+        ecf::resource_flags::CONTIGUOUS,
+    );
+
+    // 0x704 — materials
     if !geom.materials.is_empty() {
         let mat_data = material::build_material_data(geom)?;
-        ecf.add_chunk(ECF_MATERIAL_CHUNK_ID, mat_data);
+        ecf.add_chunk_with_alignment(ECF_MATERIAL_CHUNK_ID, mat_data, 2);
     }
 
-    // AABB tree chunk (0x705) — only for versions that include it
+    // 0x705 — AABB tree (only for versions that include it)
     if version.has_aabb_tree()
         && let Some(ref tree) = geom.aabb_tree
     {
@@ -82,11 +106,45 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
 }
 
 /// Build the index buffer chunk (0x701).
+///
+/// When `max_instances > 1`, the engine expects instanced copies of each
+/// section's indices in the buffer. Each instance's indices are offset by
+/// `instance_index_multiplier` (iim) so the engine can render multiple
+/// copies in a single draw call.
+///
+/// Layout per section: `[base_indices | inst1_indices | inst2_indices | ...]`
+/// padded so each section starts at `iim`-aligned boundaries.
 fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
-    for &idx in &geom.index_buffer {
-        buf.write_u16_le(idx).unwrap();
+    let max_inst = geom.max_instances.max(1) as usize;
+    let iim = geom.instance_index_multiplier as u32;
+
+    if max_inst <= 1 || iim == 0 {
+        // No instancing — just write raw indices
+        let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
+        for &idx in &geom.index_buffer {
+            buf.write_u16_le(idx).unwrap();
+        }
+        return buf;
     }
+
+    // Build instanced index buffer.
+    // Each section's indices are repeated `max_instances` times, each copy
+    // offset by `iim * instance_number`. Sections are placed so that
+    // section N's base offset = sum of (max_instances * iim) for all prior sections.
+    let mut buf = Vec::new();
+    for section in &geom.sections {
+        let start = section.ib_offset as usize;
+        let count = section.num_tris as usize * 3;
+        let base_indices = &geom.index_buffer[start..start + count];
+
+        for inst in 0..max_inst {
+            let offset = iim * inst as u32;
+            for &idx in base_indices {
+                buf.write_u16_le(idx + offset as u16).unwrap();
+            }
+        }
+    }
+
     buf
 }
 
@@ -412,6 +470,8 @@ mod tests {
                         [0.0, 0.0, 0.0, 1.0],
                     ],
                 },
+                extended_data: None,
+                extended_data_type: None,
             },
             GrannyBone {
                 name: "spine".to_string(),
@@ -424,6 +484,8 @@ mod tests {
                         [0.5, -2.0, 1.5, 1.0],
                     ],
                 },
+                extended_data: None,
+                extended_data_type: None,
             },
         ];
 

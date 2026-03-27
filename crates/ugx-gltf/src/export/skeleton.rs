@@ -6,6 +6,7 @@
 use gltf_json as json;
 use json::validation::Checked::Valid;
 
+use crate::granny_json::{type_members_to_json, variant_to_json};
 use ugx::{Bone, GrannyBone, UgxGeom};
 
 /// Build a mapping from section index to mesh index.
@@ -329,6 +330,9 @@ pub(crate) fn create_skeleton_nodes_from_granny(
             m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2], m[3][3],
         ];
 
+        // Serialize extended data into node extras if present
+        let extras = build_bone_extras(bone);
+
         nodes.push(json::Node {
             camera: None,
             children: if children.as_ref().is_none_or(|c| c.is_empty()) {
@@ -337,7 +341,7 @@ pub(crate) fn create_skeleton_nodes_from_granny(
                 children
             },
             extensions: None,
-            extras: json::Extras::default(),
+            extras,
             matrix: Some(gltf_matrix),
             mesh: None,
             name: Some(bone.name.clone()),
@@ -400,4 +404,21 @@ pub(crate) fn create_skeleton_nodes_from_granny(
     });
 
     (nodes, ibm_accessor_idx)
+}
+
+/// Build glTF node extras for a bone's extended data.
+///
+/// Stores the Granny2 type definition and variant data as JSON so they
+/// survive a glTF roundtrip.
+fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
+    let (Some(data), Some(type_members)) = (&bone.extended_data, &bone.extended_data_type) else {
+        return json::Extras::default();
+    };
+
+    let mut map = serde_json::Map::new();
+    map.insert("granny_ext_type".into(), type_members_to_json(type_members));
+    map.insert("granny_ext_data".into(), variant_to_json(data));
+
+    let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
+    Some(serde_json::value::RawValue::from_string(raw).unwrap())
 }

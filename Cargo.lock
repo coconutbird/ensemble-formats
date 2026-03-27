@@ -1352,6 +1352,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "byteorder",
+ "ecf",
  "gltf",
  "gltf-json",
  "half",

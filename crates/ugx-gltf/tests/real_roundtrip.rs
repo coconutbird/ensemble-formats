@@ -1843,6 +1843,223 @@ fn diagnose_hw1_vanilla() {
         }
     };
 
+    // Dump original ECF structure
+    {
+        let ecf = ecf::Reader::new(&data).unwrap();
+        eprintln!(
+            "\n=== ORIGINAL ECF ({} bytes, {} chunks) ===",
+            data.len(),
+            ecf.chunks().len()
+        );
+        for (i, ch) in ecf.chunks().iter().enumerate() {
+            let raw = ecf.raw_chunk_data(i).unwrap();
+            let dec = ecf.chunk_data(i).unwrap();
+            eprintln!(
+                "  chunk[{}]: id=0x{:X} raw={} dec={} flags=0x{:X} res_flags=0x{:X} align={}",
+                i,
+                ch.id,
+                raw.len(),
+                dec.len(),
+                ch.flags,
+                ch.resource_flags,
+                ch.alignment_log2
+            );
+        }
+        // Dump granny file_info header to see what structures exist
+        if let Some(granny_idx) = ecf.chunks().iter().position(|c| c.id == 0x703) {
+            let granny = ecf.chunk_data(granny_idx).unwrap();
+            eprintln!(
+                "\n=== GRANNY FILE_INFO HEADER (0x703, {} bytes) ===",
+                granny.len()
+            );
+            // file_info layout (from Granny2 SDK):
+            // +0x00: ArtToolInfo ptr
+            // +0x08: ExporterInfo ptr
+            // +0x10: FilenameStr ptr
+            // +0x18: TextureCount + Textures ptr
+            // +0x24: MaterialCount + Materials ptr
+            // +0x30: SkeletonCount + Skeletons ptr
+            // +0x3C: VertexDataCount + VertexDatas ptr
+            // +0x48: TriTopologyCount + TriTopologies ptr
+            // +0x54: MeshCount + Meshes ptr
+            // +0x60: ModelCount + Models ptr
+            // +0x6C: TrackGroupCount + TrackGroups ptr
+            // +0x78: AnimationCount + Animations ptr
+            // +0x84: ExtendedDataCount + ExtendedData ptr (varies)
+            let read_u32 = |off: usize| -> u32 {
+                if off + 4 <= granny.len() {
+                    u32::from_le_bytes(granny[off..off + 4].try_into().unwrap())
+                } else {
+                    0
+                }
+            };
+            let read_u64 = |off: usize| -> u64 {
+                if off + 8 <= granny.len() {
+                    u64::from_le_bytes(granny[off..off + 8].try_into().unwrap())
+                } else {
+                    0
+                }
+            };
+            eprintln!("  +0x00 ArtToolInfo ptr:    0x{:X}", read_u64(0x00));
+            eprintln!("  +0x08 ExporterInfo ptr:   0x{:X}", read_u64(0x08));
+            eprintln!("  +0x10 Filename ptr:       0x{:X}", read_u64(0x10));
+            eprintln!("  +0x18 TextureCount:       {}", read_u32(0x18));
+            eprintln!("  +0x1C Textures ptr:       0x{:X}", read_u64(0x1C));
+            eprintln!("  +0x24 MaterialCount:      {}", read_u32(0x24));
+            eprintln!("  +0x28 Materials ptr:       0x{:X}", read_u64(0x28));
+            eprintln!("  +0x30 SkeletonCount:      {}", read_u32(0x30));
+            eprintln!("  +0x34 Skeletons ptr:      0x{:X}", read_u64(0x34));
+            eprintln!("  +0x3C VertexDataCount:    {}", read_u32(0x3C));
+            eprintln!("  +0x40 VertexDatas ptr:    0x{:X}", read_u64(0x40));
+            eprintln!("  +0x48 TriTopologyCount:   {}", read_u32(0x48));
+            eprintln!("  +0x4C TriTopologies ptr:  0x{:X}", read_u64(0x4C));
+            eprintln!("  +0x54 MeshCount:          {}", read_u32(0x54));
+            eprintln!("  +0x58 Meshes ptr:         0x{:X}", read_u64(0x58));
+            eprintln!("  +0x60 ModelCount:         {}", read_u32(0x60));
+            eprintln!("  +0x64 Models ptr:         0x{:X}", read_u64(0x64));
+            eprintln!("  +0x6C TrackGroupCount:    {}", read_u32(0x6C));
+            eprintln!("  +0x70 TrackGroups ptr:    0x{:X}", read_u64(0x70));
+            eprintln!("  +0x78 AnimationCount:     {}", read_u32(0x78));
+            eprintln!("  +0x7C Animations ptr:     0x{:X}", read_u64(0x7C));
+            eprintln!("  +0x84 ExtDataCount:       {}", read_u32(0x84));
+            eprintln!("  +0x88 ExtData ptr:        0x{:X}", read_u64(0x88));
+            // Dump the skeleton's bone count
+            let skel_ptr_arr = read_u64(0x34) as usize;
+            if skel_ptr_arr + 8 <= granny.len() {
+                let skel_offs = read_u64(skel_ptr_arr) as usize;
+                if skel_offs + 0x18 <= granny.len() {
+                    let bone_count = read_u32(skel_offs + 0x08);
+                    let bones_ptr = read_u64(skel_offs + 0x0C);
+                    let bones_end = bones_ptr as usize + bone_count as usize * 164;
+                    eprintln!(
+                        "  Skeleton: bone_count={} bones_ptr=0x{:X} bones_end=0x{:X}",
+                        bone_count, bones_ptr, bones_end
+                    );
+                }
+            }
+            // Dump model mesh binding info
+            let model_ptr_arr = read_u64(0x64) as usize;
+            if model_ptr_arr + 8 <= granny.len() {
+                let model_offs = read_u64(model_ptr_arr) as usize;
+                if model_offs + 0x60 <= granny.len() {
+                    let mb_count = read_u32(model_offs + 0x54);
+                    let mb_ptr = read_u64(model_offs + 0x58);
+                    eprintln!(
+                        "  Model: MeshBindingCount={} MeshBindings=0x{:X}",
+                        mb_count, mb_ptr
+                    );
+                    // Dump each mesh binding -> mesh struct
+                    for mi in 0..mb_count as usize {
+                        let bp = mb_ptr as usize + mi * 8;
+                        if bp + 8 <= granny.len() {
+                            let mesh_ptr = read_u64(bp) as usize;
+                            if mesh_ptr + 0x4C <= granny.len() {
+                                let bb_count = read_u32(mesh_ptr + 0x30);
+                                let bb_ptr = read_u64(mesh_ptr + 0x34);
+                                eprintln!(
+                                    "    mesh[{}] at 0x{:X}: BoneBindingCount={} ptr=0x{:X}",
+                                    mi, mesh_ptr, bb_count, bb_ptr
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            // Dump mesh ptr array
+            let mesh_ptr_arr = read_u64(0x58) as usize;
+            let mesh_count = read_u32(0x54) as usize;
+            eprintln!(
+                "  file_info Meshes: count={} ptr_array=0x{:X}",
+                mesh_count, mesh_ptr_arr
+            );
+            for mi in 0..mesh_count {
+                let mp = mesh_ptr_arr + mi * 8;
+                if mp + 8 <= granny.len() {
+                    let mesh_ptr = read_u64(mp) as usize;
+                    if mesh_ptr + 0x4C <= granny.len() {
+                        let bb_count = read_u32(mesh_ptr + 0x30);
+                        let bb_ptr = read_u64(mesh_ptr + 0x34);
+                        eprintln!(
+                            "    fimesh[{}] at 0x{:X}: BoneBindingCount={} ptr=0x{:X}",
+                            mi, mesh_ptr, bb_count, bb_ptr
+                        );
+                    }
+                }
+            }
+            // Check bones' ExtendedData fields
+            let skel_offs2 = read_u64(skel_ptr_arr) as usize;
+            let bone_count2 = read_u32(skel_offs2 + 0x08) as usize;
+            let bones_ptr2 = read_u64(skel_offs2 + 0x0C) as usize;
+            let bones_end2 = bones_ptr2 + bone_count2 * 164;
+            eprintln!("  Bone ExtendedData pointers:");
+            let mut ext_data_ptrs = std::collections::BTreeSet::new();
+            for bi in 0..bone_count2 {
+                let boff = bones_ptr2 + bi * 164;
+                let ext_type_ptr = read_u64(boff + 0x94);
+                let ext_data_ptr = read_u64(boff + 0x9C);
+                if ext_type_ptr != 0 || ext_data_ptr != 0 {
+                    eprintln!(
+                        "    bone[{}]: ExtType=0x{:X} ExtData=0x{:X}",
+                        bi, ext_type_ptr, ext_data_ptr
+                    );
+                    if ext_data_ptr != 0 {
+                        ext_data_ptrs.insert(ext_data_ptr);
+                    }
+                }
+            }
+            // Hex dump first 64 bytes after bones
+            eprintln!("  First 64 bytes at 0x{:X} (after bones):", bones_end2);
+            let dump_end = (bones_end2 + 64).min(granny.len());
+            let mut hex = String::new();
+            for (i, byte) in granny[bones_end2..dump_end].iter().enumerate() {
+                hex.push_str(&format!("{:02X} ", byte));
+                if (i + 1).is_multiple_of(16) {
+                    hex.push('\n');
+                }
+            }
+            eprintln!("    {}", hex.trim());
+            // Summary: count bones with/without extended data
+            let mut unique_types: std::collections::BTreeSet<usize> =
+                std::collections::BTreeSet::new();
+            for bi in 0..bone_count2 {
+                let boff = bones_ptr2 + bi * 164;
+                let ext_type = read_u64(boff + 0x94) as usize;
+                if ext_type != 0 {
+                    unique_types.insert(ext_type);
+                }
+            }
+            // Check what's between bones_end and mesh area
+            let mut nonzero_start = None;
+            let mut nonzero_end = bones_end2;
+            for (i, &byte) in granny[bones_end2..granny.len().min(mesh_ptr_arr)]
+                .iter()
+                .enumerate()
+            {
+                if byte != 0 {
+                    let off = bones_end2 + i;
+                    if nonzero_start.is_none() {
+                        nonzero_start = Some(off);
+                    }
+                    nonzero_end = off + 1;
+                }
+            }
+            eprintln!(
+                "  Region 0x{:X}..0x{:X} (between bones_end and meshes):",
+                bones_end2, mesh_ptr_arr
+            );
+            if let Some(ns) = nonzero_start {
+                eprintln!(
+                    "    Non-zero data: 0x{:X}..0x{:X} ({} bytes)",
+                    ns,
+                    nonzero_end,
+                    nonzero_end - ns
+                );
+            } else {
+                eprintln!("    All zeros");
+            }
+        }
+    }
+
     let original = ugx::Reader::read(&data).unwrap();
     eprintln!("\n=== ORIGINAL ({}) ===", filename);
     eprintln!(
@@ -1890,19 +2107,100 @@ fn diagnose_hw1_vanilla() {
         }
     }
 
+    eprintln!("  index_buffer.len()={}", original.index_buffer.len());
+    for (si, s) in original.sections.iter().enumerate() {
+        eprintln!(
+            "  sec[{}]: ibOfs={} numTris={} vbOfs={} vbBytes={}",
+            si, s.ib_offset, s.num_tris, s.vb_offset, s.vb_bytes
+        );
+    }
+
+    // Check extended data presence BEFORE export
+    eprintln!("\n=== EXTENDED DATA BEFORE EXPORT ===");
+    for (i, b) in original.granny_bones.iter().enumerate() {
+        let has_data = b.extended_data.is_some();
+        let has_type = b.extended_data_type.is_some();
+        if has_data || has_type {
+            eprintln!(
+                "  bone[{}] '{}': data={} type={}",
+                i, b.name, has_data, has_type
+            );
+        }
+    }
+
     let export_opts = GltfExportOptions {
         embed_buffers: false,
         include_materials: true,
         include_skeleton: true,
     };
     let export = export_to_gltf(&original, &export_opts).unwrap();
+
+    // Check if extras survived in the glTF JSON
+    {
+        let root: serde_json::Value = serde_json::from_str(&export.json).unwrap();
+        eprintln!("\n=== EXTRAS IN GLTF JSON ===");
+        if let Some(nodes) = root.get("nodes").and_then(|n| n.as_array()) {
+            for (i, node) in nodes.iter().enumerate() {
+                if let Some(extras) = node.get("extras") {
+                    let has_ext = extras.get("granny_ext_type").is_some();
+                    if has_ext {
+                        eprintln!(
+                            "  node[{}] '{}': has granny_ext_type",
+                            i,
+                            node.get("name").and_then(|n| n.as_str()).unwrap_or("?")
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let import_opts = GltfImportOptions {
         version: ugx::UgxVersion::Hw1,
         include_skeleton: true,
         include_materials: true,
     };
     let imported = import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+    // Check extended data presence AFTER import
+    eprintln!("\n=== EXTENDED DATA AFTER IMPORT ===");
+    for (i, b) in imported.granny_bones.iter().enumerate() {
+        let has_data = b.extended_data.is_some();
+        let has_type = b.extended_data_type.is_some();
+        if has_data || has_type {
+            eprintln!(
+                "  bone[{}] '{}': data={} type={}",
+                i, b.name, has_data, has_type
+            );
+        }
+    }
+
     let rt_bytes = ugx::Writer::write(&imported, ugx::UgxVersion::Hw1).unwrap();
+
+    // Dump roundtripped ECF structure
+    {
+        let ecf = ecf::Reader::new(&rt_bytes).unwrap();
+        eprintln!(
+            "\n=== ROUNDTRIPPED ECF ({} bytes, {} chunks) ===",
+            rt_bytes.len(),
+            ecf.chunks().len()
+        );
+        for (i, ch) in ecf.chunks().iter().enumerate() {
+            let raw = ecf.raw_chunk_data(i).unwrap();
+            let dec = ecf.chunk_data(i).unwrap();
+            eprintln!(
+                "  chunk[{}]: id=0x{:X} raw={} dec={} flags=0x{:X} res_flags=0x{:X} align={}",
+                i,
+                ch.id,
+                raw.len(),
+                dec.len(),
+                ch.flags,
+                ch.resource_flags,
+                ch.alignment_log2
+            );
+        }
+    }
+
     let re_read = ugx::Reader::read(&rt_bytes).unwrap();
 
     eprintln!("\n=== ROUNDTRIPPED ===");
@@ -1925,16 +2223,19 @@ fn diagnose_hw1_vanilla() {
         re_read.all_sections_rigid, re_read.all_sections_skinned, re_read.global_bones
     );
 
+    eprintln!("  index_buffer.len()={}", re_read.index_buffer.len());
     for (si, s) in re_read.sections.iter().enumerate() {
         eprintln!(
-            "  sec[{}]: vSz={} glb={} rig={} rigB={} maxB={} nV={}",
+            "  sec[{}]: vSz={} glb={} rig={} rigB={} maxB={} nV={} ibOfs={} numTris={}",
             si,
             s.vert_size,
             s.global_bones,
             s.rigid_only,
             s.rigid_bone_index,
             s.max_bones,
-            s.num_verts
+            s.num_verts,
+            s.ib_offset,
+            s.num_tris
         );
         if let Some(ref p) = s.base_vert_packer {
             eprintln!(
@@ -2038,6 +2339,50 @@ fn diagnose_hw1_vanilla() {
         diffs,
         data.len(),
         rt_bytes.len()
+    );
+
+    // === Compare bone ExtendedData values ===
+    eprintln!("\n=== EXTENDED DATA COMPARISON ===");
+    let orig_bones = &original.granny_bones;
+    let rt_bones = &re_read.granny_bones;
+    assert_eq!(orig_bones.len(), rt_bones.len(), "bone count mismatch");
+    let mut ext_ok = 0usize;
+    let mut ext_missing = 0usize;
+    let mut ext_mismatch = 0usize;
+    for (i, (ob, rb)) in orig_bones.iter().zip(rt_bones.iter()).enumerate() {
+        match (&ob.extended_data, &rb.extended_data) {
+            (None, None) => {}
+            (Some(_), None) => {
+                eprintln!("  bone[{}] '{}': LOST extended data", i, ob.name);
+                ext_missing += 1;
+            }
+            (None, Some(_)) => {
+                eprintln!("  bone[{}] '{}': SPURIOUS extended data", i, ob.name);
+                ext_mismatch += 1;
+            }
+            (Some(od), Some(rd)) => {
+                if od == rd {
+                    ext_ok += 1;
+                } else {
+                    eprintln!("  bone[{}] '{}': DATA MISMATCH", i, ob.name);
+                    eprintln!("    orig: {:?}", od);
+                    eprintln!("    rt:   {:?}", rd);
+                    ext_mismatch += 1;
+                }
+            }
+        }
+    }
+    eprintln!(
+        "ExtData: {} ok, {} missing, {} mismatch (out of {} bones)",
+        ext_ok,
+        ext_missing,
+        ext_mismatch,
+        orig_bones.len()
+    );
+    assert_eq!(ext_missing, 0, "extended data lost during roundtrip");
+    assert_eq!(
+        ext_mismatch, 0,
+        "extended data values changed during roundtrip"
     );
 }
 

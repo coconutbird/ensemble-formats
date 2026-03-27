@@ -1,8 +1,10 @@
 //! Granny chunk (0x703) parser.
 //!
-//! Parses granny bones (inverse world matrices) and granny meshes
-//! (bone bindings per mesh) from the Granny2-compatible serialized chunk.
+//! Parses granny bones (inverse world matrices), granny meshes
+//! (bone bindings per mesh), and bone ExtendedData (Granny2 variant system)
+//! from the Granny2-compatible serialized chunk.
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -12,7 +14,317 @@ use crate::bytes::{
 };
 use crate::error::Result;
 use crate::raw::{GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_INVERSE_WORLD_OFFSET, GRANNY_BONE_SIZE};
-use crate::types::{GrannyBone, GrannyMesh, Matrix4x4};
+use crate::types::{
+    GrannyBone, GrannyMemberType, GrannyMesh, GrannyTypeMember, GrannyVariant, Matrix4x4,
+};
+
+/// Size of a single GrannyDataTypeDefinition on disk: 44 bytes (11 DWORDs).
+const GRANNY_TYPE_DEF_STRIDE: usize = 44;
+
+/// Offset within a bone struct where ExtendedData starts (type_ptr + data_ptr).
+const GRANNY_BONE_EXTENDED_DATA_OFFSET: usize = 0x94;
+
+// ---------------------------------------------------------------------------
+// Granny2 type definition parser
+// ---------------------------------------------------------------------------
+
+/// Parse a `GrannyDataTypeDefinition[]` array starting at `offset` in `data`.
+///
+/// Each entry is 44 bytes. The array is terminated by an entry with `MemberType == 0` (End).
+/// Nested reference types are parsed recursively.
+fn parse_type_def_array(data: &[u8], offset: usize) -> Result<Vec<GrannyTypeMember>> {
+    let mut members = Vec::new();
+    let mut pos = offset;
+
+    // Guard against infinite recursion / corrupt data
+    for _ in 0..256 {
+        if pos + GRANNY_TYPE_DEF_STRIDE > data.len() {
+            break;
+        }
+
+        let mut p = pos;
+        let member_type_raw = read_u32_le(data, &mut p)?;
+        let name_ptr = read_u64_le(data, &mut p)? as usize;
+        let ref_type_ptr = read_u64_le(data, &mut p)? as usize;
+        let array_width = read_u32_le(data, &mut p)?;
+        let extra0 = read_u32_le(data, &mut p)?;
+        let extra1 = read_u32_le(data, &mut p)?;
+        let extra2 = read_u32_le(data, &mut p)?;
+        // skip 2 unused u32s (we already read 7*4 + 8 + 8 = 44 bytes)
+
+        let member_type = match GrannyMemberType::from_u32(member_type_raw) {
+            Some(GrannyMemberType::End) => break, // End marker
+            Some(t) => t,
+            None => {
+                // Unknown type — skip it but continue
+                pos += GRANNY_TYPE_DEF_STRIDE;
+                continue;
+            }
+        };
+
+        let name = if name_ptr > 0 && name_ptr < data.len() {
+            read_null_terminated_string(&data[name_ptr..]).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Recursively parse nested type definitions for Reference/Inline types
+        let reference_type = if ref_type_ptr > 0 && ref_type_ptr < data.len() {
+            match member_type {
+                GrannyMemberType::Inline
+                | GrannyMemberType::Reference
+                | GrannyMemberType::ReferenceToArray
+                | GrannyMemberType::ArrayOfReferences
+                | GrannyMemberType::VariantReference
+                | GrannyMemberType::ReferenceToVariantArray => {
+                    Some(parse_type_def_array(data, ref_type_ptr)?)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        members.push(GrannyTypeMember {
+            member_type,
+            name,
+            reference_type,
+            array_width,
+            extra: [extra0, extra1, extra2],
+        });
+
+        pos += GRANNY_TYPE_DEF_STRIDE;
+    }
+
+    Ok(members)
+}
+
+/// Compute the total byte size of a type definition (sum of all member sizes).
+fn compute_type_size(members: &[GrannyTypeMember]) -> usize {
+    let mut total = 0;
+    for m in members {
+        let unit = match m.member_type {
+            GrannyMemberType::Inline => {
+                if let Some(ref nested) = m.reference_type {
+                    compute_type_size(nested)
+                } else {
+                    0
+                }
+            }
+            other => other.unit_size().unwrap_or(0),
+        };
+        let width = if m.array_width == 0 {
+            1
+        } else {
+            m.array_width as usize
+        };
+        total += unit * width;
+    }
+    total
+}
+
+// ---------------------------------------------------------------------------
+// Granny2 variant data parser
+// ---------------------------------------------------------------------------
+
+/// Parse variant data described by `members` from `data` starting at `offset`.
+///
+/// Returns a `GrannyVariant::Struct` containing all parsed fields.
+fn parse_variant_data(
+    data: &[u8],
+    offset: usize,
+    members: &[GrannyTypeMember],
+) -> Result<GrannyVariant> {
+    let mut fields = Vec::new();
+    let mut cur = offset;
+
+    for m in members {
+        let width = if m.array_width == 0 {
+            1
+        } else {
+            m.array_width as usize
+        };
+
+        let value = match m.member_type {
+            GrannyMemberType::Real32 => {
+                let mut vals = Vec::with_capacity(width);
+                let mut p = cur;
+                for _ in 0..width {
+                    vals.push(read_f32_le(data, &mut p)?);
+                }
+                cur = p;
+                GrannyVariant::Real32(vals)
+            }
+            GrannyMemberType::Int8 | GrannyMemberType::BinormalInt8 => {
+                let end = cur + width;
+                let vals: Vec<i8> = if end <= data.len() {
+                    data[cur..end].iter().map(|&b| b as i8).collect()
+                } else {
+                    Vec::new()
+                };
+                cur = end;
+                GrannyVariant::Int8(vals)
+            }
+            GrannyMemberType::UInt8 | GrannyMemberType::NormalUInt8 => {
+                let end = cur + width;
+                let vals: Vec<u8> = if end <= data.len() {
+                    data[cur..end].to_vec()
+                } else {
+                    Vec::new()
+                };
+                cur = end;
+                GrannyVariant::UInt8(vals)
+            }
+            GrannyMemberType::Int16 | GrannyMemberType::BinormalInt16 => {
+                let mut vals = Vec::with_capacity(width);
+                let mut p = cur;
+                for _ in 0..width {
+                    let v = read_u32_le(data, &mut p).map(|x| x as i16).unwrap_or(0);
+                    // Actually i16, read 2 bytes
+                    vals.push(v);
+                }
+                // Fix: read as proper i16
+                let mut p2 = cur;
+                vals.clear();
+                for _ in 0..width {
+                    if p2 + 2 <= data.len() {
+                        let v = i16::from_le_bytes([data[p2], data[p2 + 1]]);
+                        vals.push(v);
+                        p2 += 2;
+                    }
+                }
+                cur = p2;
+                GrannyVariant::Int16(vals)
+            }
+            GrannyMemberType::UInt16
+            | GrannyMemberType::NormalUInt16
+            | GrannyMemberType::Real16 => {
+                let mut vals = Vec::with_capacity(width);
+                let mut p = cur;
+                for _ in 0..width {
+                    if p + 2 <= data.len() {
+                        let v = u16::from_le_bytes([data[p], data[p + 1]]);
+                        vals.push(v);
+                        p += 2;
+                    }
+                }
+                cur = p;
+                GrannyVariant::UInt16(vals)
+            }
+            GrannyMemberType::StringMember => {
+                // 8-byte pointer to null-terminated string
+                let mut p = cur;
+                let str_ptr = read_u64_le(data, &mut p)? as usize;
+                cur = p;
+                let s = if str_ptr > 0 && str_ptr < data.len() {
+                    read_null_terminated_string(&data[str_ptr..]).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                GrannyVariant::StringVal(s)
+            }
+            GrannyMemberType::Reference => {
+                // 8-byte pointer to nested data
+                let mut p = cur;
+                let ref_ptr = read_u64_le(data, &mut p)? as usize;
+                cur = p;
+                if ref_ptr > 0 && ref_ptr < data.len() {
+                    if let Some(ref nested_type) = m.reference_type {
+                        let nested = parse_variant_data(data, ref_ptr, nested_type)?;
+                        GrannyVariant::Reference(Some(Box::new(nested)))
+                    } else {
+                        GrannyVariant::Reference(None)
+                    }
+                } else {
+                    GrannyVariant::Reference(None)
+                }
+            }
+            GrannyMemberType::VariantReference => {
+                // 16 bytes: type_def_ptr (u64) + data_ptr (u64)
+                let mut p = cur;
+                let type_ptr = read_u64_le(data, &mut p)? as usize;
+                let data_ptr = read_u64_le(data, &mut p)? as usize;
+                cur = p;
+                if type_ptr > 0 && type_ptr < data.len() && data_ptr > 0 && data_ptr < data.len() {
+                    let nested_type = parse_type_def_array(data, type_ptr)?;
+                    let nested = parse_variant_data(data, data_ptr, &nested_type)?;
+                    GrannyVariant::VariantReference(Some(Box::new(nested)))
+                } else {
+                    GrannyVariant::VariantReference(None)
+                }
+            }
+            GrannyMemberType::Inline => {
+                if let Some(ref nested_type) = m.reference_type {
+                    let nested = parse_variant_data(data, cur, nested_type)?;
+                    let size = compute_type_size(nested_type);
+                    cur += size * width;
+                    nested
+                } else {
+                    GrannyVariant::Empty
+                }
+            }
+            GrannyMemberType::Transform => {
+                // 68 bytes raw
+                let size = 68 * width;
+                let end = cur + size;
+                let raw = if end <= data.len() {
+                    data[cur..end].to_vec()
+                } else {
+                    Vec::new()
+                };
+                cur = end;
+                GrannyVariant::RawBytes(raw)
+            }
+            GrannyMemberType::ReferenceToArray => {
+                // u32 count + u64 pointer
+                let mut p = cur;
+                let count = read_u32_le(data, &mut p)? as usize;
+                let arr_ptr = read_u64_le(data, &mut p)? as usize;
+                cur = p;
+                if count > 0 && arr_ptr > 0 && arr_ptr < data.len() {
+                    if let Some(ref nested_type) = m.reference_type {
+                        let elem_size = compute_type_size(nested_type);
+                        let mut elements = Vec::with_capacity(count);
+                        for i in 0..count {
+                            let elem_offset = arr_ptr + i * elem_size;
+                            if elem_offset + elem_size <= data.len() {
+                                elements.push(parse_variant_data(data, elem_offset, nested_type)?);
+                            }
+                        }
+                        GrannyVariant::Reference(Some(Box::new(GrannyVariant::Struct(
+                            elements
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, v)| (format!("{}", i), v))
+                                .collect(),
+                        ))))
+                    } else {
+                        GrannyVariant::Reference(None)
+                    }
+                } else {
+                    GrannyVariant::Reference(None)
+                }
+            }
+            GrannyMemberType::EmptyReference | GrannyMemberType::End => GrannyVariant::Empty,
+            _ => {
+                // Unknown — skip based on unit size
+                let size = m.member_type.unit_size().unwrap_or(0) * width;
+                let end = cur + size;
+                let raw = if end <= data.len() {
+                    data[cur..end].to_vec()
+                } else {
+                    Vec::new()
+                };
+                cur = end;
+                GrannyVariant::RawBytes(raw)
+            }
+        };
+
+        fields.push((m.name.clone(), value));
+    }
+
+    Ok(GrannyVariant::Struct(fields))
+}
 
 /// Parse granny bones from granny chunk (0x703).
 ///
@@ -93,10 +405,30 @@ pub(super) fn parse_granny_bones(granny: &[u8]) -> Result<Vec<GrannyBone>> {
         }
         let inverse_world_matrix = Matrix4x4 { rows };
 
+        // Parse ExtendedData at bone+0x94: {type_def_ptr (u64), data_ptr (u64)}
+        let ext_offset = bone_start + GRANNY_BONE_EXTENDED_DATA_OFFSET;
+        let (extended_data, extended_data_type) = if ext_offset + 16 <= granny.len() {
+            let mut ep = ext_offset;
+            let type_ptr = read_u64_le(granny, &mut ep)? as usize;
+            let data_ptr = read_u64_le(granny, &mut ep)? as usize;
+
+            if type_ptr > 0 && type_ptr < granny.len() && data_ptr > 0 && data_ptr < granny.len() {
+                let type_members = parse_type_def_array(granny, type_ptr)?;
+                let variant = parse_variant_data(granny, data_ptr, &type_members)?;
+                (Some(variant), Some(type_members))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
         bones.push(GrannyBone {
             name,
             parent_index,
             inverse_world_matrix,
+            extended_data,
+            extended_data_type,
         });
     }
 
