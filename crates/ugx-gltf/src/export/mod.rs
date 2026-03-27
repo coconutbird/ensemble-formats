@@ -64,20 +64,6 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
     export_to_gltf_with_buffer_name(geom, options, "buffer.bin")
 }
 
-/// Non-PBR map types that need to be stored in extras.
-/// Diffuse, Normal, AO, and Emissive are handled by standard PBR fields.
-const NON_PBR_MAP_TYPES: &[MapType] = &[
-    MapType::Gloss,
-    MapType::Opacity,
-    MapType::XForm,
-    MapType::Env,
-    MapType::EnvMask,
-    MapType::EmXForm,
-    MapType::Distortion,
-    MapType::Highlight,
-    MapType::Modulate,
-];
-
 /// Build glTF material extras JSON for UGX-specific data.
 ///
 /// Stores material flags, UVW velocity, and non-PBR texture maps
@@ -94,6 +80,41 @@ fn build_material_extras(mat: &Material) -> json::Extras {
         "ugx_blend_type".into(),
         serde_json::Value::Number(mat.blend_type.into()),
     );
+
+    // Store all material properties for lossless roundtrip
+    extras.insert(
+        "ugx_spec_power".into(),
+        serde_json::Value::from(mat.spec_power),
+    );
+    extras.insert(
+        "ugx_spec_color".into(),
+        serde_json::Value::Array(vec![
+            serde_json::Value::from(mat.spec_color[0]),
+            serde_json::Value::from(mat.spec_color[1]),
+            serde_json::Value::from(mat.spec_color[2]),
+        ]),
+    );
+    extras.insert(
+        "ugx_env_reflectivity".into(),
+        serde_json::Value::from(mat.env_reflectivity),
+    );
+    extras.insert(
+        "ugx_env_sharpness".into(),
+        serde_json::Value::from(mat.env_sharpness),
+    );
+    extras.insert(
+        "ugx_env_fresnel".into(),
+        serde_json::Value::from(mat.env_fresnel),
+    );
+    extras.insert(
+        "ugx_env_fresnel_power".into(),
+        serde_json::Value::from(mat.env_fresnel_power),
+    );
+    extras.insert(
+        "ugx_accessory_index".into(),
+        serde_json::Value::Number(mat.accessory_index.into()),
+    );
+    extras.insert("ugx_opacity".into(), serde_json::Value::from(mat.opacity));
 
     // Store UVW velocity arrays that have non-zero values
     let has_any_uvw = mat
@@ -115,9 +136,9 @@ fn build_material_extras(mat: &Material) -> json::Extras {
         extras.insert("ugx_uvw_velocity".into(), serde_json::Value::Array(uvw_arr));
     }
 
-    // Store non-PBR texture maps
+    // Store ALL texture maps with their flags (including PBR maps, for flag fidelity)
     let mut maps_obj = serde_json::Map::new();
-    for &map_type in NON_PBR_MAP_TYPES {
+    for map_type in MapType::ALL {
         let idx = map_type as usize;
         if !mat.maps[idx].is_empty() {
             let maps_arr: Vec<serde_json::Value> = mat.maps[idx]

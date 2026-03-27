@@ -73,12 +73,11 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 }
             }
 
-            // Read UGX extras (flags, blend_type, uvw_velocity, non-PBR maps)
-            let (flags, extras_blend_type, uvw_velocity, extra_maps) =
-                read_material_extras(&mat.extras, &maps);
+            // Read UGX extras (all material properties + maps)
+            let mat_extras = read_material_extras(&mat.extras, &maps);
 
             // Use blend_type from extras if present, otherwise infer from alpha mode
-            let blend_type = extras_blend_type.unwrap_or({
+            let blend_type = mat_extras.blend_type.unwrap_or({
                 if let gltf_json::validation::Checked::Valid(
                     gltf_json::material::AlphaMode::Blend,
                 ) = mat.alpha_mode
@@ -89,69 +88,123 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 }
             });
 
-            // Merge extra maps into the maps array
+            // Merge extra maps into the maps array (extras override PBR-derived maps)
             let mut final_maps = maps;
-            for (idx, extra) in extra_maps {
+            for (idx, extra) in mat_extras.extra_maps {
                 final_maps[idx] = extra;
             }
 
             Material {
                 name: mat.name.clone().unwrap_or_default(),
                 maps: final_maps,
-                spec_power: (1.0 - roughness) * 100.0,
-                opacity: base_color[3],
+                // Prefer extras values; fall back to PBR-derived
+                spec_power: mat_extras.spec_power.unwrap_or((1.0 - roughness) * 100.0),
+                opacity: mat_extras.opacity.unwrap_or(base_color[3]),
                 blend_type,
-                flags,
-                uvw_velocity,
-                ..Material::default()
+                flags: mat_extras.flags,
+                uvw_velocity: mat_extras.uvw_velocity,
+                spec_color: mat_extras.spec_color.unwrap_or([1.0, 1.0, 1.0]),
+                env_reflectivity: mat_extras.env_reflectivity.unwrap_or(1.0),
+                env_sharpness: mat_extras.env_sharpness.unwrap_or(1.0),
+                env_fresnel: mat_extras.env_fresnel.unwrap_or(1.0),
+                env_fresnel_power: mat_extras.env_fresnel_power.unwrap_or(0.5),
+                accessory_index: mat_extras.accessory_index.unwrap_or(0),
             }
         })
         .collect()
 }
 
+/// Parsed material extras from glTF.
+struct MaterialExtras {
+    flags: u32,
+    blend_type: Option<u8>,
+    uvw_velocity: [[f32; 3]; MapType::NUM_TYPES],
+    extra_maps: Vec<(usize, Vec<Map>)>,
+    spec_power: Option<f32>,
+    spec_color: Option<[f32; 3]>,
+    env_reflectivity: Option<f32>,
+    env_sharpness: Option<f32>,
+    env_fresnel: Option<f32>,
+    env_fresnel_power: Option<f32>,
+    accessory_index: Option<u32>,
+    opacity: Option<f32>,
+}
+
 /// Read UGX material extras from glTF extras JSON.
-///
-/// Returns (flags, blend_type, uvw_velocity, extra_maps) where extra_maps is a vec of
-/// (map_type_index, Vec<Map>) for non-PBR map types. blend_type is None if not
-/// present in extras (caller should fall back to alpha_mode heuristic).
-#[allow(clippy::type_complexity)]
 fn read_material_extras(
     extras: &gltf_json::Extras,
     _existing_maps: &[Vec<Map>; MapType::NUM_TYPES],
-) -> (
-    u32,
-    Option<u8>,
-    [[f32; 3]; MapType::NUM_TYPES],
-    Vec<(usize, Vec<Map>)>,
-) {
-    let mut flags = 0u32;
-    let mut blend_type: Option<u8> = None;
-    let mut uvw_velocity = [[0.0f32; 3]; MapType::NUM_TYPES];
-    let mut extra_maps: Vec<(usize, Vec<Map>)> = Vec::new();
+) -> MaterialExtras {
+    let mut result = MaterialExtras {
+        flags: 0,
+        blend_type: None,
+        uvw_velocity: [[0.0f32; 3]; MapType::NUM_TYPES],
+        extra_maps: Vec::new(),
+        spec_power: None,
+        spec_color: None,
+        env_reflectivity: None,
+        env_sharpness: None,
+        env_fresnel: None,
+        env_fresnel_power: None,
+        accessory_index: None,
+        opacity: None,
+    };
 
     let raw = match extras {
         Some(raw_value) => raw_value,
-        None => return (flags, blend_type, uvw_velocity, extra_maps),
+        None => return result,
     };
 
     let parsed: serde_json::Value = match serde_json::from_str(raw.get()) {
         Ok(v) => v,
-        Err(_) => return (flags, blend_type, uvw_velocity, extra_maps),
+        Err(_) => return result,
     };
 
     let obj = match parsed.as_object() {
         Some(o) => o,
-        None => return (flags, blend_type, uvw_velocity, extra_maps),
+        None => return result,
     };
 
     // Read flags
     if let Some(v) = obj.get("ugx_flags") {
-        flags = v.as_u64().unwrap_or(0) as u32;
+        result.flags = v.as_u64().unwrap_or(0) as u32;
     }
 
     // Read blend_type
     if let Some(v) = obj.get("ugx_blend_type") {
-        blend_type = Some(v.as_u64().unwrap_or(0) as u8);
+        result.blend_type = Some(v.as_u64().unwrap_or(0) as u8);
+    }
+
+    // Read material properties
+    if let Some(v) = obj.get("ugx_spec_power") {
+        result.spec_power = Some(v.as_f64().unwrap_or(10.0) as f32);
+    }
+    if let Some(serde_json::Value::Array(arr)) = obj.get("ugx_spec_color")
+        && arr.len() >= 3
+    {
+        result.spec_color = Some([
+            arr[0].as_f64().unwrap_or(1.0) as f32,
+            arr[1].as_f64().unwrap_or(1.0) as f32,
+            arr[2].as_f64().unwrap_or(1.0) as f32,
+        ]);
+    }
+    if let Some(v) = obj.get("ugx_env_reflectivity") {
+        result.env_reflectivity = Some(v.as_f64().unwrap_or(1.0) as f32);
+    }
+    if let Some(v) = obj.get("ugx_env_sharpness") {
+        result.env_sharpness = Some(v.as_f64().unwrap_or(1.0) as f32);
+    }
+    if let Some(v) = obj.get("ugx_env_fresnel") {
+        result.env_fresnel = Some(v.as_f64().unwrap_or(1.0) as f32);
+    }
+    if let Some(v) = obj.get("ugx_env_fresnel_power") {
+        result.env_fresnel_power = Some(v.as_f64().unwrap_or(0.5) as f32);
+    }
+    if let Some(v) = obj.get("ugx_accessory_index") {
+        result.accessory_index = Some(v.as_u64().unwrap_or(0) as u32);
+    }
+    if let Some(v) = obj.get("ugx_opacity") {
+        result.opacity = Some(v.as_f64().unwrap_or(1.0) as f32);
     }
 
     // Read UVW velocity
@@ -163,14 +216,14 @@ fn read_material_extras(
             if let serde_json::Value::Array(v) = val
                 && v.len() >= 3
             {
-                uvw_velocity[i][0] = v[0].as_f64().unwrap_or(0.0) as f32;
-                uvw_velocity[i][1] = v[1].as_f64().unwrap_or(0.0) as f32;
-                uvw_velocity[i][2] = v[2].as_f64().unwrap_or(0.0) as f32;
+                result.uvw_velocity[i][0] = v[0].as_f64().unwrap_or(0.0) as f32;
+                result.uvw_velocity[i][1] = v[1].as_f64().unwrap_or(0.0) as f32;
+                result.uvw_velocity[i][2] = v[2].as_f64().unwrap_or(0.0) as f32;
             }
         }
     }
 
-    // Read non-PBR maps
+    // Read maps (all types — extras override PBR-derived maps for flag fidelity)
     if let Some(serde_json::Value::Object(maps_obj)) = obj.get("ugx_maps") {
         for map_type in MapType::ALL {
             let type_name = map_type.name();
@@ -193,11 +246,11 @@ fn read_material_extras(
                     }
                 }
                 if !map_vec.is_empty() {
-                    extra_maps.push((map_type as usize, map_vec));
+                    result.extra_maps.push((map_type as usize, map_vec));
                 }
             }
         }
     }
 
-    (flags, blend_type, uvw_velocity, extra_maps)
+    result
 }

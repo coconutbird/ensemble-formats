@@ -107,10 +107,13 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
 
 /// Build the index buffer chunk (0x701).
 ///
-/// The file stores only base (non-instanced) indices. The engine handles
-/// instancing at runtime using `max_instances` and `instance_index_multiplier`
-/// from the cached-data header. The writer simply serializes the index
-/// buffer as-is — whether it came from a UGX read or a glTF import.
+/// The file stores the fully baked instanced index buffer. When
+/// `max_instances > 1`, the buffer contains `max_instances` copies of
+/// each section's indices, each offset by `instance_index_multiplier`
+/// vertices per instance. The engine uploads this blob to the GPU as-is
+/// (via `BUGXGeomData::loadIndexBuffer`) and never splits or replicates
+/// indices at runtime. The `rebuild_instanced_index_buffer()` method in
+/// `rebuild.rs` is responsible for producing this baked layout.
 fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
     let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
     for &idx in &geom.index_buffer {

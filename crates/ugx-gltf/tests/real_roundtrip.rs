@@ -2634,3 +2634,340 @@ fn survey_max_instances() {
         );
     }
 }
+
+/// Byte-level per-chunk diff of a full glTF roundtrip for ALL HW1 test files.
+/// Shows exactly which chunks differ and by how much, plus the first byte offsets.
+#[test]
+#[ignore]
+fn diagnose_chunk_diff_all() {
+    let game_dir = match load_game_dir("HW1_GAME_DIR") {
+        Some(d) => d,
+        None => {
+            eprintln!("HW1_GAME_DIR not set — skipping");
+            return;
+        }
+    };
+    let era_paths = find_files_flat(&game_dir, "era");
+
+    let chunk_names = [
+        (0x700u64, "CachedData"),
+        (0x701, "IndexBuf"),
+        (0x702, "VertexBuf"),
+        (0x703, "Granny"),
+        (0x704, "Materials"),
+        (0x705, "AABBTree"),
+    ];
+
+    let mut tested = 0usize;
+    for era_path in &era_paths {
+        let mut archive = match open_era(era_path) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let entries = find_entries_in_era(&archive, ".ugx");
+        for (idx, filename) in &entries {
+            if tested >= MAX_FILES {
+                break;
+            }
+            let data = match archive.read_entry(*idx) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let original = match ugx::Reader::read(&data) {
+                Ok(g) => g,
+                Err(_) => continue,
+            };
+
+            let export_opts = GltfExportOptions {
+                embed_buffers: false,
+                include_materials: true,
+                include_skeleton: true,
+            };
+            let export = match export_to_gltf(&original, &export_opts) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("{filename}: export failed: {e}");
+                    continue;
+                }
+            };
+            let import_opts = GltfImportOptions {
+                version: ugx::UgxVersion::Hw1,
+                include_skeleton: true,
+                include_materials: true,
+            };
+            let imported =
+                match import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("{filename}: import failed: {e}");
+                        continue;
+                    }
+                };
+            let rt_bytes = match ugx::Writer::write(&imported, ugx::UgxVersion::Hw1) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("{filename}: write failed: {e}");
+                    continue;
+                }
+            };
+
+            // Parse both as ECF and compare per-chunk
+            let ecf_orig = match ecf::Reader::new(&data) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let ecf_rt = match ecf::Reader::new(&rt_bytes) {
+                Ok(e) => e,
+                Err(_) => {
+                    eprintln!("{filename}: can't parse roundtripped ECF");
+                    continue;
+                }
+            };
+
+            eprintln!(
+                "\n=== {filename} (orig={} rt={}) ===",
+                data.len(),
+                rt_bytes.len()
+            );
+
+            // Show instancing and IB stats
+            let section_ib_total: usize = original
+                .sections
+                .iter()
+                .map(|s| s.num_tris as usize * 3)
+                .sum();
+            let actual_ib_len = original.index_buffer.len();
+            eprintln!(
+                "  IB: section_sum={section_ib_total} actual={actual_ib_len} max_inst={} inst_mul={}",
+                original.max_instances, original.instance_index_multiplier
+            );
+            if actual_ib_len != section_ib_total {
+                eprintln!(
+                    "  *** IB has {} extra indices (ratio={:.1}x)",
+                    actual_ib_len - section_ib_total,
+                    actual_ib_len as f64 / section_ib_total as f64
+                );
+            }
+            // Show AABB tree presence
+            eprintln!(
+                "  AABB tree: orig={} rt={}",
+                original.aabb_tree.is_some(),
+                imported.aabb_tree.is_some()
+            );
+
+            // Compare 0x700 header fields
+            if let (Ok(o700), Ok(r700)) = (
+                ecf_orig.chunk_data_by_id(0x700),
+                ecf_rt.chunk_data_by_id(0x700),
+            ) {
+                if o700.len() >= 64 && r700.len() >= 64 {
+                    let read_f32 = |d: &[u8], off: usize| -> f32 {
+                        f32::from_le_bytes([d[off], d[off + 1], d[off + 2], d[off + 3]])
+                    };
+                    let read_i16 =
+                        |d: &[u8], off: usize| -> i16 { i16::from_le_bytes([d[off], d[off + 1]]) };
+
+                    // signature @0, rigid_bone @4, sphere_center @8,12,16, sphere_radius @20
+                    // aabb_min @24,28,32, aabb_max @36,40,44
+                    // max_instances @48(i16), inst_idx_mul @50(i16), large_geom_bone @52(i16)
+                    // flags @54-57, padding @58-63
+                    let fields = [
+                        ("sphere_cx", 8),
+                        ("sphere_cy", 12),
+                        ("sphere_cz", 16),
+                        ("sphere_r", 20),
+                        ("aabb_min_x", 24),
+                        ("aabb_min_y", 28),
+                        ("aabb_min_z", 32),
+                        ("aabb_max_x", 36),
+                        ("aabb_max_y", 40),
+                        ("aabb_max_z", 44),
+                    ];
+                    let mut hdr_diffs = Vec::new();
+                    for &(name, off) in &fields {
+                        let ov = read_f32(&o700, off);
+                        let rv = read_f32(&r700, off);
+                        if (ov - rv).abs() > 1e-6 {
+                            hdr_diffs.push(format!(
+                                "    {name}: {ov:.6} -> {rv:.6} (delta={:.6})",
+                                (rv - ov)
+                            ));
+                        }
+                    }
+                    // i16 fields
+                    let oi = read_i16(&o700, 48);
+                    let ri = read_i16(&r700, 48);
+                    if oi != ri {
+                        hdr_diffs.push(format!("    max_instances: {oi} -> {ri}"));
+                    }
+                    let oi = read_i16(&o700, 50);
+                    let ri = read_i16(&r700, 50);
+                    if oi != ri {
+                        hdr_diffs.push(format!("    inst_idx_mul: {oi} -> {ri}"));
+                    }
+                    // rigid_bone_index @4
+                    let oi32 = i32::from_le_bytes([o700[4], o700[5], o700[6], o700[7]]);
+                    let ri32 = i32::from_le_bytes([r700[4], r700[5], r700[6], r700[7]]);
+                    if oi32 != ri32 {
+                        hdr_diffs.push(format!("    rigid_bone_index: {oi32} -> {ri32}"));
+                    }
+                    // flags byte @54-57
+                    for i in 54..58 {
+                        if o700[i] != r700[i] {
+                            hdr_diffs.push(format!(
+                                "    flag_byte[{}]: {} -> {}",
+                                i - 54,
+                                o700[i],
+                                r700[i]
+                            ));
+                        }
+                    }
+
+                    if !hdr_diffs.is_empty() {
+                        eprintln!("  Header diffs ({} fields):", hdr_diffs.len());
+                        for d in &hdr_diffs {
+                            eprintln!("{d}");
+                        }
+                    }
+                }
+            }
+
+            // Check chunk presence
+            for &(cid, cname) in &chunk_names {
+                let orig_chunk = ecf_orig.chunk_data_by_id(cid).ok();
+                let rt_chunk = ecf_rt.chunk_data_by_id(cid).ok();
+                match (orig_chunk, rt_chunk) {
+                    (Some(o), Some(r)) => {
+                        if o == r {
+                            eprintln!("  {cname} (0x{cid:03X}): IDENTICAL ({} bytes)", o.len());
+                        } else {
+                            let min_len = o.len().min(r.len());
+                            let mut diffs = 0usize;
+                            let mut first_diff = None;
+                            for i in 0..min_len {
+                                if o[i] != r[i] {
+                                    diffs += 1;
+                                    if first_diff.is_none() {
+                                        first_diff = Some(i);
+                                    }
+                                }
+                            }
+                            diffs += o.len().abs_diff(r.len());
+                            eprintln!(
+                                "  {cname} (0x{cid:03X}): {} diffs (orig={} rt={}) first_diff=0x{:X}",
+                                diffs,
+                                o.len(),
+                                r.len(),
+                                first_diff.unwrap_or(min_len)
+                            );
+                            // Show first 5 byte diffs
+                            let mut shown = 0;
+                            for i in 0..min_len {
+                                if o[i] != r[i] {
+                                    eprintln!("    @0x{i:04X}: 0x{:02X} -> 0x{:02X}", o[i], r[i]);
+                                    shown += 1;
+                                    if shown >= 5 {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (Some(_), None) => eprintln!("  {cname} (0x{cid:03X}): MISSING in roundtrip"),
+                    (None, Some(_)) => eprintln!("  {cname} (0x{cid:03X}): NEW in roundtrip"),
+                    (None, None) => {} // both absent, fine
+                }
+            }
+
+            // Structural comparison: section/bone/acc counts and chunk sizes
+            let orig_valid_nonempty = original
+                .valid_accessories
+                .iter()
+                .filter(|a| !a.object_indices.is_empty())
+                .count();
+            let orig_acc_nonempty = original
+                .accessories
+                .iter()
+                .filter(|a| !a.object_indices.is_empty())
+                .count();
+            eprintln!(
+                "  Struct: sections: orig={} rt={} | bones: orig={} rt={} | accessories: orig={} rt={} | valid_acc: orig={} rt={} | orig_acc_nonempty={} orig_valid_nonempty={}",
+                original.sections.len(),
+                imported.sections.len(),
+                original.bones.len(),
+                imported.bones.len(),
+                original.accessories.len(),
+                imported.accessories.len(),
+                original.valid_accessories.len(),
+                imported.valid_accessories.len(),
+                orig_acc_nonempty,
+                orig_valid_nonempty,
+            );
+            // Check AABB tree node count
+            let orig_tree_nodes = original.aabb_tree.as_ref().map_or(0, |t| t.nodes.len());
+            let rt_tree_nodes = imported.aabb_tree.as_ref().map_or(0, |t| t.nodes.len());
+            if orig_tree_nodes != rt_tree_nodes
+                || original.accessories.len() != imported.accessories.len()
+            {
+                eprintln!(
+                    "  Tree: orig_nodes={} rt_nodes={} | acc_count mismatch: {} vs {}",
+                    orig_tree_nodes,
+                    rt_tree_nodes,
+                    original.accessories.len(),
+                    imported.accessories.len()
+                );
+            }
+            // Granny bone extended data analysis
+            let orig_ext = original
+                .granny_bones
+                .iter()
+                .filter(|b| b.extended_data.is_some())
+                .count();
+            let rt_ext = imported
+                .granny_bones
+                .iter()
+                .filter(|b| b.extended_data.is_some())
+                .count();
+            eprintln!(
+                "  Granny ExtData: orig={}/{} rt={}/{}",
+                orig_ext,
+                original.granny_bones.len(),
+                rt_ext,
+                imported.granny_bones.len()
+            );
+            if let Some(b) = original.granny_bones.first() {
+                if let Some(ref ty) = b.extended_data_type {
+                    let type_names: Vec<_> = ty
+                        .iter()
+                        .map(|m| format!("{}:{:?}", m.name, m.member_type))
+                        .collect();
+                    eprintln!("  Granny orig bone[0] ext type: {:?}", type_names);
+                }
+            }
+
+            // Also check ECF header diffs
+            if data.len() >= 32 && rt_bytes.len() >= 32 {
+                let mut hdr_diffs = 0;
+                for i in 0..32 {
+                    if data[i] != rt_bytes[i] {
+                        hdr_diffs += 1;
+                    }
+                }
+                if hdr_diffs > 0 {
+                    eprintln!("  ECF Header: {hdr_diffs} byte diffs");
+                    for i in 0..32 {
+                        if data[i] != rt_bytes[i] {
+                            eprintln!("    @0x{i:02X}: 0x{:02X} -> 0x{:02X}", data[i], rt_bytes[i]);
+                        }
+                    }
+                }
+            }
+
+            tested += 1;
+        }
+        if tested >= MAX_FILES {
+            break;
+        }
+    }
+    eprintln!("\nTested {tested} files");
+}

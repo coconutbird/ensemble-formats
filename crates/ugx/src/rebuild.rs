@@ -20,6 +20,7 @@ impl UgxGeom {
     /// - Global bounding volumes (`bounds`, `bounding_sphere`)
     /// - Per-bone bounding boxes (`bone_bounds`)
     /// - Metadata flags (`rigid_only`, `all_sections_rigid`, etc.)
+    /// - Instanced index buffer (baked copies for `max_instances`)
     /// - AABB tree (spatial acceleration structure)
     /// - Accessories (must be built AFTER the tree — accessories are indexed
     ///   by tree node index at runtime)
@@ -27,6 +28,7 @@ impl UgxGeom {
         self.rebuild_bounds();
         self.rebuild_bone_bounds();
         self.rebuild_metadata_flags();
+        self.rebuild_instanced_index_buffer();
         // Tree must be built first — the per-node section mapping it produces
         // is consumed by rebuild_accessories to satisfy the engine invariant:
         //   accessories[node_index].object_indices == sections for that node.
@@ -255,6 +257,81 @@ impl UgxGeom {
         self.large_geom_bone_index = i16::MAX;
     }
 
+    /// Rebuild the index buffer with instanced copies baked in.
+    ///
+    /// The engine uploads the 0x701 chunk to the GPU as-is (via
+    /// `BUGXGeomData::loadIndexBuffer`). When `max_instances > 1`, the
+    /// original tooling bakes `max_instances` copies of each section's
+    /// indices into the buffer, each copy offset by
+    /// `instance_index * instance_index_multiplier` vertices. The engine
+    /// reads `max_instances` from the header for render scaling but never
+    /// splits or replicates the buffer at runtime.
+    ///
+    /// This method must be called AFTER `rebuild_metadata_flags` (which
+    /// computes `max_instances` and `instance_index_multiplier`).
+    ///
+    /// If `max_instances <= 1`, the buffer is left unchanged.
+    pub fn rebuild_instanced_index_buffer(&mut self) {
+        let max_inst = self.max_instances as u32;
+        let multiplier = self.instance_index_multiplier as u32;
+
+        if max_inst <= 1 || multiplier == 0 {
+            return;
+        }
+
+        // Compute the total base index count from sections.
+        let base_index_count: usize = self
+            .sections
+            .iter()
+            .map(|s| (s.num_tris as usize) * 3)
+            .sum();
+
+        // If the buffer already has the expected instanced size, skip.
+        let expected_instanced = base_index_count * max_inst as usize;
+        if self.index_buffer.len() == expected_instanced {
+            return;
+        }
+
+        // If the buffer doesn't match base size either, skip to avoid corruption.
+        if self.index_buffer.len() != base_index_count {
+            return;
+        }
+
+        // Build the instanced buffer: for each instance i (0..max_instances),
+        // copy every section's indices with vertex indices offset by
+        // i * instance_index_multiplier.
+        let mut instanced = Vec::with_capacity(expected_instanced);
+        for inst in 0..max_inst {
+            let vertex_offset = (inst * multiplier) as u16;
+            for section in &self.sections {
+                let sec_start = section.ib_offset as usize;
+                let sec_count = (section.num_tris as usize) * 3;
+                let sec_end = sec_start + sec_count;
+                if sec_end > self.index_buffer.len() {
+                    continue;
+                }
+                for &idx in &self.index_buffer[sec_start..sec_end] {
+                    instanced.push(idx.wrapping_add(vertex_offset));
+                }
+            }
+        }
+
+        // Update section ib_offsets to account for the replicated layout.
+        // In the instanced buffer, instance 0's sections are laid out
+        // sequentially first, then instance 1's, etc. The section ib_offset
+        // should point to instance 0 (the base), which is the same as the
+        // sequential layout.
+        // However, the ib_offsets should be recalculated to reflect the
+        // new sequential layout since sections may not have been contiguous.
+        let mut offset = 0i32;
+        for section in &mut self.sections {
+            section.ib_offset = offset;
+            offset += section.num_tris * 3;
+        }
+
+        self.index_buffer = instanced;
+    }
+
     /// Rebuild accessories from the AABB tree's per-node section mapping.
     ///
     /// `node_section_map[i]` contains the section indices that belong to
@@ -271,8 +348,9 @@ impl UgxGeom {
     /// If no tree was built (e.g. HW2, or no sections), falls back to
     /// the legacy group-by-`accessory_index` strategy.
     ///
-    /// `valid_accessories` is left empty — the original files contain
-    /// uninitialized data in this field.
+    /// `valid_accessories` is the subset of accessories that have non-empty
+    /// `object_indices` (leaf nodes with actual section geometry). The engine
+    /// reads this as a flat i32 index array via `BPackedArray_Simple__unpack`.
     pub fn rebuild_accessories(&mut self, node_section_map: Vec<Vec<i32>>) {
         let bone_count = self.bones.len();
 
@@ -295,7 +373,14 @@ impl UgxGeom {
                 }
             })
             .collect();
-        self.valid_accessories = Vec::new();
+
+        // valid_accessories = accessories with non-empty object_indices (leaf nodes).
+        self.valid_accessories = self
+            .accessories
+            .iter()
+            .filter(|a| !a.object_indices.is_empty())
+            .cloned()
+            .collect();
     }
 
     /// Legacy accessory rebuild: group sections by `accessory_index`.
@@ -336,7 +421,12 @@ impl UgxGeom {
                 }
             })
             .collect();
-        self.valid_accessories = Vec::new();
+        self.valid_accessories = self
+            .accessories
+            .iter()
+            .filter(|a| !a.object_indices.is_empty())
+            .cloned()
+            .collect();
     }
 
     /// Compute the bone range (first_bone, num_bones) for a set of sections.
