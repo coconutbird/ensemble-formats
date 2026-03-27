@@ -134,14 +134,13 @@ impl Writer {
 
         self.header.file_size = data_offset as u32;
 
-        // Compute adler32 over header bytes 12..32 + all chunk headers
+        // Compute adler32 over header bytes 12..32 only.
+        //
+        // The engine's ECF_ReadAndValidateStream reads `header_size` bytes
+        // (= 32), then checksums bytes 12..header_size. Chunk headers are
+        // read separately from the stream and are NOT part of the checksum.
         let header_bytes = self.header.to_bytes();
-        let mut checksum_data = Vec::with_capacity(20 + self.chunks.len() * EcfChunkHeader::SIZE);
-        checksum_data.extend_from_slice(&header_bytes[12..32]);
-        for (chunk, _) in &self.chunks {
-            checksum_data.extend_from_slice(&chunk.to_bytes());
-        }
-        self.header.adler32 = adler32(&checksum_data);
+        self.header.adler32 = adler32(&header_bytes[12..32]);
 
         // Assemble output
         let mut out = vec![0u8; data_offset];

@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use crate::bytes::{
     read_f32_le, read_i32_le, read_null_terminated_string, read_u32_le, read_u64_le,
 };
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::raw::{GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_INVERSE_WORLD_OFFSET, GRANNY_BONE_SIZE};
 use crate::types::{
     GrannyBone, GrannyMemberType, GrannyMesh, GrannyTypeMember, GrannyVariant, Matrix4x4,
@@ -324,6 +324,30 @@ fn parse_variant_data(
     }
 
     Ok(GrannyVariant::Struct(fields))
+}
+
+/// Validate the Granny chunk (0x703) by reading `FromFileName` at +0x10.
+///
+/// The engine (`BGrannyModel::load`) rejects the chunk unless this string is `"gr2ugx"`.
+/// Returns `Err(InvalidGrannyChunk)` if the chunk is present but invalid.
+pub(super) fn validate_granny_chunk(data: &[u8]) -> Result<()> {
+    if data.len() < 0x18 {
+        return Err(Error::InvalidGrannyChunk {
+            actual: String::from("<chunk too small>"),
+        });
+    }
+    let mut p = 0x10usize;
+    let ptr = read_u64_le(data, &mut p)? as usize;
+    if ptr == 0 || ptr >= data.len() {
+        return Err(Error::InvalidGrannyChunk {
+            actual: String::from("<null or OOB pointer>"),
+        });
+    }
+    let name = read_null_terminated_string(&data[ptr..])?;
+    if !name.eq_ignore_ascii_case("gr2ugx") {
+        return Err(Error::InvalidGrannyChunk { actual: name });
+    }
+    Ok(())
 }
 
 /// Parse granny bones from granny chunk (0x703).

@@ -52,6 +52,10 @@ pub enum Error {
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
 
+    /// Invalid Granny chunk — present but FromFileName is not "gr2ugx".
+    #[error("Invalid Granny chunk: FromFileName is \"{actual}\", expected \"gr2ugx\"")]
+    InvalidGrannyChunk { actual: String },
+
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] ecf::io::IoError),

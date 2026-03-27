@@ -121,7 +121,7 @@ use cached_data::{
     read_bone_bounds, read_packed_accessories, read_packed_bones, read_packed_sections,
     read_valid_accessory_indices,
 };
-use granny::{parse_granny_bones, parse_granny_meshes};
+use granny::{parse_granny_bones, parse_granny_meshes, validate_granny_chunk};
 use material::read_materials as parse_materials;
 
 impl UgxGeom {
@@ -219,6 +219,12 @@ impl UgxGeom {
 
         let sections = read_packed_sections(data, pos, version)?;
         let bones = read_packed_bones(data, pos)?;
+
+        // Validate the Granny chunk: the engine checks FromFileName == "gr2ugx"
+        // at +0x10 before parsing. If the chunk exists but is invalid, error out.
+        if let Some(ref granny) = granny_data {
+            validate_granny_chunk(granny)?;
+        }
 
         let granny_bones = if let Some(ref granny) = granny_data {
             parse_granny_bones(granny)?
