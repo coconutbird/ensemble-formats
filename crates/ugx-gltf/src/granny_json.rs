@@ -99,6 +99,12 @@ pub fn variant_to_json(v: &GrannyVariant) -> Value {
         GrannyVariant::UInt16(vals) => {
             Value::Array(vals.iter().map(|&v| Value::Number(v.into())).collect())
         }
+        GrannyVariant::Int32(vals) => {
+            Value::Array(vals.iter().map(|&v| Value::Number(v.into())).collect())
+        }
+        GrannyVariant::UInt32(vals) => {
+            Value::Array(vals.iter().map(|&v| Value::Number(v.into())).collect())
+        }
         GrannyVariant::StringVal(s) => Value::String(s.clone()),
         GrannyVariant::Reference(inner) | GrannyVariant::VariantReference(inner) => match inner {
             Some(boxed) => variant_to_json(boxed),
@@ -215,6 +221,24 @@ fn json_to_variant_field(val: &Value, m: &GrannyTypeMember, width: usize) -> Opt
                 .map(|v| v.as_u64().unwrap_or(0) as u16)
                 .collect();
             Some(GrannyVariant::UInt16(vals))
+        }
+        GrannyMemberType::Int32 => {
+            let arr = val.as_array()?;
+            let vals: Vec<i32> = arr
+                .iter()
+                .take(width)
+                .map(|v| v.as_i64().unwrap_or(0) as i32)
+                .collect();
+            Some(GrannyVariant::Int32(vals))
+        }
+        GrannyMemberType::UInt32 => {
+            let arr = val.as_array()?;
+            let vals: Vec<u32> = arr
+                .iter()
+                .take(width)
+                .map(|v| v.as_u64().unwrap_or(0) as u32)
+                .collect();
+            Some(GrannyVariant::UInt32(vals))
         }
         GrannyMemberType::StringMember => {
             let s = val.as_str().unwrap_or("").to_string();

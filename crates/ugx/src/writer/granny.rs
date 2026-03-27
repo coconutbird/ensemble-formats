@@ -16,7 +16,9 @@ use crate::raw::{
     GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_SIZE, GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION,
     GRANNY_HAS_SCALE_SHEAR, GRANNY_MESH_SIZE,
 };
-use crate::types::{GrannyMemberType, GrannyTypeMember, GrannyVariant, Matrix4x4, UgxGeom};
+use crate::types::{
+    GrannyBoneBinding, GrannyMemberType, GrannyTypeMember, GrannyVariant, Matrix4x4, UgxGeom,
+};
 
 /// Size of a single GrannyDataTypeDefinition on disk.
 const GRANNY_TYPE_DEF_STRIDE: usize = 44;
@@ -24,121 +26,30 @@ const GRANNY_TYPE_DEF_STRIDE: usize = 44;
 /// Offset within a bone struct where ExtendedData {type_ptr, data_ptr} lives.
 const GRANNY_BONE_EXTENDED_DATA_OFFSET: usize = 0x94;
 
+/// Align to 16-byte boundary (matching original engine alignment).
+fn align16(n: usize) -> usize {
+    (n + 15) & !15
+}
+
 /// Build the granny bones chunk (0x703).
 ///
-/// Produces a Granny2-compatible serialized chunk with:
-/// - File info header with skeleton and mesh array pointers
-/// - Skeleton struct with bone count and array pointer
-/// - Bone array with names, parent indices, computed local transforms, and inverse world matrices
-/// - Mesh pointer array with section names
-/// - String table
+/// Produces a Granny2-compatible serialized chunk matching the original engine
+/// layout:
+///   1. File info header (0x94 bytes)
+///   2. Skeleton pointer array (16-byte aligned)
+///   3. Skeleton struct (16-byte aligned)
+///   4. Bone array (16-byte aligned)
+///   5. ExtendedData type definitions and data blobs
+///   6. Mesh pointer array + mesh structs + bone bindings
+///   7. Model pointer array + model struct + model mesh bindings
+///   8. String table (all names collected at the end)
 ///
-/// Local transforms are computed from inverse world matrices: for each bone,
-/// `local = parent_world_inverse * world` where `world = inverse(inverse_world)`.
+/// When bones have stored `local_transform` data (from a previous read), it is
+/// written back verbatim for bit-perfect round-tripping. Otherwise, local
+/// transforms are derived from inverse world matrices (lossy fallback).
 pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let bone_count = geom.granny_bones.len();
     let section_count = geom.sections.len();
-
-    // ---- Compute local transforms from inverse world matrices ----
-    let world_matrices: Vec<Matrix4x4> = geom
-        .granny_bones
-        .iter()
-        .map(|bone| bone.inverse_world_matrix.inverse().unwrap_or_default())
-        .collect();
-
-    struct LocalTransform {
-        flags: u32,
-        position: [f32; 3],
-        orientation: [f32; 4],
-        scale_shear: [[f32; 3]; 3],
-    }
-
-    let local_transforms: Vec<LocalTransform> = geom
-        .granny_bones
-        .iter()
-        .enumerate()
-        .map(|(i, bone)| {
-            let local_matrix =
-                if bone.parent_index >= 0 && (bone.parent_index as usize) < bone_count {
-                    let parent_idx = bone.parent_index as usize;
-                    geom.granny_bones[parent_idx]
-                        .inverse_world_matrix
-                        .multiply(&world_matrices[i])
-                } else {
-                    world_matrices[i].clone()
-                };
-
-            let position = local_matrix.translation();
-            let m = &local_matrix.rows;
-            let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-            let sy = (m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1]).sqrt();
-            let sz = (m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2]).sqrt();
-
-            let rot_matrix = if sx > 1e-7 && sy > 1e-7 && sz > 1e-7 {
-                Matrix4x4 {
-                    rows: [
-                        [m[0][0] / sx, m[0][1] / sy, m[0][2] / sz, 0.0],
-                        [m[1][0] / sx, m[1][1] / sy, m[1][2] / sz, 0.0],
-                        [m[2][0] / sx, m[2][1] / sy, m[2][2] / sz, 0.0],
-                        [0.0, 0.0, 0.0, 1.0],
-                    ],
-                }
-            } else {
-                Matrix4x4::identity()
-            };
-
-            let orientation = rot_matrix.to_quaternion();
-            let rt = rot_matrix.transpose();
-            let scale_shear = [
-                [
-                    rt.rows[0][0] * m[0][0] + rt.rows[0][1] * m[1][0] + rt.rows[0][2] * m[2][0],
-                    rt.rows[0][0] * m[0][1] + rt.rows[0][1] * m[1][1] + rt.rows[0][2] * m[2][1],
-                    rt.rows[0][0] * m[0][2] + rt.rows[0][1] * m[1][2] + rt.rows[0][2] * m[2][2],
-                ],
-                [
-                    rt.rows[1][0] * m[0][0] + rt.rows[1][1] * m[1][0] + rt.rows[1][2] * m[2][0],
-                    rt.rows[1][0] * m[0][1] + rt.rows[1][1] * m[1][1] + rt.rows[1][2] * m[2][1],
-                    rt.rows[1][0] * m[0][2] + rt.rows[1][1] * m[1][2] + rt.rows[1][2] * m[2][2],
-                ],
-                [
-                    rt.rows[2][0] * m[0][0] + rt.rows[2][1] * m[1][0] + rt.rows[2][2] * m[2][0],
-                    rt.rows[2][0] * m[0][1] + rt.rows[2][1] * m[1][1] + rt.rows[2][2] * m[2][1],
-                    rt.rows[2][0] * m[0][2] + rt.rows[2][1] * m[1][2] + rt.rows[2][2] * m[2][2],
-                ],
-            ];
-
-            let mut flags = 0u32;
-            if position[0].abs() > 1e-7 || position[1].abs() > 1e-7 || position[2].abs() > 1e-7 {
-                flags |= GRANNY_HAS_POSITION;
-            }
-            if (orientation[0].abs() > 1e-7)
-                || (orientation[1].abs() > 1e-7)
-                || (orientation[2].abs() > 1e-7)
-                || ((orientation[3] - 1.0).abs() > 1e-7)
-            {
-                flags |= GRANNY_HAS_ORIENTATION;
-            }
-            let is_identity_scale = (scale_shear[0][0] - 1.0).abs() < 1e-5
-                && scale_shear[0][1].abs() < 1e-5
-                && scale_shear[0][2].abs() < 1e-5
-                && scale_shear[1][0].abs() < 1e-5
-                && (scale_shear[1][1] - 1.0).abs() < 1e-5
-                && scale_shear[1][2].abs() < 1e-5
-                && scale_shear[2][0].abs() < 1e-5
-                && scale_shear[2][1].abs() < 1e-5
-                && (scale_shear[2][2] - 1.0).abs() < 1e-5;
-            if !is_identity_scale {
-                flags |= GRANNY_HAS_SCALE_SHEAR;
-            }
-
-            LocalTransform {
-                flags,
-                position,
-                orientation,
-                scale_shear,
-            }
-        })
-        .collect();
 
     // ---- Determine mesh data ----
     let use_stored_meshes = !geom.granny_meshes.is_empty();
@@ -148,7 +59,7 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         section_count
     };
 
-    let mesh_bone_bindings: Vec<Vec<String>> = if use_stored_meshes {
+    let mesh_bone_bindings: Vec<Vec<GrannyBoneBinding>> = if use_stored_meshes {
         geom.granny_meshes
             .iter()
             .map(|m| m.bone_bindings.clone())
@@ -161,11 +72,12 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
                     if section.rigid_bone_index >= 0
                         && (section.rigid_bone_index as usize) < bone_count
                     {
-                        vec![
-                            geom.granny_bones[section.rigid_bone_index as usize]
+                        vec![GrannyBoneBinding {
+                            bone_name: geom.granny_bones[section.rigid_bone_index as usize]
                                 .name
                                 .clone(),
-                        ]
+                            ..Default::default()
+                        }]
                     } else {
                         vec![]
                     }
@@ -176,7 +88,10 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
                         .filter_map(|&idx| {
                             let idx = idx as usize;
                             if idx < geom.granny_bones.len() {
-                                Some(geom.granny_bones[idx].name.clone())
+                                Some(GrannyBoneBinding {
+                                    bone_name: geom.granny_bones[idx].name.clone(),
+                                    ..Default::default()
+                                })
                             } else {
                                 None
                             }
@@ -195,189 +110,108 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     let total_bone_bindings: usize = mesh_bone_bindings.iter().map(|v| v.len()).sum();
 
-    // ---- Calculate struct offsets ----
+    // ---- Phase 1: Fixed structure offsets (16-byte aligned) ----
     let header_size: usize = 0x94;
-    let skeleton_ptr_array_offset = header_size;
-    let skeleton_struct_offset = skeleton_ptr_array_offset + 8;
-    // Skeleton struct: Name(8) + Bones RTA(12) + LODType(4) + ExtendedData VRef(16) = 0x28
-    let model_ptr_array_offset = skeleton_struct_offset + 0x28;
-    let model_struct_offset = model_ptr_array_offset + 8;
-    // Model struct: Name(8) + Skeleton Ref(8) + InitialPlacement Transform(68)
-    //             + MeshBindings RTA(12) + ExtendedData VRef(16) = 0x70
-    let model_struct_size = 0x70;
-    let bones_start = (model_struct_offset + model_struct_size + 7) & !7;
+    let skel_ptr_array = align16(header_size);
+    let skel_struct = align16(skel_ptr_array + 8);
+    let bones_start = align16(skel_struct + 0x28);
     let bones_end = bones_start + bone_count * GRANNY_BONE_SIZE;
-    let mesh_bindings_start = bones_end;
-    let mesh_ptrs_start = mesh_bindings_start + mesh_count * 8;
-    let mesh_structs_start = mesh_ptrs_start + mesh_count * 8;
-    let bone_bindings_start = mesh_structs_start + mesh_count * GRANNY_MESH_SIZE;
-    let strings_start = bone_bindings_start + total_bone_bindings * GRANNY_BONE_BINDING_SIZE;
 
-    let mut buf = vec![0u8; strings_start];
-    let mut cursor = MutCursor::new(&mut buf);
-
-    // ---- File info header [0x00..0x94] ----
-    cursor.seek(SeekFrom::Start(0x30))?;
-    cursor.write_u32_le(1)?; // SkeletonCount
-    cursor.write_u64_le(skeleton_ptr_array_offset as u64)?;
-
-    cursor.seek(SeekFrom::Start(0x54))?;
-    cursor.write_u32_le(mesh_count as u32)?;
-    cursor.write_u64_le(mesh_ptrs_start as u64)?;
-
-    cursor.seek(SeekFrom::Start(0x60))?;
-    cursor.write_u32_le(1)?; // ModelCount
-    cursor.write_u64_le(model_ptr_array_offset as u64)?;
-
-    // ---- Skeleton pointer array ----
-    cursor.seek(SeekFrom::Start(skeleton_ptr_array_offset as u64))?;
-    cursor.write_u64_le(skeleton_struct_offset as u64)?;
-
-    // ---- Skeleton struct ----
-    cursor.seek(SeekFrom::Start((skeleton_struct_offset + 0x08) as u64))?;
-    cursor.write_u32_le(bone_count as u32)?;
-    cursor.write_u64_le(bones_start as u64)?;
-    cursor.write_u32_le(0)?; // LODType
-
-    // ---- Model pointer array ----
-    cursor.seek(SeekFrom::Start(model_ptr_array_offset as u64))?;
-    cursor.write_u64_le(model_struct_offset as u64)?;
-
-    // ---- Model struct ----
-    cursor.seek(SeekFrom::Start((model_struct_offset + 0x08) as u64))?;
-    cursor.write_u64_le(skeleton_struct_offset as u64)?;
-
-    // InitialPlacement (identity transform)
-    cursor.seek(SeekFrom::Start((model_struct_offset + 0x10) as u64))?;
-    cursor.write_u32_le(0)?; // Flags
-    for _ in 0..3 {
-        cursor.write_f32_le(0.0)?;
-    } // Position
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(1.0)?; // Orientation w=1
-    // ScaleShear identity 3x3
-    cursor.write_f32_le(1.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(1.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(0.0)?;
-    cursor.write_f32_le(1.0)?;
-
-    // MeshBindingCount + MeshBindings
-    cursor.seek(SeekFrom::Start((model_struct_offset + 0x54) as u64))?;
-    cursor.write_u32_le(mesh_count as u32)?;
-    cursor.write_u64_le(mesh_bindings_start as u64)?;
-
-    // ---- Bone array ----
+    // Allocate buffer through bone array end
+    let mut buf = vec![0u8; bones_end];
     let mut strings = super::string_table::StringTable::new();
 
-    for (i, bone) in geom.granny_bones.iter().enumerate() {
-        let base = bones_start + i * GRANNY_BONE_SIZE;
-        let lt = &local_transforms[i];
-
-        strings.add(base, bone.name.clone());
-
-        cursor.seek(SeekFrom::Start((base + 0x08) as u64))?;
-        cursor.write_i32_le(bone.parent_index)?;
-        cursor.write_u32_le(lt.flags)?;
-        for &v in &lt.position {
-            cursor.write_f32_le(v)?;
-        }
-        for &v in &lt.orientation {
-            cursor.write_f32_le(v)?;
-        }
-        for row in &lt.scale_shear {
-            for &v in row {
-                cursor.write_f32_le(v)?;
-            }
-        }
-        for row in &bone.inverse_world_matrix.rows {
-            for &val in row {
-                cursor.write_f32_le(val)?;
-            }
-        }
-        cursor.write_f32_le(geom.bounding_sphere.radius)?;
-    }
-
-    // ---- Model mesh bindings (for Model->MeshBindings) ----
-    for i in 0..mesh_count {
-        let binding_pos = mesh_bindings_start + i * 8;
-        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
-        cursor.seek(SeekFrom::Start(binding_pos as u64))?;
-        cursor.write_u64_le(mesh_struct_pos as u64)?;
-    }
-
-    // ---- Mesh pointer array (for file_info->Meshes) ----
-    for i in 0..mesh_count {
-        let ptr_pos = mesh_ptrs_start + i * 8;
-        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
-        cursor.seek(SeekFrom::Start(ptr_pos as u64))?;
-        cursor.write_u64_le(mesh_struct_pos as u64)?;
-    }
-
-    // ---- Full mesh structs (0x4C bytes each) ----
-    let mut current_bone_binding_offset = bone_bindings_start;
-    for i in 0..mesh_count {
-        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
-        let bone_binding_count = mesh_bone_bindings[i].len();
-
-        strings.add(mesh_struct_pos, mesh_names[i].clone());
-
-        // +0x30: BoneBindingCount
-        cursor.seek(SeekFrom::Start((mesh_struct_pos + 0x30) as u64))?;
-        cursor.write_u32_le(bone_binding_count as u32)?;
-
-        // +0x34: BoneBindings pointer
-        if bone_binding_count > 0 {
-            cursor.write_u64_le(current_bone_binding_offset as u64)?;
-        }
-
-        current_bone_binding_offset += bone_binding_count * GRANNY_BONE_BINDING_SIZE;
-    }
-
-    // ---- Bone binding arrays for each mesh ----
-    current_bone_binding_offset = bone_bindings_start;
-    for bone_names in mesh_bone_bindings.iter().take(mesh_count) {
-        if bone_names.is_empty() {
-            continue;
-        }
-        for (j, bone_name) in bone_names.iter().enumerate() {
-            let binding_pos = current_bone_binding_offset + j * GRANNY_BONE_BINDING_SIZE;
-            strings.add(binding_pos, bone_name.clone());
-        }
-        current_bone_binding_offset += bone_names.len() * GRANNY_BONE_BINDING_SIZE;
-    }
-
-    // ---- String table fixups ----
+    // ---- File info header [0x00..0x94] ----
+    // FileName string "gr2ugx"
     strings.add(0x10, "gr2ugx".to_string());
-    strings.add(skeleton_struct_offset, "GrannyRootBone".to_string());
-    strings.add(model_struct_offset, "GrannyRootBone".to_string());
 
-    // ---- Build string table and patch offsets ----
-    strings.write(&mut buf);
+    // Skeleton RTA at +0x30
+    {
+        let mut cursor = MutCursor::new(&mut buf);
+        cursor.seek(SeekFrom::Start(0x30))?;
+        cursor.write_u32_le(1)?; // SkeletonCount
+        cursor.write_u64_le(skel_ptr_array as u64)?;
+    }
+    // Meshes and Models RTAs (+0x54, +0x60) are patched later
 
-    // ---- Emit bone ExtendedData (type definitions + data blobs) ----
-    //
-    // For each bone that has extended_data, we emit:
-    //   1. A GrannyDataTypeDefinition[] array (type schema)
-    //   2. A data blob described by that schema
-    // Then patch the bone's ExtendedData pointers at bone+0x94.
-    //
-    // To deduplicate type definitions: bones that share the same type layout
-    // (same member names/types) share the same type def array.
+    // ---- Skeleton pointer array ----
+    buf[skel_ptr_array..skel_ptr_array + 8].copy_from_slice(&(skel_struct as u64).to_le_bytes());
 
+    // ---- Skeleton struct ----
+    strings.add(skel_struct, "GrannyRootBone".to_string());
+    {
+        let mut cursor = MutCursor::new(&mut buf);
+        cursor.seek(SeekFrom::Start((skel_struct + 0x08) as u64))?;
+        cursor.write_u32_le(bone_count as u32)?;
+        cursor.write_u64_le(bones_start as u64)?;
+        cursor.write_u32_le(geom.skeleton_lod_type)?; // LODType
+    }
+
+    // ---- Bone array ----
+    let fallback_transforms = if geom
+        .granny_bones
+        .iter()
+        .any(|b| b.local_transform.is_none())
+    {
+        Some(compute_fallback_local_transforms(geom))
+    } else {
+        None
+    };
+
+    {
+        let mut cursor = MutCursor::new(&mut buf);
+        for (i, bone) in geom.granny_bones.iter().enumerate() {
+            let base = bones_start + i * GRANNY_BONE_SIZE;
+            strings.add(base, bone.name.clone());
+
+            cursor.seek(SeekFrom::Start((base + 0x08) as u64))?;
+            cursor.write_i32_le(bone.parent_index)?;
+
+            if let Some(ref lt) = bone.local_transform {
+                cursor.write_u32_le(lt.flags)?;
+                for &v in &lt.position {
+                    cursor.write_f32_le(v)?;
+                }
+                for &v in &lt.orientation {
+                    cursor.write_f32_le(v)?;
+                }
+                for row in &lt.scale_shear {
+                    for &v in row {
+                        cursor.write_f32_le(v)?;
+                    }
+                }
+            } else {
+                let fb = &fallback_transforms.as_ref().unwrap()[i];
+                cursor.write_u32_le(fb.flags)?;
+                for &v in &fb.position {
+                    cursor.write_f32_le(v)?;
+                }
+                for &v in &fb.orientation {
+                    cursor.write_f32_le(v)?;
+                }
+                for row in &fb.scale_shear {
+                    for &v in row {
+                        cursor.write_f32_le(v)?;
+                    }
+                }
+            }
+
+            for row in &bone.inverse_world_matrix.rows {
+                for &val in row {
+                    cursor.write_f32_le(val)?;
+                }
+            }
+            cursor.write_f32_le(bone.lod_error)?;
+        }
+    }
+
+    // ---- Phase 2: Extended data (appended after bones) ----
     // Collect unique type definitions and assign indices
     let mut unique_type_defs: Vec<Vec<GrannyTypeMember>> = Vec::new();
     let mut bone_ext_type_index: Vec<Option<usize>> = Vec::with_capacity(bone_count);
 
     for bone in &geom.granny_bones {
         if let Some(ref type_members) = bone.extended_data_type {
-            // Check if we already have this type layout
             let idx = unique_type_defs
                 .iter()
                 .position(|existing| type_defs_equal(existing, type_members));
@@ -392,55 +226,211 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         }
     }
 
-    // Emit type definitions and collect their offsets
+    // Emit type definitions (16-byte aligned) using the shared string table
     let mut type_def_offsets: Vec<usize> = Vec::with_capacity(unique_type_defs.len());
-    for type_members in &unique_type_defs {
-        // Align to 4 bytes
-        while !buf.len().is_multiple_of(4) {
-            buf.push(0);
+    #[cfg(feature = "std")]
+    {
+        for (ti, td) in unique_type_defs.iter().enumerate() {
+            let nested = td.iter().filter(|m| m.reference_type.is_some()).count();
+            std::eprintln!(
+                "  [granny] unique_type[{ti}]: {} members, {nested} nested refs",
+                td.len()
+            );
         }
+    }
+    for (ti, type_members) in unique_type_defs.iter().enumerate() {
+        let aligned = align16(buf.len());
+        buf.resize(aligned, 0);
         let type_def_offset = buf.len();
         type_def_offsets.push(type_def_offset);
-
-        // Emit each member + end terminator
-        // String pointers in type defs need fixups too
-        let mut type_strings = super::string_table::StringTable::new();
-        emit_type_def_array(&mut buf, &mut type_strings, type_members);
-
-        // Patch type def name pointers
-        type_strings.write(&mut buf);
+        let before = buf.len();
+        emit_type_def_array(&mut buf, &mut strings, type_members);
+        #[cfg(feature = "std")]
+        std::eprintln!(
+            "  [granny] type[{ti}] at 0x{type_def_offset:04X}: {} bytes emitted",
+            buf.len() - before
+        );
     }
 
-    // Emit data blobs for each bone's extended data
+    // Emit data blobs for each bone's extended data (16-byte aligned)
     let mut bone_data_offsets: Vec<Option<usize>> = vec![None; bone_count];
     for (i, bone) in geom.granny_bones.iter().enumerate() {
         if let (Some(variant), Some(type_members)) = (&bone.extended_data, &bone.extended_data_type)
         {
-            // Align to 4 bytes
-            while !buf.len().is_multiple_of(4) {
-                buf.push(0);
-            }
+            let aligned = align16(buf.len());
+            buf.resize(aligned, 0);
             let data_offset = buf.len();
             bone_data_offsets[i] = Some(data_offset);
-
-            let mut data_strings = super::string_table::StringTable::new();
-            emit_variant_data(&mut buf, &mut data_strings, variant, type_members);
-            data_strings.write(&mut buf);
+            let before = buf.len();
+            emit_variant_data(&mut buf, &mut strings, variant, type_members);
+            #[cfg(feature = "std")]
+            if i < 5 || buf.len() - before > 100 {
+                std::eprintln!(
+                    "  [granny] bone[{i}] data at 0x{data_offset:04X}: {} bytes",
+                    buf.len() - before
+                );
+            }
         }
+    }
+
+    #[cfg(feature = "std")]
+    {
+        let ext_count = bone_data_offsets.iter().filter(|x| x.is_some()).count();
+        std::eprintln!(
+            "  [granny] {ext_count}/{bone_count} bones have extended data, buf now {} bytes",
+            buf.len()
+        );
     }
 
     // Patch bone ExtendedData pointers: bone+0x94 = {type_def_ptr, data_ptr}
     for i in 0..bone_count {
         let bone_base = bones_start + i * GRANNY_BONE_SIZE;
         let ext_offset = bone_base + GRANNY_BONE_EXTENDED_DATA_OFFSET;
-
         if let (Some(type_idx), Some(data_off)) = (bone_ext_type_index[i], bone_data_offsets[i]) {
             let type_off = type_def_offsets[type_idx];
             buf[ext_offset..ext_offset + 8].copy_from_slice(&(type_off as u64).to_le_bytes());
             buf[ext_offset + 8..ext_offset + 16].copy_from_slice(&(data_off as u64).to_le_bytes());
         }
-        // If no extended data, the 16 bytes at bone+0x94 stay as zeros (already initialized)
     }
+
+    // ---- Phase 3: Mesh structures (appended after extended data) ----
+    let mesh_ptrs_start = align16(buf.len());
+    buf.resize(mesh_ptrs_start, 0);
+
+    let mesh_structs_start = align16(mesh_ptrs_start + mesh_count * 8);
+    let bone_bindings_start = mesh_structs_start + mesh_count * GRANNY_MESH_SIZE;
+    let after_bone_bindings = bone_bindings_start + total_bone_bindings * GRANNY_BONE_BINDING_SIZE;
+
+    // Grow buffer to hold mesh ptrs + mesh structs + bone bindings
+    buf.resize(after_bone_bindings, 0);
+
+    // Patch file_info Meshes RTA at +0x54
+    buf[0x54..0x58].copy_from_slice(&(mesh_count as u32).to_le_bytes());
+    buf[0x58..0x60].copy_from_slice(&(mesh_ptrs_start as u64).to_le_bytes());
+
+    // Mesh pointer array
+    for i in 0..mesh_count {
+        let ptr_pos = mesh_ptrs_start + i * 8;
+        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
+        buf[ptr_pos..ptr_pos + 8].copy_from_slice(&(mesh_struct_pos as u64).to_le_bytes());
+    }
+
+    // Mesh structs + bone binding arrays
+    let mut current_bb_offset = bone_bindings_start;
+    for i in 0..mesh_count {
+        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
+        let bb_count = mesh_bone_bindings[i].len();
+
+        strings.add(mesh_struct_pos, mesh_names[i].clone());
+
+        // +0x30: BoneBindingCount
+        buf[mesh_struct_pos + 0x30..mesh_struct_pos + 0x34]
+            .copy_from_slice(&(bb_count as u32).to_le_bytes());
+        if bb_count > 0 {
+            buf[mesh_struct_pos + 0x34..mesh_struct_pos + 0x3C]
+                .copy_from_slice(&(current_bb_offset as u64).to_le_bytes());
+        }
+
+        // Write bone binding entries (name + OBB + triangle indices)
+        for (j, binding) in mesh_bone_bindings[i].iter().enumerate() {
+            let binding_pos = current_bb_offset + j * GRANNY_BONE_BINDING_SIZE;
+            strings.add(binding_pos, binding.bone_name.clone());
+
+            // OBBMin[3] at +0x08
+            let mut cursor = MutCursor::new(&mut buf);
+            cursor.seek(SeekFrom::Start((binding_pos + 0x08) as u64))?;
+            for &v in &binding.obb_min {
+                cursor.write_f32_le(v)?;
+            }
+            // OBBMax[3] at +0x14
+            for &v in &binding.obb_max {
+                cursor.write_f32_le(v)?;
+            }
+            // TriangleIndices RTA at +0x20: count(i32) + ptr(u64)
+            // Triangle indices data is deferred — we write count=0/ptr=0 for now
+            // (original UGX files typically have empty triangle indices)
+            cursor.write_i32_le(binding.triangle_indices.len() as i32)?;
+            cursor.write_u64_le(0)?; // ptr patched later if non-empty
+        }
+        current_bb_offset += bb_count * GRANNY_BONE_BINDING_SIZE;
+    }
+
+    // ---- Phase 4: Model structures (appended after mesh data) ----
+    let model_ptr_array = align16(buf.len());
+    buf.resize(model_ptr_array, 0);
+
+    let model_struct = align16(model_ptr_array + 8);
+    let model_struct_size = 0x70;
+    let mesh_bindings_start = model_struct + model_struct_size;
+    let after_model = mesh_bindings_start + mesh_count * 8;
+
+    buf.resize(after_model, 0);
+
+    // Patch file_info Models RTA at +0x60
+    buf[0x60..0x64].copy_from_slice(&1u32.to_le_bytes());
+    buf[0x64..0x6C].copy_from_slice(&(model_ptr_array as u64).to_le_bytes());
+
+    // Model pointer array -> model struct
+    buf[model_ptr_array..model_ptr_array + 8].copy_from_slice(&(model_struct as u64).to_le_bytes());
+
+    // Model struct
+    strings.add(model_struct, "GrannyRootBone".to_string());
+    // +0x08: Skeleton reference
+    buf[model_struct + 0x08..model_struct + 0x10]
+        .copy_from_slice(&(skel_struct as u64).to_le_bytes());
+
+    // +0x10: InitialPlacement (identity transform: flags=0, pos=0, ori=[0,0,0,1], scale=I)
+    {
+        let mut cursor = MutCursor::new(&mut buf);
+        cursor.seek(SeekFrom::Start((model_struct + 0x10) as u64))?;
+        cursor.write_u32_le(0)?; // Flags
+        for _ in 0..3 {
+            cursor.write_f32_le(0.0)?;
+        }
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(1.0)?;
+        cursor.write_f32_le(1.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(1.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(0.0)?;
+        cursor.write_f32_le(1.0)?;
+    }
+
+    // +0x54: MeshBindingCount + MeshBindings pointer
+    buf[model_struct + 0x54..model_struct + 0x58]
+        .copy_from_slice(&(mesh_count as u32).to_le_bytes());
+    buf[model_struct + 0x58..model_struct + 0x60]
+        .copy_from_slice(&(mesh_bindings_start as u64).to_le_bytes());
+
+    // Model mesh bindings (pointers to mesh structs)
+    for i in 0..mesh_count {
+        let binding_pos = mesh_bindings_start + i * 8;
+        let mesh_struct_pos = mesh_structs_start + i * GRANNY_MESH_SIZE;
+        buf[binding_pos..binding_pos + 8].copy_from_slice(&(mesh_struct_pos as u64).to_le_bytes());
+    }
+
+    // ---- Phase 5: FileInfo type definition tree ----
+    // Build and emit the Granny2 schema that describes all structures in the chunk.
+    // The engine scans for contiguous 44-byte type def entries between the data
+    // and the string table.
+    let before_tt = buf.len();
+    let file_info_type = build_file_info_type_tree(geom);
+    emit_type_def_array(&mut buf, &mut strings, &file_info_type);
+    #[cfg(feature = "std")]
+    std::eprintln!(
+        "  [granny] FileInfo type tree: {} bytes emitted at 0x{:04X}",
+        buf.len() - before_tt,
+        before_tt
+    );
+
+    // ---- Phase 6: Final string table (all names) ----
+    strings.write(&mut buf);
 
     Ok(buf)
 }
@@ -650,6 +640,40 @@ fn emit_variant_data(
                     }
                 }
             }
+            GrannyMemberType::Int32 => {
+                let width = if m.array_width == 0 {
+                    1
+                } else {
+                    m.array_width as usize
+                };
+                if let Some(GrannyVariant::Int32(vals)) = value {
+                    for j in 0..width {
+                        let v = vals.get(j).copied().unwrap_or(0);
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                } else {
+                    for _ in 0..width {
+                        buf.extend_from_slice(&0i32.to_le_bytes());
+                    }
+                }
+            }
+            GrannyMemberType::UInt32 => {
+                let width = if m.array_width == 0 {
+                    1
+                } else {
+                    m.array_width as usize
+                };
+                if let Some(GrannyVariant::UInt32(vals)) = value {
+                    for j in 0..width {
+                        let v = vals.get(j).copied().unwrap_or(0);
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                } else {
+                    for _ in 0..width {
+                        buf.extend_from_slice(&0u32.to_le_bytes());
+                    }
+                }
+            }
             GrannyMemberType::StringMember => {
                 let str_pos = buf.len();
                 buf.extend_from_slice(&0u64.to_le_bytes());
@@ -747,9 +771,7 @@ fn emit_variant_data(
             buf.push(0);
         }
         let nested_offset = buf.len();
-        let mut nested_strings = super::string_table::StringTable::new();
-        emit_variant_data(buf, &mut nested_strings, dr.variant, dr.nested_type);
-        nested_strings.write(buf);
+        emit_variant_data(buf, strings, dr.variant, dr.nested_type);
         buf[dr.ptr_pos..dr.ptr_pos + 8].copy_from_slice(&(nested_offset as u64).to_le_bytes());
     }
 
@@ -761,9 +783,7 @@ fn emit_variant_data(
         let arr_offset = buf.len();
         buf[da.ptr_pos..da.ptr_pos + 8].copy_from_slice(&(arr_offset as u64).to_le_bytes());
         for (_, elem) in da.elements {
-            let mut elem_strings = super::string_table::StringTable::new();
-            emit_variant_data(buf, &mut elem_strings, elem, da.nested_type);
-            elem_strings.write(buf);
+            emit_variant_data(buf, strings, elem, da.nested_type);
         }
     }
 }
@@ -790,4 +810,331 @@ fn compute_type_size(members: &[GrannyTypeMember]) -> usize {
         total += unit * width;
     }
     total
+}
+
+// ---------------------------------------------------------------------------
+// Fallback local transform derivation (used when bones lack stored transforms)
+// ---------------------------------------------------------------------------
+
+struct FallbackTransform {
+    flags: u32,
+    position: [f32; 3],
+    orientation: [f32; 4],
+    scale_shear: [[f32; 3]; 3],
+}
+
+/// Derive local transforms from inverse world matrices for bones that lack
+/// stored transform data (e.g. after a glTF round-trip).
+fn compute_fallback_local_transforms(geom: &UgxGeom) -> Vec<FallbackTransform> {
+    let bone_count = geom.granny_bones.len();
+    let world_matrices: Vec<Matrix4x4> = geom
+        .granny_bones
+        .iter()
+        .map(|bone| bone.inverse_world_matrix.inverse().unwrap_or_default())
+        .collect();
+
+    geom.granny_bones
+        .iter()
+        .enumerate()
+        .map(|(i, bone)| {
+            let local_matrix =
+                if bone.parent_index >= 0 && (bone.parent_index as usize) < bone_count {
+                    let parent_idx = bone.parent_index as usize;
+                    geom.granny_bones[parent_idx]
+                        .inverse_world_matrix
+                        .multiply(&world_matrices[i])
+                } else {
+                    world_matrices[i].clone()
+                };
+
+            let position = local_matrix.translation();
+            let m = &local_matrix.rows;
+            let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+            let sy = (m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1]).sqrt();
+            let sz = (m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2]).sqrt();
+
+            let rot_matrix = if sx > 1e-7 && sy > 1e-7 && sz > 1e-7 {
+                Matrix4x4 {
+                    rows: [
+                        [m[0][0] / sx, m[0][1] / sy, m[0][2] / sz, 0.0],
+                        [m[1][0] / sx, m[1][1] / sy, m[1][2] / sz, 0.0],
+                        [m[2][0] / sx, m[2][1] / sy, m[2][2] / sz, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                }
+            } else {
+                Matrix4x4::identity()
+            };
+
+            let orientation = rot_matrix.to_quaternion();
+            let rt = rot_matrix.transpose();
+            let scale_shear = [
+                [
+                    rt.rows[0][0] * m[0][0] + rt.rows[0][1] * m[1][0] + rt.rows[0][2] * m[2][0],
+                    rt.rows[0][0] * m[0][1] + rt.rows[0][1] * m[1][1] + rt.rows[0][2] * m[2][1],
+                    rt.rows[0][0] * m[0][2] + rt.rows[0][1] * m[1][2] + rt.rows[0][2] * m[2][2],
+                ],
+                [
+                    rt.rows[1][0] * m[0][0] + rt.rows[1][1] * m[1][0] + rt.rows[1][2] * m[2][0],
+                    rt.rows[1][0] * m[0][1] + rt.rows[1][1] * m[1][1] + rt.rows[1][2] * m[2][1],
+                    rt.rows[1][0] * m[0][2] + rt.rows[1][1] * m[1][2] + rt.rows[1][2] * m[2][2],
+                ],
+                [
+                    rt.rows[2][0] * m[0][0] + rt.rows[2][1] * m[1][0] + rt.rows[2][2] * m[2][0],
+                    rt.rows[2][0] * m[0][1] + rt.rows[2][1] * m[1][1] + rt.rows[2][2] * m[2][1],
+                    rt.rows[2][0] * m[0][2] + rt.rows[2][1] * m[1][2] + rt.rows[2][2] * m[2][2],
+                ],
+            ];
+
+            let mut flags = 0u32;
+            if position[0].abs() > 1e-7 || position[1].abs() > 1e-7 || position[2].abs() > 1e-7 {
+                flags |= GRANNY_HAS_POSITION;
+            }
+            if (orientation[0].abs() > 1e-7)
+                || (orientation[1].abs() > 1e-7)
+                || (orientation[2].abs() > 1e-7)
+                || ((orientation[3] - 1.0).abs() > 1e-7)
+            {
+                flags |= GRANNY_HAS_ORIENTATION;
+            }
+            let is_identity_scale = (scale_shear[0][0] - 1.0).abs() < 1e-5
+                && scale_shear[0][1].abs() < 1e-5
+                && scale_shear[0][2].abs() < 1e-5
+                && scale_shear[1][0].abs() < 1e-5
+                && (scale_shear[1][1] - 1.0).abs() < 1e-5
+                && scale_shear[1][2].abs() < 1e-5
+                && scale_shear[2][0].abs() < 1e-5
+                && scale_shear[2][1].abs() < 1e-5
+                && (scale_shear[2][2] - 1.0).abs() < 1e-5;
+            if !is_identity_scale {
+                flags |= GRANNY_HAS_SCALE_SHEAR;
+            }
+
+            FallbackTransform {
+                flags,
+                position,
+                orientation,
+                scale_shear,
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// FileInfo type tree builder
+// ---------------------------------------------------------------------------
+
+/// Helper: create a simple scalar/string member with no nested type.
+fn tm(member_type: GrannyMemberType, name: &str) -> GrannyTypeMember {
+    GrannyTypeMember {
+        member_type,
+        name: String::from(name),
+        reference_type: None,
+        array_width: 0,
+        extra: [0; 3],
+    }
+}
+
+/// Helper: create a member with a nested reference type.
+fn tm_ref(
+    member_type: GrannyMemberType,
+    name: &str,
+    nested: Vec<GrannyTypeMember>,
+) -> GrannyTypeMember {
+    GrannyTypeMember {
+        member_type,
+        name: String::from(name),
+        reference_type: Some(nested),
+        array_width: 0,
+        extra: [0; 3],
+    }
+}
+
+/// Helper: create a Real32 member with a specific array width.
+fn tm_real32_array(name: &str, width: u32) -> GrannyTypeMember {
+    GrannyTypeMember {
+        member_type: GrannyMemberType::Real32,
+        name: String::from(name),
+        reference_type: None,
+        array_width: width,
+        extra: [0; 3],
+    }
+}
+
+/// Build the transform type definition.
+fn build_transform_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::Int32, "Flags"),
+        tm_real32_array("Position", 3),
+        tm_real32_array("Orientation", 4),
+        tm_real32_array("ScaleShear", 9),
+    ]
+}
+
+/// Build the bone type definition, including extended data if present.
+fn build_bone_type(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
+    let mut members = vec![
+        tm(GrannyMemberType::StringMember, "Name"),
+        tm(GrannyMemberType::Int32, "ParentIndex"),
+        tm_ref(
+            GrannyMemberType::Inline,
+            "LocalTransform",
+            build_transform_type(),
+        ),
+        tm_real32_array("InverseWorld4x4", 16),
+        tm(GrannyMemberType::Real32, "LODError"),
+    ];
+
+    // Add ExtendedData variant if any bone has extended data
+    let has_extended = geom.granny_bones.iter().any(|b| b.extended_data.is_some());
+    if has_extended {
+        members.push(tm(GrannyMemberType::VariantReference, "ExtendedData"));
+    }
+
+    members
+}
+
+/// Build the bone_binding type definition.
+fn build_bone_binding_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "BoneName"),
+        tm_real32_array("OBBMin", 3),
+        tm_real32_array("OBBMax", 3),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "TriangleIndices",
+            vec![tm(GrannyMemberType::Int32, "TriangleIndex")],
+        ),
+    ]
+}
+
+/// Build the mesh type definition.
+fn build_mesh_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "Name"),
+        // Vertex/topology data references (empty in UGX — kept for schema compat)
+        tm_ref(GrannyMemberType::Reference, "PrimaryVertexData", Vec::new()),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "MorphTargets",
+            Vec::new(),
+        ),
+        tm_ref(GrannyMemberType::Reference, "PrimaryTopology", Vec::new()),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "MaterialBindings",
+            Vec::new(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "BoneBindings",
+            build_bone_binding_type(),
+        ),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
+}
+
+/// Build the skeleton type definition.
+fn build_skeleton_type(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "Name"),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "Bones",
+            build_bone_type(geom),
+        ),
+        tm(GrannyMemberType::Int32, "LODType"),
+    ]
+}
+
+/// Build the model type definition.
+fn build_model_type(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "Name"),
+        tm_ref(
+            GrannyMemberType::Reference,
+            "Skeleton",
+            build_skeleton_type(geom),
+        ),
+        tm_ref(
+            GrannyMemberType::Inline,
+            "InitialPlacement",
+            build_transform_type(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "MeshBindings",
+            vec![tm_ref(
+                GrannyMemberType::Reference,
+                "Mesh",
+                build_mesh_type(),
+            )],
+        ),
+    ]
+}
+
+/// Build the complete FileInfo type definition tree.
+///
+/// This constructs the Granny2 schema matching the `file_info` struct layout:
+/// ```text
+/// struct file_info {
+///     art_tool_info *ArtToolInfo;          // Reference (empty)
+///     exporter_info *ExporterInfo;         // Reference (empty)
+///     char const *FromFileName;            // String
+///     int32 TextureCount; texture **Textures;         // ArrayOfReferences (empty)
+///     int32 MaterialCount; material **Materials;       // ArrayOfReferences (empty)
+///     int32 SkeletonCount; skeleton **Skeletons;       // ArrayOfReferences
+///     int32 VertexDataCount; vertex_data **VertexDatas; // ArrayOfReferences (empty)
+///     int32 TriTopologyCount; tri_topology **TriTopologies; // ArrayOfReferences (empty)
+///     int32 MeshCount; mesh **Meshes;                 // ArrayOfReferences
+///     int32 ModelCount; model **Models;               // ArrayOfReferences
+///     int32 TrackGroupCount; track_group **TrackGroups; // ArrayOfReferences (empty)
+///     int32 AnimationCount; animation **Animations;    // ArrayOfReferences (empty)
+///     variant ExtendedData;               // VariantReference
+/// };
+/// ```
+fn build_file_info_type_tree(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
+    vec![
+        tm_ref(GrannyMemberType::Reference, "ArtToolInfo", Vec::new()),
+        tm_ref(GrannyMemberType::Reference, "ExporterInfo", Vec::new()),
+        tm(GrannyMemberType::StringMember, "FromFileName"),
+        tm_ref(GrannyMemberType::ArrayOfReferences, "Textures", Vec::new()),
+        tm_ref(GrannyMemberType::ArrayOfReferences, "Materials", Vec::new()),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "Skeletons",
+            build_skeleton_type(geom),
+        ),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "VertexDatas",
+            Vec::new(),
+        ),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "TriTopologies",
+            Vec::new(),
+        ),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "Meshes",
+            build_mesh_type(),
+        ),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "Models",
+            build_model_type(geom),
+        ),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "TrackGroups",
+            Vec::new(),
+        ),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "Animations",
+            Vec::new(),
+        ),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
 }

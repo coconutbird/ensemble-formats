@@ -30,7 +30,7 @@ pub(super) fn build_material_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         root.children.push(build_material_node(mat));
     }
 
-    let data = bdt::Writer::write(&root, bdt::Endian::Little)?;
+    let data = bdt::CompactWriter::write(&root)?;
     Ok(data)
 }
 
@@ -40,42 +40,43 @@ fn build_material_node(mat: &Material) -> bdt::Node {
     node.attributes
         .push(bdt::Attribute::with_string("Name", &mat.name));
     node.attributes
-        .push(bdt::Attribute::new("Ver", bdt::Variant::Int(4)));
+        .push(bdt::Attribute::new("Ver", bdt::Variant::UInt(4)));
 
-    // NameValues child with material properties
+    // NameValues child with all material properties (matching engine order)
     let mut nv = bdt::Node::new("NameValues");
 
-    let mut spec_node = bdt::Node::new("SpecPower");
-    spec_node.text = bdt::Variant::Float(mat.spec_power);
-    nv.children.push(spec_node);
+    fn push_float(nv: &mut bdt::Node, name: &str, val: f32) {
+        let mut n = bdt::Node::new(name);
+        n.text = bdt::Variant::Float(val);
+        nv.children.push(n);
+    }
+    fn push_uint(nv: &mut bdt::Node, name: &str, val: u32) {
+        let mut n = bdt::Node::new(name);
+        n.text = bdt::Variant::UInt(val);
+        nv.children.push(n);
+    }
 
-    let mut flags_node = bdt::Node::new("Flags");
-    flags_node.text = bdt::Variant::UInt(mat.flags);
-    nv.children.push(flags_node);
-
-    let mut blend_node = bdt::Node::new("BlendType");
-    blend_node.text = bdt::Variant::UInt(mat.blend_type as u32);
-    nv.children.push(blend_node);
-
-    let mut opacity_node = bdt::Node::new("Opacity");
-    opacity_node.text = bdt::Variant::UInt((mat.opacity * 255.0) as u32);
-    nv.children.push(opacity_node);
+    push_float(&mut nv, "SpecPower", mat.spec_power);
+    push_float(&mut nv, "SpecColorR", mat.spec_color[0]);
+    push_float(&mut nv, "SpecColorG", mat.spec_color[1]);
+    push_float(&mut nv, "SpecColorB", mat.spec_color[2]);
+    push_float(&mut nv, "EnvReflectivity", mat.env_reflectivity);
+    push_float(&mut nv, "EnvSharpness", mat.env_sharpness);
+    push_float(&mut nv, "EnvFresnel", mat.env_fresnel);
+    push_float(&mut nv, "EnvFresnelPower", mat.env_fresnel_power);
+    push_uint(&mut nv, "AccessoryIndex", mat.accessory_index);
+    push_uint(&mut nv, "Flags", mat.flags);
+    push_uint(&mut nv, "BlendType", mat.blend_type as u32);
+    push_uint(&mut nv, "Opacity", (mat.opacity * 255.0) as u32);
 
     node.children.push(nv);
 
-    // Maps child with texture map slots
+    // Maps child — always write all 13 map type nodes (matching engine)
     let mut maps = bdt::Node::new("Maps");
 
     for map_type in MapType::ALL {
         let idx = map_type as usize;
         let uvw = mat.uvw_velocity[idx];
-        let has_maps = !mat.maps[idx].is_empty();
-        let has_uvw = uvw[0] != 0.0 || uvw[1] != 0.0 || uvw[2] != 0.0;
-
-        // Only write map type nodes that have data
-        if !has_maps && !has_uvw {
-            continue;
-        }
 
         let mut type_node = bdt::Node::new(map_type.name());
         type_node

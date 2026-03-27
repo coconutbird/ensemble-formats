@@ -40,6 +40,14 @@ fn read_material(node: &bdt::Node) -> Material {
         for prop in &nv_node.children {
             match prop.name.as_str() {
                 "SpecPower" => mat.spec_power = variant_to_f32(&prop.text),
+                "SpecColorR" => mat.spec_color[0] = variant_to_f32(&prop.text),
+                "SpecColorG" => mat.spec_color[1] = variant_to_f32(&prop.text),
+                "SpecColorB" => mat.spec_color[2] = variant_to_f32(&prop.text),
+                "EnvReflectivity" => mat.env_reflectivity = variant_to_f32(&prop.text),
+                "EnvSharpness" => mat.env_sharpness = variant_to_f32(&prop.text),
+                "EnvFresnel" => mat.env_fresnel = variant_to_f32(&prop.text),
+                "EnvFresnelPower" => mat.env_fresnel_power = variant_to_f32(&prop.text),
+                "AccessoryIndex" => mat.accessory_index = variant_to_u32(&prop.text),
                 "Flags" => mat.flags = variant_to_u32(&prop.text),
                 "BlendType" => mat.blend_type = variant_to_u8(&prop.text),
                 "Opacity" => {

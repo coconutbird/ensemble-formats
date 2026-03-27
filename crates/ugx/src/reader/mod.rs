@@ -226,10 +226,10 @@ impl UgxGeom {
             validate_granny_chunk(granny)?;
         }
 
-        let granny_bones = if let Some(ref granny) = granny_data {
+        let (granny_bones, skeleton_lod_type) = if let Some(ref granny) = granny_data {
             parse_granny_bones(granny)?
         } else {
-            Vec::new()
+            (Vec::new(), 0)
         };
 
         let granny_meshes = if let Some(ref granny) = granny_data {
@@ -265,6 +265,7 @@ impl UgxGeom {
             bones,
             granny_bones,
             granny_meshes,
+            skeleton_lod_type,
             bone_bounds,
             sections,
             accessories,

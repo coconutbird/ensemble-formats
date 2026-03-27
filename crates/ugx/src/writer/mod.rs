@@ -107,44 +107,15 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
 
 /// Build the index buffer chunk (0x701).
 ///
-/// When `max_instances > 1`, the engine expects instanced copies of each
-/// section's indices in the buffer. Each instance's indices are offset by
-/// `instance_index_multiplier` (iim) so the engine can render multiple
-/// copies in a single draw call.
-///
-/// Layout per section: `[base_indices | inst1_indices | inst2_indices | ...]`
-/// padded so each section starts at `iim`-aligned boundaries.
+/// The file stores only base (non-instanced) indices. The engine handles
+/// instancing at runtime using `max_instances` and `instance_index_multiplier`
+/// from the cached-data header. The writer simply serializes the index
+/// buffer as-is — whether it came from a UGX read or a glTF import.
 fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
-    let max_inst = geom.max_instances.max(1) as usize;
-    let iim = geom.instance_index_multiplier as u32;
-
-    if max_inst <= 1 || iim == 0 {
-        // No instancing — just write raw indices
-        let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
-        for &idx in &geom.index_buffer {
-            buf.write_u16_le(idx).unwrap();
-        }
-        return buf;
+    let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
+    for &idx in &geom.index_buffer {
+        buf.write_u16_le(idx).unwrap();
     }
-
-    // Build instanced index buffer.
-    // Each section's indices are repeated `max_instances` times, each copy
-    // offset by `iim * instance_number`. Sections are placed so that
-    // section N's base offset = sum of (max_instances * iim) for all prior sections.
-    let mut buf = Vec::new();
-    for section in &geom.sections {
-        let start = section.ib_offset as usize;
-        let count = section.num_tris as usize * 3;
-        let base_indices = &geom.index_buffer[start..start + count];
-
-        for inst in 0..max_inst {
-            let offset = iim * inst as u32;
-            for &idx in base_indices {
-                buf.write_u16_le(idx + offset as u16).unwrap();
-            }
-        }
-    }
-
     buf
 }
 
@@ -274,6 +245,7 @@ mod tests {
             bones,
             granny_bones: Vec::new(),
             granny_meshes: Vec::new(),
+            skeleton_lod_type: 0,
             bone_bounds: vec![
                 AABB {
                     min: [0.0, 0.0, 0.0],
@@ -399,14 +371,11 @@ mod tests {
                     }];
                     maps
                 },
-                uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
+                ..Material::default()
             },
             Material {
                 name: "metal_plate".to_string(),
                 spec_power: 50.0,
-                flags: 0,
-                blend_type: 0,
-                opacity: 1.0,
                 maps: {
                     let mut maps: [Vec<Map>; MapType::NUM_TYPES] = Default::default();
                     maps[MapType::Diffuse as usize] = vec![Map {
@@ -421,7 +390,7 @@ mod tests {
                     }];
                     maps
                 },
-                uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
+                ..Material::default()
             },
         ];
 
@@ -462,6 +431,7 @@ mod tests {
             GrannyBone {
                 name: "root".to_string(),
                 parent_index: -1,
+                local_transform: None,
                 inverse_world_matrix: Matrix4x4 {
                     rows: [
                         [1.0, 0.0, 0.0, 0.0],
@@ -470,12 +440,14 @@ mod tests {
                         [0.0, 0.0, 0.0, 1.0],
                     ],
                 },
+                lod_error: 0.0,
                 extended_data: None,
                 extended_data_type: None,
             },
             GrannyBone {
                 name: "spine".to_string(),
                 parent_index: 0,
+                local_transform: None,
                 inverse_world_matrix: Matrix4x4 {
                     rows: [
                         [1.0, 0.0, 0.0, 0.0],
@@ -484,6 +456,7 @@ mod tests {
                         [0.5, -2.0, 1.5, 1.0],
                     ],
                 },
+                lod_error: 0.0,
                 extended_data: None,
                 extended_data_type: None,
             },

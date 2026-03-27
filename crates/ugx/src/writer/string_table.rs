@@ -43,6 +43,7 @@ impl StringTable {
     }
 
     /// Like [`Self::write`], but pads each string entry to `align`-byte boundaries.
+    #[allow(dead_code)]
     pub fn write_aligned(self, buf: &mut Vec<u8>, align: usize) {
         self.write_inner(buf, align);
     }

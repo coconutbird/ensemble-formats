@@ -24,7 +24,12 @@ pub(crate) fn build_section_to_mesh_mapping(
     let mesh_bone_sets: Vec<std::collections::HashSet<&str>> = geom
         .granny_meshes
         .iter()
-        .map(|m| m.bone_bindings.iter().map(|s| s.as_str()).collect())
+        .map(|m| {
+            m.bone_bindings
+                .iter()
+                .map(|b| b.bone_name.as_str())
+                .collect()
+        })
         .collect();
 
     // For each section, find which mesh it belongs to by matching bone usage

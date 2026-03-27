@@ -103,6 +103,7 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 blend_type,
                 flags,
                 uvw_velocity,
+                ..Material::default()
             }
         })
         .collect()

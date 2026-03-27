@@ -14,8 +14,8 @@ mod primitive;
 mod skeleton;
 
 use ugx::{
-    Error, GrannyBone, GrannyMesh, MAX_UV, Result, Section, UgxGeom, UgxVersion, UnivertPacker,
-    UnpackedVertex, VertexElementType,
+    Error, GrannyBone, GrannyBoneBinding, GrannyMesh, MAX_UV, Result, Section, UgxGeom, UgxVersion,
+    UnivertPacker, UnpackedVertex, VertexElementType,
 };
 
 use accessor::resolve_buffer;
@@ -333,6 +333,7 @@ pub fn import_from_gltf(
         bones,
         granny_bones,
         granny_meshes,
+        skeleton_lod_type: 0,
         bone_bounds,
         sections,
         accessories: Vec::new(),
@@ -399,13 +400,16 @@ fn generate_granny_meshes_from_vertices(
             continue;
         }
 
-        // Convert bone indices to bone names
+        // Convert bone indices to bone names (with default OBB)
         // bone_indices are 1-based, so subtract 1 to get the granny_bones index
-        let bone_bindings: Vec<String> = used_bones
+        let bone_bindings: Vec<GrannyBoneBinding> = used_bones
             .iter()
             .filter_map(|&idx| {
                 let idx_0based = (idx as usize).saturating_sub(1);
-                granny_bones.get(idx_0based).map(|b| b.name.clone())
+                granny_bones.get(idx_0based).map(|b| GrannyBoneBinding {
+                    bone_name: b.name.clone(),
+                    ..Default::default()
+                })
             })
             .collect();
 

@@ -29,7 +29,10 @@ pub mod section;
 
 // Re-export all public types for convenient access.
 pub use aabb_tree::{AabbTree, AabbTreeNode};
-pub use bone::{Bone, GrannyBone, GrannyMemberType, GrannyMesh, GrannyTypeMember, GrannyVariant};
+pub use bone::{
+    Bone, GrannyBone, GrannyBoneBinding, GrannyLocalTransform, GrannyMemberType, GrannyMesh,
+    GrannyTypeMember, GrannyVariant,
+};
 pub use material::{Map, MapType, Material};
 pub use primitives::{AABB, Keyframe, Sphere};
 pub use section::Section;
@@ -125,6 +128,8 @@ pub struct UgxGeom {
     pub granny_bones: Vec<GrannyBone>,
     /// Granny mesh data (from granny chunk 0x703) - contains mesh names and bone bindings.
     pub granny_meshes: Vec<GrannyMesh>,
+    /// Skeleton LOD type from the Granny chunk (0x703). Preserved for round-tripping.
+    pub skeleton_lod_type: u32,
     /// Per-bone bounding boxes.
     pub bone_bounds: Vec<AABB>,
     /// Mesh sections.

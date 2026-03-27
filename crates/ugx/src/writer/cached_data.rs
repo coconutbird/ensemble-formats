@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use ecf::io::{MutCursor, Seek, SeekFrom, Write, WriteLe};
 use zerocopy::IntoBytes;
 
-use crate::constants::EMPTY_OFFSET_SENTINEL;
+use crate::constants::EMPTY_OFFSET_SENTINEL_32;
 use crate::error::Result;
 use crate::raw::{AccessoryRaw, GeomHeaderRaw, PackedArrayRaw};
 use crate::types::{Accessory, UgxGeom, UgxVersion};
@@ -36,10 +36,19 @@ struct ArrayHeaderPositions {
 ///
 /// Orchestrates writing each section of the cached-data blob and then
 /// patches the packed-array headers with final offsets/counts.
+///
+/// The engine's `BPackedArray::pack` writes strings **inline** immediately
+/// after the struct array that references them, rather than in a deferred
+/// string table.  This writer replicates that layout:
+///
+/// 1. Section structs  (with embedded bone-remap data)
+/// 2. UnivertPacker strings inline (null-terminated, padded to 8-byte align)
+/// 3. Bone structs
+/// 4. Bone name strings inline (null-terminated in 32-byte fixed slots)
+/// 5. Accessories / valid-accessories / bone bounds
 pub(super) fn build_cached_data(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut cursor = MutCursor::new(&mut buf);
-    let mut strings = super::string_table::StringTable::new();
 
     // 1. Geometry header (64 bytes).
     write_header(&mut cursor, geom, version)?;
@@ -48,34 +57,46 @@ pub(super) fn build_cached_data(geom: &UgxGeom, version: UgxVersion) -> Result<V
     let hdr_pos = write_array_header_placeholders(&mut cursor)?;
 
     // 3. Section data + deferred bone-remap writes.
-    let (sections_offset, num_sections) = write_sections(&mut cursor, &mut strings, geom, version)?;
+    let (sections_offset, num_sections, packer_string_fixups) =
+        write_sections(&mut cursor, geom, version)?;
 
-    // 4. Bone data.
-    let (bones_offset, num_bones) = write_bones(&mut cursor, &mut strings, geom)?;
+    // 4. UnivertPacker strings inline (right after section data).
+    //    End cursor borrow, write strings directly to buf, then re-create cursor.
+    let _ = cursor;
+    write_inline_strings(&mut buf, &packer_string_fixups, 8);
 
-    // 5. Accessories (full 24-byte structs, used by both versions).
+    let mut cursor = MutCursor::new(&mut buf);
+    cursor.seek(SeekFrom::End(0))?;
+
+    // 5. Bone data.
+    let (bones_offset, num_bones, bone_name_fixups) = write_bones(&mut cursor, geom)?;
+
+    // 6. Bone name strings inline (32-byte fixed slots after bone structs).
+    let _ = cursor;
+    write_inline_strings(&mut buf, &bone_name_fixups, 32);
+
+    let mut cursor = MutCursor::new(&mut buf);
+    cursor.seek(SeekFrom::End(0))?;
+
+    // 7. Accessories (full 24-byte structs, used by both versions).
     let (acc_offset, num_acc, acc_fixups) =
         write_accessory_structs(&mut cursor, &geom.accessories)?;
 
-    // 6. Valid accessories (version-dependent encoding).
+    // 8. Accessory inner index data (immediately after accessory structs,
+    //    matching the engine's BPackedArray::pack layout).
+    write_accessory_indices(&mut cursor, &geom.accessories, &acc_fixups)?;
+
+    // 9. Valid accessories (version-dependent encoding).
     let (valid_acc_offset, num_valid_acc, valid_acc_fixups) =
         write_valid_accessories(&mut cursor, geom, version)?;
-
-    // 7. Bone bounds (min[] then max[]).
-    let (bounds_low_offset, bounds_high_offset, num_bounds) = write_bone_bounds(&mut cursor, geom)?;
-
-    // 8. Accessory inner index data (must come after all structs).
-    write_accessory_indices(&mut cursor, &geom.accessories, &acc_fixups)?;
     if !valid_acc_fixups.is_empty() {
         write_accessory_indices(&mut cursor, &geom.valid_accessories, &valid_acc_fixups)?;
     }
 
-    // 9. String table.
-    pad_to_alignment(&mut cursor, 2)?;
-    let _ = cursor; // release borrow so StringTable can write directly
-    strings.write_aligned(&mut buf, 2);
+    // 10. Bone bounds (min[] then max[]).
+    let (bounds_low_offset, bounds_high_offset, num_bounds) = write_bone_bounds(&mut cursor, geom)?;
 
-    // 10. Fixup pass — patch the six packed-array headers with real offsets.
+    // 11. Fixup pass — patch the six packed-array headers with real offsets.
     let mut cursor = MutCursor::new(&mut buf);
     fixup_packed_array_header(&mut cursor, hdr_pos.sections, num_sections, sections_offset)?;
     fixup_packed_array_header(&mut cursor, hdr_pos.bones, num_bones, bones_offset)?;
@@ -172,44 +193,35 @@ fn write_array_header_placeholders(cursor: &mut MutCursor<'_>) -> Result<ArrayHe
     })
 }
 
+/// An inline string fixup: at `offset_pos` in the buffer, write the u64 LE
+/// offset of the string that will be placed inline later.
+struct InlineStringFixup {
+    /// Byte position where the u64 offset placeholder lives.
+    offset_pos: usize,
+    /// The string content.
+    string: alloc::string::String,
+}
+
 /// Write all section structs (version-branched layout) followed by deferred
-/// bone-remap data.  Returns `(offset, count)` for the sections packed array.
+/// bone-remap data.  Returns `(offset, count, packer_string_fixups)`.
 fn write_sections(
     cursor: &mut MutCursor<'_>,
-    strings: &mut super::string_table::StringTable,
     geom: &UgxGeom,
     version: UgxVersion,
-) -> Result<(u64, u32)> {
+) -> Result<(u64, u32, Vec<InlineStringFixup>)> {
     let sections_offset = cursor.stream_position()?;
     let num_sections = geom.sections.len() as u32;
     let mut bone_remap_fixups: Vec<(usize, usize)> = Vec::new();
-
-    // Compute instanced ib_offsets: when max_instances > 1, the index buffer
-    // contains repeated copies of each section's indices, so the offset for
-    // section N = sum of (num_tris * 3 * max_instances) for sections 0..N.
-    let max_inst = geom.max_instances.max(1) as i32;
-    let mut instanced_ib_offsets = Vec::with_capacity(geom.sections.len());
-    let mut running_ib_offset = 0i32;
-    for section in &geom.sections {
-        instanced_ib_offsets.push(running_ib_offset);
-        running_ib_offset += section.num_tris * 3 * max_inst;
-    }
+    let mut packer_string_fixups: Vec<InlineStringFixup> = Vec::new();
 
     for (section_idx, section) in geom.sections.iter().enumerate() {
-        // Use instanced ib_offset when max_instances > 1, otherwise use as-is.
-        let ib_offset = if max_inst > 1 {
-            instanced_ib_offsets[section_idx]
-        } else {
-            section.ib_offset
-        };
-
         // Fixed section fields (40 bytes, shared by both versions).
         let fixed = crate::raw::PackedSectionFixedRaw {
             material_index: section.material_index.to_le_bytes(),
             accessory_index: section.accessory_index.to_le_bytes(),
             max_bones: section.max_bones.to_le_bytes(),
             rigid_bone_index: section.rigid_bone_index.to_le_bytes(),
-            ib_offset: ib_offset.to_le_bytes(),
+            ib_offset: section.ib_offset.to_le_bytes(),
             num_tris: section.num_tris.to_le_bytes(),
             vb_offset: section.vb_offset.to_le_bytes(),
             vb_bytes: section.vb_bytes.to_le_bytes(),
@@ -221,11 +233,11 @@ fn write_sections(
         // Version-specific trailing fields.
         write_section_tail(
             cursor,
-            strings,
             section,
             section_idx,
             version,
             &mut bone_remap_fixups,
+            &mut packer_string_fixups,
         )?;
     }
 
@@ -241,7 +253,7 @@ fn write_sections(
         cursor.seek(SeekFrom::Start(saved))?;
     }
 
-    Ok((sections_offset, num_sections))
+    Ok((sections_offset, num_sections, packer_string_fixups))
 }
 
 /// Write the version-specific tail of a single section struct.
@@ -250,11 +262,11 @@ fn write_sections(
 /// HW2 (32 bytes after fixed): flags(16) + bone_remap(16).
 fn write_section_tail(
     cursor: &mut MutCursor<'_>,
-    strings: &mut super::string_table::StringTable,
     section: &crate::types::Section,
     section_idx: usize,
     version: UgxVersion,
     bone_remap_fixups: &mut Vec<(usize, usize)>,
+    packer_string_fixups: &mut Vec<InlineStringFixup>,
 ) -> Result<()> {
     match version {
         UgxVersion::Hw1 => {
@@ -264,7 +276,7 @@ fn write_section_tail(
                 count: (section.bone_remap.len() as u32).to_le_bytes(),
                 _padding: [0; 4],
                 offset: if section.bone_remap.is_empty() {
-                    EMPTY_OFFSET_SENTINEL.to_le_bytes()
+                    (EMPTY_OFFSET_SENTINEL_32 as u64).to_le_bytes()
                 } else {
                     0u64.to_le_bytes()
                 },
@@ -275,7 +287,11 @@ fn write_section_tail(
             }
 
             // UnivertPacker (84 bytes)
-            write_packed_univert_packer(cursor, strings, section.base_vert_packer.as_ref())?;
+            write_packed_univert_packer(
+                cursor,
+                section.base_vert_packer.as_ref(),
+                packer_string_fixups,
+            )?;
 
             // Trailing flags (12 bytes)
             cursor.write_i32_le(if section.rigid_only { 1 } else { 0 })?;
@@ -295,7 +311,7 @@ fn write_section_tail(
                 count: (section.bone_remap.len() as u32).to_le_bytes(),
                 _padding: [0; 4],
                 offset: if section.bone_remap.is_empty() {
-                    EMPTY_OFFSET_SENTINEL.to_le_bytes()
+                    (EMPTY_OFFSET_SENTINEL_32 as u64).to_le_bytes()
                 } else {
                     0u64.to_le_bytes()
                 },
@@ -309,19 +325,19 @@ fn write_section_tail(
     Ok(())
 }
 
-/// Write packed bone structs.  Returns `(offset, count)` for the bones
-/// packed-array header.
+/// Write packed bone structs.  Returns `(offset, count, name_fixups)` for
+/// the bones packed-array header and inline name strings.
 fn write_bones(
     cursor: &mut MutCursor<'_>,
-    strings: &mut super::string_table::StringTable,
     geom: &UgxGeom,
-) -> Result<(u64, u32)> {
+) -> Result<(u64, u32, Vec<InlineStringFixup>)> {
     pad_to_alignment(cursor, 8)?;
     let offset = cursor.stream_position()?;
     let count = geom.bones.len() as u32;
+    let mut name_fixups = Vec::with_capacity(geom.bones.len());
 
     for bone in &geom.bones {
-        let name_fixup_pos = cursor.stream_position()?;
+        let name_fixup_pos = cursor.stream_position()? as usize;
 
         let mut mtb = [[0u8; 4]; 16];
         for (r, row) in bone.model_to_bone.rows.iter().enumerate() {
@@ -330,17 +346,27 @@ fn write_bones(
             }
         }
 
+        // When parent_index is -1, the engine writes the full 8 bytes as
+        // 0xFFFFFFFF_FFFFFFFF (i.e. the padding mirrors the sentinel).
+        let padding = if bone.parent_index == -1 {
+            [0xFF; 4]
+        } else {
+            [0; 4]
+        };
         let packed = crate::raw::PackedBoneRaw {
             name_offset: 0u64.to_le_bytes(), // placeholder
             model_to_bone: mtb,
             parent_index: bone.parent_index.to_le_bytes(),
-            _padding: [0; 4],
+            _padding: padding,
         };
         cursor.write_all(packed.as_bytes())?;
-        strings.add(name_fixup_pos as usize, bone.name.clone());
+        name_fixups.push(InlineStringFixup {
+            offset_pos: name_fixup_pos,
+            string: bone.name.clone(),
+        });
     }
 
-    Ok((offset, count))
+    Ok((offset, count, name_fixups))
 }
 
 /// Write valid accessories as i32 indices into the accessories array.
@@ -410,6 +436,27 @@ fn pad_to_alignment<W: Write + Seek>(writer: &mut W, alignment: u64) -> Result<(
     Ok(())
 }
 
+/// Write inline strings from fixups directly into the buffer, each in a
+/// fixed-size slot of `slot_size` bytes (null-terminated + zero-padded).
+///
+/// After writing, patches the u64 LE offset at each fixup's `offset_pos`.
+fn write_inline_strings(buf: &mut Vec<u8>, fixups: &[InlineStringFixup], slot_size: usize) {
+    for fixup in fixups {
+        let string_offset = buf.len();
+        // Write null-terminated string
+        buf.extend_from_slice(fixup.string.as_bytes());
+        buf.push(0);
+        // Pad to slot_size
+        let written = fixup.string.len() + 1;
+        if written < slot_size {
+            buf.resize(buf.len() + (slot_size - written), 0);
+        }
+        // Patch the u64 LE offset at the fixup position
+        buf[fixup.offset_pos..fixup.offset_pos + 8]
+            .copy_from_slice(&(string_offset as u64).to_le_bytes());
+    }
+}
+
 /// Fix up a packed array header at the given position using zerocopy.
 fn fixup_packed_array_header(
     cursor: &mut MutCursor<'_>,
@@ -418,7 +465,7 @@ fn fixup_packed_array_header(
     offset: u64,
 ) -> Result<()> {
     let final_offset = if count == 0 {
-        EMPTY_OFFSET_SENTINEL
+        EMPTY_OFFSET_SENTINEL_32 as u64
     } else {
         offset
     };
@@ -463,7 +510,7 @@ fn write_accessory_structs(
                 count: (acc.object_indices.len() as u32).to_le_bytes(),
                 _padding: [0; 4],
                 offset: if acc.object_indices.is_empty() {
-                    EMPTY_OFFSET_SENTINEL.to_le_bytes()
+                    (EMPTY_OFFSET_SENTINEL_32 as u64).to_le_bytes()
                 } else {
                     0u64.to_le_bytes() // placeholder
                 },
@@ -511,13 +558,13 @@ fn write_accessory_indices(
 
 /// Write a packed UnivertPacker (84 bytes on-disk) for DE sections.
 ///
-/// Layout: 2 string offset fields (u64 each, fixed up via StringTable),
+/// Layout: 2 string offset fields (u64 each, fixed up inline),
 /// then 12 u32 type fields (pos, basis, basis_scale, tangent, normal,
 /// uv[0..8], indices, weights, diffuse, index).
 fn write_packed_univert_packer(
     cursor: &mut MutCursor<'_>,
-    strings: &mut super::string_table::StringTable,
     packer: Option<&crate::vertex::packer::UnivertPacker>,
+    string_fixups: &mut Vec<InlineStringFixup>,
 ) -> Result<()> {
     let packer = match packer {
         Some(p) => p,
@@ -530,18 +577,24 @@ fn write_packed_univert_packer(
         }
     };
 
-    // pack_order string offset (placeholder, fixed up by StringTable)
+    // pack_order string offset (placeholder)
     let pack_order_pos = cursor.stream_position()? as usize;
-    cursor.write_u64_le(EMPTY_OFFSET_SENTINEL)?;
+    cursor.write_u64_le(EMPTY_OFFSET_SENTINEL_32 as u64)?;
     if !packer.pack_order.is_empty() {
-        strings.add(pack_order_pos, packer.pack_order.clone());
+        string_fixups.push(InlineStringFixup {
+            offset_pos: pack_order_pos,
+            string: packer.pack_order.clone(),
+        });
     }
 
-    // decl_order string offset (placeholder, fixed up by StringTable)
+    // decl_order string offset (placeholder)
     let decl_order_pos = cursor.stream_position()? as usize;
-    cursor.write_u64_le(EMPTY_OFFSET_SENTINEL)?;
+    cursor.write_u64_le(EMPTY_OFFSET_SENTINEL_32 as u64)?;
     if !packer.decl_order.is_empty() {
-        strings.add(decl_order_pos, packer.decl_order.clone());
+        string_fixups.push(InlineStringFixup {
+            offset_pos: decl_order_pos,
+            string: packer.decl_order.clone(),
+        });
     }
 
     // 12 type fields as u32

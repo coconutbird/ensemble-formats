@@ -77,7 +77,7 @@ pub struct Map {
 ///
 /// Materials are stored in UGX chunk 0x704 as a BBinaryDataTree document.
 /// Each material has 13 map type slots, UVW velocities per map type,
-/// and properties from a BNameValueMap (SpecPower, Flags, BlendType, Opacity).
+/// and properties from a BNameValueMap.
 #[derive(Debug, Clone)]
 pub struct Material {
     /// Material name.
@@ -88,6 +88,18 @@ pub struct Material {
     pub uvw_velocity: [[f32; 3]; MapType::NUM_TYPES],
     /// Specular power (default: 10.0).
     pub spec_power: f32,
+    /// Specular color (R, G, B). Default: (1.0, 1.0, 1.0).
+    pub spec_color: [f32; 3],
+    /// Environment reflectivity (default: 1.0).
+    pub env_reflectivity: f32,
+    /// Environment sharpness (default: 1.0).
+    pub env_sharpness: f32,
+    /// Environment fresnel (default: 1.0).
+    pub env_fresnel: f32,
+    /// Environment fresnel power (default: 0.5).
+    pub env_fresnel_power: f32,
+    /// Accessory index (default: 0).
+    pub accessory_index: u32,
     /// Material flags (default: 0).
     pub flags: u32,
     /// Blend type (default: 0).
@@ -103,6 +115,12 @@ impl Default for Material {
             maps: Default::default(),
             uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
             spec_power: 10.0,
+            spec_color: [1.0, 1.0, 1.0],
+            env_reflectivity: 1.0,
+            env_sharpness: 1.0,
+            env_fresnel: 1.0,
+            env_fresnel_power: 0.5,
+            accessory_index: 0,
             flags: 0,
             blend_type: 0,
             opacity: 1.0,

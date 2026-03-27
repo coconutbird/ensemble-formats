@@ -94,7 +94,9 @@ pub(crate) fn import_skeleton(
         granny_bones.push(GrannyBone {
             name,
             parent_index,
+            local_transform: None,
             inverse_world_matrix: model_to_bone,
+            lod_error: 0.0,
             extended_data,
             extended_data_type,
         });
