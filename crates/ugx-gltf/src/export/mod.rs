@@ -367,6 +367,35 @@ pub fn export_to_gltf_with_buffer_name(
                 "ugx_granny_mesh_index".into(),
                 serde_json::Value::Number((mesh_idx as u64).into()),
             );
+
+            // Store triangle_indices from bone bindings (when non-empty).
+            // These can't be recalculated from vertex data.
+            if mesh_idx < geom.granny_meshes.len() {
+                let bindings = &geom.granny_meshes[mesh_idx].bone_bindings;
+                let has_any_tri = bindings.iter().any(|b| !b.triangle_indices.is_empty());
+                if has_any_tri {
+                    let tri_map: serde_json::Map<String, serde_json::Value> = bindings
+                        .iter()
+                        .filter(|b| !b.triangle_indices.is_empty())
+                        .map(|b| {
+                            (
+                                b.bone_name.clone(),
+                                serde_json::Value::Array(
+                                    b.triangle_indices
+                                        .iter()
+                                        .map(|&i| serde_json::Value::Number(i.into()))
+                                        .collect(),
+                                ),
+                            )
+                        })
+                        .collect();
+                    map.insert(
+                        "ugx_triangle_indices".into(),
+                        serde_json::Value::Object(tri_map),
+                    );
+                }
+            }
+
             let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
             Some(serde_json::value::RawValue::from_string(raw).unwrap())
         };

@@ -398,6 +398,7 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
                         rlt.flags
                     );
                 }
+
                 for i in 0..3 {
                     if olt.position[i] != rlt.position[i] {
                         fail!(
@@ -407,6 +408,7 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
                         );
                     }
                 }
+
                 for i in 0..4 {
                     if olt.orientation[i] != rlt.orientation[i] {
                         fail!(
@@ -416,6 +418,7 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
                         );
                     }
                 }
+
                 for r in 0..3 {
                     for c in 0..3 {
                         if olt.scale_shear[r][c] != rlt.scale_shear[r][c] {
