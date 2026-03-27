@@ -2986,3 +2986,293 @@ fn diagnose_chunk_diff_all() {
     }
     eprintln!("\nTested {tested} files");
 }
+
+/// Test whether "calculable" extras are actually needed.
+///
+/// Roundtrips each file twice: once with all extras, once with the calculable
+/// extras stripped from the glTF JSON. Compares the resulting Material and
+/// Section fields to see if the fallback logic produces identical values.
+#[test]
+#[ignore = "requires HW1_GAME_DIR"]
+fn test_extras_necessity() {
+    let game_dir = match load_game_dir("HW1_GAME_DIR") {
+        Some(d) => d,
+        None => {
+            eprintln!("HW1_GAME_DIR not set — skipping");
+            return;
+        }
+    };
+    let era_paths = find_files_flat(&game_dir, "era");
+
+    // Collect UGX files from ERA archives
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for era_path in &era_paths {
+        let mut archive = match open_era(era_path) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let ugx_entries = find_entries_in_era(&archive, ".ugx");
+        for (idx, filename) in &ugx_entries {
+            if let Ok(data) = archive.read_entry(*idx) {
+                files.push((filename.clone(), data));
+            }
+        }
+    }
+    if files.is_empty() {
+        eprintln!("No UGX files found");
+        return;
+    }
+    eprintln!("Testing {} UGX files (all available)", files.len());
+
+    // Extras we consider "calculable" — should be derivable without storing
+    let calculable_mat_keys: &[&str] = &[
+        "ugx_blend_type",
+        "ugx_spec_power",
+        "ugx_opacity",
+        "ugx_spec_color",
+        "ugx_env_reflectivity",
+        "ugx_env_sharpness",
+        "ugx_env_fresnel",
+        "ugx_env_fresnel_power",
+        "ugx_accessory_index",
+    ];
+    let calculable_mesh_keys: &[&str] = &[
+        "ugx_global_bones",
+        "ugx_rigid_only",
+        "ugx_rigid_bone_index",
+        "ugx_granny_mesh_index",
+    ];
+
+    let export_opts = GltfExportOptions {
+        embed_buffers: true,
+        include_materials: true,
+        include_skeleton: true,
+    };
+    let import_opts = GltfImportOptions {
+        version: ugx::UgxVersion::Hw1,
+        include_skeleton: true,
+        include_materials: true,
+    };
+
+    let mut total_mismatches = 0usize;
+    // Track unique original values for mismatched fields
+    let mut val_blend_type: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
+    let mut val_spec_power: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut val_spec_color: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut val_env_reflect: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut val_env_sharp: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut val_env_fresnel: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut val_env_fp: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut val_accessory: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut total_mats = 0usize;
+
+    for (label, data) in &files {
+        let original = match ugx::Reader::read(data) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+        let export = export_to_gltf(&original, &export_opts).unwrap();
+
+        // Import WITH all extras
+        let with_extras =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+        // Strip calculable extras from glTF JSON and import again
+        let mut root: serde_json::Value = serde_json::from_str(&export.json).unwrap();
+        if let Some(mats) = root.get_mut("materials").and_then(|m| m.as_array_mut()) {
+            for mat in mats {
+                if let Some(extras) = mat.get_mut("extras").and_then(|e| e.as_object_mut()) {
+                    for key in calculable_mat_keys {
+                        extras.remove(*key);
+                    }
+                }
+            }
+        }
+        if let Some(meshes) = root.get_mut("meshes").and_then(|m| m.as_array_mut()) {
+            for mesh in meshes {
+                if let Some(extras) = mesh.get_mut("extras").and_then(|e| e.as_object_mut()) {
+                    for key in calculable_mesh_keys {
+                        extras.remove(*key);
+                    }
+                }
+            }
+        }
+        // Also strip granny_local_transform from bone nodes
+        if let Some(nodes) = root.get_mut("nodes").and_then(|n| n.as_array_mut()) {
+            for node in nodes {
+                if let Some(extras) = node.get_mut("extras").and_then(|e| e.as_object_mut()) {
+                    extras.remove("granny_local_transform");
+                }
+            }
+        }
+        let stripped_json = serde_json::to_string(&root).unwrap();
+        let without_extras =
+            import_from_gltf(&stripped_json, export.buffer.as_deref(), &import_opts).unwrap();
+
+        // Compare materials
+        let mut file_mismatches = Vec::new();
+        for (i, (a, b)) in with_extras
+            .materials
+            .iter()
+            .zip(without_extras.materials.iter())
+            .enumerate()
+        {
+            // Track original values (a = with extras = original)
+            total_mats += 1;
+            *val_blend_type.entry(a.blend_type).or_insert(0) += 1;
+            *val_spec_power
+                .entry(format!("{:.1}", a.spec_power))
+                .or_insert(0) += 1;
+            *val_spec_color
+                .entry(format!("{:?}", a.spec_color))
+                .or_insert(0) += 1;
+            *val_env_reflect
+                .entry(format!("{:.2}", a.env_reflectivity))
+                .or_insert(0) += 1;
+            *val_env_sharp
+                .entry(format!("{:.2}", a.env_sharpness))
+                .or_insert(0) += 1;
+            *val_env_fresnel
+                .entry(format!("{:.2}", a.env_fresnel))
+                .or_insert(0) += 1;
+            *val_env_fp
+                .entry(format!("{:.2}", a.env_fresnel_power))
+                .or_insert(0) += 1;
+            *val_accessory.entry(a.accessory_index).or_insert(0) += 1;
+
+            let mut diffs = Vec::new();
+            if a.flags != b.flags {
+                diffs.push(format!("flags: {} vs {}", a.flags, b.flags));
+            }
+            if a.blend_type != b.blend_type {
+                diffs.push(format!("blend_type: {} vs {}", a.blend_type, b.blend_type));
+            }
+            if (a.spec_power - b.spec_power).abs() > 0.01 {
+                diffs.push(format!("spec_power: {} vs {}", a.spec_power, b.spec_power));
+            }
+            if (a.opacity - b.opacity).abs() > 0.001 {
+                diffs.push(format!("opacity: {} vs {}", a.opacity, b.opacity));
+            }
+            if a.spec_color
+                .iter()
+                .zip(b.spec_color.iter())
+                .any(|(x, y)| (x - y).abs() > 0.01)
+            {
+                diffs.push(format!(
+                    "spec_color: {:?} vs {:?}",
+                    a.spec_color, b.spec_color
+                ));
+            }
+            if (a.env_reflectivity - b.env_reflectivity).abs() > 0.01 {
+                diffs.push(format!(
+                    "env_reflectivity: {} vs {}",
+                    a.env_reflectivity, b.env_reflectivity
+                ));
+            }
+            if (a.env_sharpness - b.env_sharpness).abs() > 0.01 {
+                diffs.push(format!(
+                    "env_sharpness: {} vs {}",
+                    a.env_sharpness, b.env_sharpness
+                ));
+            }
+            if (a.env_fresnel - b.env_fresnel).abs() > 0.01 {
+                diffs.push(format!(
+                    "env_fresnel: {} vs {}",
+                    a.env_fresnel, b.env_fresnel
+                ));
+            }
+            if (a.env_fresnel_power - b.env_fresnel_power).abs() > 0.01 {
+                diffs.push(format!(
+                    "env_fresnel_power: {} vs {}",
+                    a.env_fresnel_power, b.env_fresnel_power
+                ));
+            }
+            if a.accessory_index != b.accessory_index {
+                diffs.push(format!(
+                    "accessory_index: {} vs {}",
+                    a.accessory_index, b.accessory_index
+                ));
+            }
+            if !diffs.is_empty() {
+                file_mismatches.push(format!("  mat[{}] '{}': {}", i, a.name, diffs.join(", ")));
+            }
+        }
+
+        // Compare sections
+        for (i, (a, b)) in with_extras
+            .sections
+            .iter()
+            .zip(without_extras.sections.iter())
+            .enumerate()
+        {
+            let mut diffs = Vec::new();
+            if a.global_bones != b.global_bones {
+                diffs.push(format!(
+                    "global_bones: {} vs {}",
+                    a.global_bones, b.global_bones
+                ));
+            }
+            if a.rigid_only != b.rigid_only {
+                diffs.push(format!("rigid_only: {} vs {}", a.rigid_only, b.rigid_only));
+            }
+            if a.rigid_bone_index != b.rigid_bone_index {
+                diffs.push(format!(
+                    "rigid_bone_index: {} vs {}",
+                    a.rigid_bone_index, b.rigid_bone_index
+                ));
+            }
+            if !diffs.is_empty() {
+                file_mismatches.push(format!("  sec[{}]: {}", i, diffs.join(", ")));
+            }
+        }
+
+        if !file_mismatches.is_empty() {
+            eprintln!("=== {} ===", label);
+            for m in &file_mismatches {
+                eprintln!("{}", m);
+            }
+            total_mismatches += file_mismatches.len();
+        }
+    }
+
+    // Print value distribution summary for all original materials
+    eprintln!(
+        "\n=== VALUE DISTRIBUTION (all {} materials) ===",
+        total_mats
+    );
+    let mut sorted_bt: Vec<_> = val_blend_type.into_iter().collect();
+    sorted_bt.sort_by_key(|(k, _)| *k);
+    eprintln!("  blend_type: {:?}", sorted_bt);
+    let mut sorted_sp: Vec<_> = val_spec_power.into_iter().collect();
+    sorted_sp.sort_by(|a, b| a.0.cmp(&b.0));
+    eprintln!("  spec_power: {:?}", sorted_sp);
+    let mut sorted_sc: Vec<_> = val_spec_color.into_iter().collect();
+    sorted_sc.sort_by(|a, b| a.0.cmp(&b.0));
+    eprintln!("  spec_color: {:?}", sorted_sc);
+    let mut sorted_er: Vec<_> = val_env_reflect.into_iter().collect();
+    sorted_er.sort_by(|a, b| a.0.cmp(&b.0));
+    eprintln!("  env_reflectivity: {:?}", sorted_er);
+    let mut sorted_es: Vec<_> = val_env_sharp.into_iter().collect();
+    sorted_es.sort_by(|a, b| a.0.cmp(&b.0));
+    eprintln!("  env_sharpness: {:?}", sorted_es);
+    let mut sorted_ef: Vec<_> = val_env_fresnel.into_iter().collect();
+    sorted_ef.sort_by(|a, b| a.0.cmp(&b.0));
+    eprintln!("  env_fresnel: {:?}", sorted_ef);
+    let mut sorted_efp: Vec<_> = val_env_fp.into_iter().collect();
+    sorted_efp.sort_by(|a, b| a.0.cmp(&b.0));
+    eprintln!("  env_fresnel_power: {:?}", sorted_efp);
+    let mut sorted_ai: Vec<_> = val_accessory.into_iter().collect();
+    sorted_ai.sort_by_key(|(k, _)| *k);
+    eprintln!("  accessory_index: {:?}", sorted_ai);
+
+    if total_mismatches == 0 {
+        eprintln!("\n✅ All calculable extras match fallback values — safe to remove");
+    } else {
+        eprintln!("\n❌ {total_mismatches} mismatches — some extras are NOT safely calculable");
+    }
+}

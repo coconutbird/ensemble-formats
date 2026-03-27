@@ -439,10 +439,11 @@ pub(crate) fn create_skeleton_nodes_from_granny(
 /// as JSON so they survive a glTF roundtrip.
 fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
     let has_extended = bone.extended_data.is_some() && bone.extended_data_type.is_some();
-    let has_local_transform = bone.local_transform.is_some();
     let has_lod_error = bone.lod_error != 0.0;
 
-    if !has_extended && !has_local_transform && !has_lod_error {
+    // granny_local_transform is NOT stored — the writer recomputes it from
+    // inverse world matrices via compute_fallback_local_transforms().
+    if !has_extended && !has_lod_error {
         return json::Extras::default();
     }
 
@@ -452,33 +453,6 @@ fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
     if let (Some(data), Some(type_members)) = (&bone.extended_data, &bone.extended_data_type) {
         map.insert("granny_ext_type".into(), type_members_to_json(type_members));
         map.insert("granny_ext_data".into(), variant_to_json(data));
-    }
-
-    // Local transform (68 bytes: flags + position + orientation + scale_shear)
-    if let Some(lt) = &bone.local_transform {
-        let mut lt_map = serde_json::Map::new();
-        lt_map.insert("flags".into(), serde_json::Value::Number(lt.flags.into()));
-        lt_map.insert(
-            "position".into(),
-            serde_json::Value::Array(lt.position.iter().map(|&v| json_f32(v)).collect()),
-        );
-        lt_map.insert(
-            "orientation".into(),
-            serde_json::Value::Array(lt.orientation.iter().map(|&v| json_f32(v)).collect()),
-        );
-        lt_map.insert(
-            "scale_shear".into(),
-            serde_json::Value::Array(
-                lt.scale_shear
-                    .iter()
-                    .map(|row| serde_json::Value::Array(row.iter().map(|&v| json_f32(v)).collect()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "granny_local_transform".into(),
-            serde_json::Value::Object(lt_map),
-        );
     }
 
     // LOD error

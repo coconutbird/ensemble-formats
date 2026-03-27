@@ -94,9 +94,9 @@ pub struct Material {
     pub env_reflectivity: f32,
     /// Environment sharpness (default: 1.0).
     pub env_sharpness: f32,
-    /// Environment fresnel (default: 1.0).
+    /// Environment fresnel (default: 0.5).
     pub env_fresnel: f32,
-    /// Environment fresnel power (default: 0.5).
+    /// Environment fresnel power (default: 4.0).
     pub env_fresnel_power: f32,
     /// Accessory index (default: 0).
     pub accessory_index: u32,
@@ -118,8 +118,8 @@ impl Default for Material {
             spec_color: [1.0, 1.0, 1.0],
             env_reflectivity: 1.0,
             env_sharpness: 1.0,
-            env_fresnel: 1.0,
-            env_fresnel_power: 0.5,
+            env_fresnel: 0.5,
+            env_fresnel_power: 4.0,
             accessory_index: 0,
             flags: 0,
             blend_type: 0,

@@ -364,30 +364,12 @@ pub fn export_to_gltf_with_buffer_name(
             Some(format!("mesh_{}", section_idx))
         };
 
-        // Store section-level flags in mesh extras so the import path doesn't
-        // need to guess via heuristic. Always written so the importer can
-        // distinguish explicit values from absent (third-party glTF).
+        // Store mesh extras for data that can't be recalculated from vertex data.
+        // Section flags (global_bones, rigid_only, rigid_bone_index) and
+        // granny_mesh_index are NOT stored — the import side accurately infers
+        // them from vertex bone weights via detect_global_bones().
         let mesh_extras = {
             let mut map = serde_json::Map::new();
-            map.insert(
-                "ugx_global_bones".into(),
-                serde_json::Value::Bool(section.global_bones),
-            );
-            map.insert(
-                "ugx_rigid_only".into(),
-                serde_json::Value::Bool(section.rigid_only),
-            );
-            map.insert(
-                "ugx_rigid_bone_index".into(),
-                serde_json::Value::Number(section.rigid_bone_index.into()),
-            );
-            // Store the granny_mesh index so the import path can reconstruct
-            // the correct section-to-mesh grouping (critical when multiple meshes
-            // share the same bone set, e.g., multi-section rigid models).
-            map.insert(
-                "ugx_granny_mesh_index".into(),
-                serde_json::Value::Number((mesh_idx as u64).into()),
-            );
 
             // Store triangle_indices from bone bindings (when non-empty).
             // These can't be recalculated from vertex data.
@@ -417,8 +399,12 @@ pub fn export_to_gltf_with_buffer_name(
                 }
             }
 
-            let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
-            Some(serde_json::value::RawValue::from_string(raw).unwrap())
+            if map.is_empty() {
+                None
+            } else {
+                let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
+                Some(serde_json::value::RawValue::from_string(raw).unwrap())
+            }
         };
 
         meshes.push(json::Mesh {

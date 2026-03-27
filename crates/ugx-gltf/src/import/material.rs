@@ -106,8 +106,8 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 spec_color: mat_extras.spec_color.unwrap_or([1.0, 1.0, 1.0]),
                 env_reflectivity: mat_extras.env_reflectivity.unwrap_or(1.0),
                 env_sharpness: mat_extras.env_sharpness.unwrap_or(1.0),
-                env_fresnel: mat_extras.env_fresnel.unwrap_or(1.0),
-                env_fresnel_power: mat_extras.env_fresnel_power.unwrap_or(0.5),
+                env_fresnel: mat_extras.env_fresnel.unwrap_or(0.5),
+                env_fresnel_power: mat_extras.env_fresnel_power.unwrap_or(4.0),
                 accessory_index: mat_extras.accessory_index.unwrap_or(0),
             }
         })
@@ -195,10 +195,10 @@ fn read_material_extras(
         result.env_sharpness = Some(v.as_f64().unwrap_or(1.0) as f32);
     }
     if let Some(v) = obj.get("ugx_env_fresnel") {
-        result.env_fresnel = Some(v.as_f64().unwrap_or(1.0) as f32);
+        result.env_fresnel = Some(v.as_f64().unwrap_or(0.5) as f32);
     }
     if let Some(v) = obj.get("ugx_env_fresnel_power") {
-        result.env_fresnel_power = Some(v.as_f64().unwrap_or(0.5) as f32);
+        result.env_fresnel_power = Some(v.as_f64().unwrap_or(4.0) as f32);
     }
     if let Some(v) = obj.get("ugx_accessory_index") {
         result.accessory_index = Some(v.as_u64().unwrap_or(0) as u32);
