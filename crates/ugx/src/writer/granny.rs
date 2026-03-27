@@ -199,9 +199,12 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     let header_size: usize = 0x94;
     let skeleton_ptr_array_offset = header_size;
     let skeleton_struct_offset = skeleton_ptr_array_offset + 8;
-    let model_ptr_array_offset = skeleton_struct_offset + 0x18;
+    // Skeleton struct: Name(8) + Bones RTA(12) + LODType(4) + ExtendedData VRef(16) = 0x28
+    let model_ptr_array_offset = skeleton_struct_offset + 0x28;
     let model_struct_offset = model_ptr_array_offset + 8;
-    let model_struct_size = 0x60;
+    // Model struct: Name(8) + Skeleton Ref(8) + InitialPlacement Transform(68)
+    //             + MeshBindings RTA(12) + ExtendedData VRef(16) = 0x70
+    let model_struct_size = 0x70;
     let bones_start = (model_struct_offset + model_struct_size + 7) & !7;
     let bones_end = bones_start + bone_count * GRANNY_BONE_SIZE;
     let mesh_bindings_start = bones_end;
