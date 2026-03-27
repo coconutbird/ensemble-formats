@@ -207,8 +207,13 @@ impl Writer {
     ///
     /// Iterates until the signature size stabilises: the signature size
     /// affects the header layout, which affects the header hash, which
-    /// affects the signature size. In practice this converges in 2–3
-    /// iterations.
+    /// affects the signature size.
+    ///
+    /// The signature size can oscillate between two values when different
+    /// header hashes lead to different Merkle tree traversals with different
+    /// cache hit patterns. When oscillation is detected, we break the cycle
+    /// by reserving the **maximum** observed size and zero-padding shorter
+    /// signatures to fit.
     fn compute_layout_and_sign(&self) -> Result<(ComputedLayout, Option<Vec<u8>>)> {
         let Some(key) = &self.signing_key else {
             return Ok((self.compute_layout(0), None));
@@ -218,8 +223,11 @@ impl Writer {
         let dummy_sig = crate::crypto::merkle::sign(key, &[0u8; 20])?;
         let mut sig_size = dummy_sig.len() as u32;
 
-        // Iterate until stable.
-        for _ in 0..8 {
+        // Track all observed signature sizes to detect oscillation.
+        let mut seen_sizes: Vec<u32> = Vec::new();
+
+        // Iterate until stable (or oscillation detected).
+        for _ in 0..16 {
             let layout = self.compute_layout(sig_size);
             let header_hash = layout_header_hash(&layout);
             let sig = crate::crypto::merkle::sign(key, &header_hash)?;
@@ -227,14 +235,44 @@ impl Writer {
             if sig.len() as u32 == sig_size {
                 return Ok((layout, Some(sig)));
             }
+
+            // Check for oscillation: have we seen this size before?
+            if seen_sizes.contains(&(sig.len() as u32)) {
+                // Oscillation detected. Use the max of all observed sizes
+                // so the signature always fits, and pad shorter sigs.
+                let max_size = seen_sizes
+                    .iter()
+                    .copied()
+                    .chain(core::iter::once(sig.len() as u32))
+                    .max()
+                    .unwrap();
+                let layout = self.compute_layout(max_size);
+                let header_hash = layout_header_hash(&layout);
+                let sig = crate::crypto::merkle::sign(key, &header_hash)?;
+
+                // Pad to exactly max_size
+                let mut padded = sig;
+                padded.resize(max_size as usize, 0);
+                return Ok((layout, Some(padded)));
+            }
+
+            seen_sizes.push(sig_size);
             sig_size = sig.len() as u32;
         }
 
-        // Should never happen — fall back to the last computed size.
-        let layout = self.compute_layout(sig_size);
+        // Final fallback: use the max observed size and pad.
+        let max_size = seen_sizes
+            .iter()
+            .copied()
+            .chain(core::iter::once(sig_size))
+            .max()
+            .unwrap_or(sig_size);
+        let layout = self.compute_layout(max_size);
         let header_hash = layout_header_hash(&layout);
         let sig = crate::crypto::merkle::sign(key, &header_hash)?;
-        Ok((layout, Some(sig)))
+        let mut padded = sig;
+        padded.resize(max_size as usize, 0);
+        Ok((layout, Some(padded)))
     }
 
     /// Build the archive into a `Vec<u8>`.
@@ -249,7 +287,10 @@ impl Writer {
     pub fn finalize_with_progress(&self, progress: &mut impl Progress) -> Result<Vec<u8>> {
         let (layout, signature) = self.compute_layout_and_sign()?;
 
-        let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
+        let mut archive_hdr = EraArchiveHeader::new();
+        archive_hdr.signature_size = layout.signature_size;
+        let adler32 =
+            compute_header_adler32(&layout.ecf_header, &archive_hdr, signature.as_deref());
         let chunk_header_size = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
 
         // Allocate output buffer
@@ -263,8 +304,6 @@ impl Writer {
         );
 
         // Write ERA archive header (with signature_size)
-        let mut archive_hdr = EraArchiveHeader::new();
-        archive_hdr.signature_size = layout.signature_size;
         out[ecf::EcfHeader::SIZE..ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE]
             .copy_from_slice(&archive_hdr.to_bytes());
 
@@ -345,17 +384,20 @@ impl Writer {
     ) -> Result<u64> {
         let (layout, signature) = self.compute_layout_and_sign()?;
 
+        // Compute checksum over bytes 12..header_size (ECF tail + archive header + signature)
+        let mut archive_hdr = EraArchiveHeader::new();
+        archive_hdr.signature_size = layout.signature_size;
+        let adler32 =
+            compute_header_adler32(&layout.ecf_header, &archive_hdr, signature.as_deref());
+
         // Write ECF header (32 bytes)
-        let adler32 = compute_header_adler32(&layout.ecf_header, &layout.chunks);
         let mut hdr_buf = [0u8; ecf::EcfHeader::SIZE];
         write_ecf_header(&mut hdr_buf, &layout.ecf_header, adler32);
         writer
             .write_all(&hdr_buf)
             .map_err(|_| crate::error::Error::UnexpectedEof)?;
 
-        // Write ERA archive header (with signature_size)
-        let mut archive_hdr = EraArchiveHeader::new();
-        archive_hdr.signature_size = layout.signature_size;
+        // Write ERA archive header
         writer
             .write_all(&archive_hdr.to_bytes())
             .map_err(|_| crate::error::Error::UnexpectedEof)?;
@@ -508,10 +550,23 @@ pub fn compress_file_data(data: &[u8]) -> CompressedData {
     compress_data(data)
 }
 
-/// Compute adler32 over header fields and chunk headers.
-fn compute_header_adler32(header: &HeaderLayout, chunks: &[ChunkLayout]) -> u32 {
+/// Compute adler32 over header bytes 12..header_size.
+///
+/// The engine's `ECF_ValidateHeader` checksums `data[12..header_size]`,
+/// which for ERA covers:
+///   - bytes 12..32: ECF header tail (file_size, num_chunks, flags, id, chunk_extra, pad)
+///   - bytes 32..48: ERA archive header (archive_magic, signature_size, reserved)
+///   - bytes 48..48+sig: signature block (if present)
+///
+/// Chunk headers start *after* header_size and are NOT included.
+fn compute_header_adler32(
+    header: &HeaderLayout,
+    archive_hdr: &EraArchiveHeader,
+    signature: Option<&[u8]>,
+) -> u32 {
     let mut data = Vec::new();
 
+    // ECF header tail: bytes 12..32 (20 bytes)
     data.extend_from_slice(&header.file_size.to_be_bytes());
     data.extend_from_slice(&header.num_chunks.to_be_bytes());
     data.extend_from_slice(&0u16.to_be_bytes()); // flags
@@ -520,14 +575,12 @@ fn compute_header_adler32(header: &HeaderLayout, chunks: &[ChunkLayout]) -> u32 
     data.extend_from_slice(&0u16.to_be_bytes()); // pad0
     data.extend_from_slice(&0u32.to_be_bytes()); // pad1
 
-    for chunk in chunks {
-        data.extend_from_slice(&chunk.id.to_be_bytes());
-        data.extend_from_slice(&chunk.offset.to_be_bytes());
-        data.extend_from_slice(&chunk.size.to_be_bytes());
-        data.extend_from_slice(&0u32.to_be_bytes()); // adler32
-        data.push(0); // flags
-        data.push(4); // alignment_log2 = 4 (16 bytes)
-        data.extend_from_slice(&0x0001u16.to_be_bytes()); // resource_flags: deflate raw
+    // ERA archive header: bytes 32..48 (16 bytes)
+    data.extend_from_slice(&archive_hdr.to_bytes());
+
+    // Signature block: bytes 48..48+sig_size (if present)
+    if let Some(sig) = signature {
+        data.extend_from_slice(sig);
     }
 
     ecf::adler32(&data)
