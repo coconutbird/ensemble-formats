@@ -25,6 +25,7 @@ pub mod aabb_tree;
 pub mod accessory;
 pub mod bone;
 pub mod geom;
+pub mod granny;
 pub mod material;
 pub mod math;
 pub mod primitives;
@@ -35,11 +36,9 @@ pub mod version;
 // Re-export all public types for convenient access.
 pub use aabb_tree::{AabbTree, AabbTreeNode};
 pub use accessory::Accessory;
-pub use bone::{
-    Bone, GrannyBone, GrannyBoneBinding, GrannyLocalTransform, GrannyMemberType, GrannyMesh,
-    GrannyTypeMember, GrannyVariant,
-};
+pub use bone::{Bone, GrannyBone, GrannyBoneBinding, GrannyLocalTransform, GrannyMesh};
 pub use geom::UgxGeom;
+pub use granny::{GrannyMemberType, GrannyTypeMember, GrannyVariant};
 pub use material::{
     HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData, ShaderPermutation,
 };

@@ -615,84 +615,73 @@ fn build_packer(
     has_colors: bool,
 ) -> UnivertPacker {
     let mut uv_types = [VertexElementType::Ignore; MAX_UV];
+    for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
+        *uv_type = VertexElementType::HalfFloat2;
+    }
 
-    match version {
+    // Pack order differs between versions — HW1 puts normals before UVs,
+    // HW2 puts UVs before normals.
+    let pack_order = match version {
         UgxVersion::Hw1 => {
-            // HW1/DE pack order: P N A0 S T0 D (same order as marine_01.ugx)
-            let mut pack_order = String::from("P");
-            pack_order.push('N');
+            let mut po = String::from("P");
+            po.push('N');
+
             if has_tangents {
-                pack_order.push_str("A0");
+                po.push_str("A0");
             }
 
             if has_skin {
-                pack_order.push('S');
+                po.push('S');
             }
 
             for i in 0..max_texcoords {
-                pack_order.push('T');
-                pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+                po.push('T');
+                po.push(char::from_digit(i as u32, 10).unwrap_or('0'));
             }
 
             if has_colors {
-                pack_order.push('D');
+                po.push('D');
             }
 
-            for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
-                *uv_type = VertexElementType::HalfFloat2;
-            }
-
-            UnivertPacker {
-                pack_order,
-                decl_order: String::new(),
-                pos_type: VertexElementType::HalfFloat4,
-                basis_type: VertexElementType::Float3,
-                basis_scale_type: VertexElementType::Ignore,
-                tangent_type: VertexElementType::Float3,
-                normal_type: VertexElementType::Float3,
-                uv_types,
-                indices_type: VertexElementType::UByte4,
-                weights_type: VertexElementType::UByte4N,
-                diffuse_type: VertexElementType::D3DColor,
-                index_type: VertexElementType::Ignore,
-            }
+            po
         }
         UgxVersion::Hw2 => {
-            // HW2 pack order: P T0 N A0 S D
-            let mut pack_order = String::from("P");
+            let mut po = String::from("P");
             for i in 0..max_texcoords {
-                pack_order.push('T');
-                pack_order.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+                po.push('T');
+                po.push(char::from_digit(i as u32, 10).unwrap_or('0'));
             }
-            pack_order.push('N');
+
+            po.push('N');
+
             if has_tangents {
-                pack_order.push_str("A0");
+                po.push_str("A0");
             }
+
             if has_skin {
-                pack_order.push('S');
+                po.push('S');
             }
+
             if has_colors {
-                pack_order.push('D');
+                po.push('D');
             }
 
-            for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
-                *uv_type = VertexElementType::HalfFloat2;
-            }
-
-            UnivertPacker {
-                pack_order,
-                decl_order: String::new(),
-                pos_type: VertexElementType::HalfFloat4,
-                basis_type: VertexElementType::Dec3N,
-                basis_scale_type: VertexElementType::HalfFloat2,
-                tangent_type: VertexElementType::Dec3N,
-                normal_type: VertexElementType::Dec3N,
-                uv_types,
-                indices_type: VertexElementType::UByte4,
-                weights_type: VertexElementType::UByte4N,
-                diffuse_type: VertexElementType::D3DColor,
-                index_type: VertexElementType::Ignore,
-            }
+            po
         }
+    };
+
+    UnivertPacker {
+        pack_order,
+        decl_order: String::new(),
+        pos_type: version.default_pos_type(),
+        basis_type: version.default_basis_type(),
+        basis_scale_type: version.default_basis_scale_type(),
+        tangent_type: version.default_tangent_type(),
+        normal_type: version.default_normal_type(),
+        uv_types,
+        indices_type: VertexElementType::UByte4,
+        weights_type: VertexElementType::UByte4N,
+        diffuse_type: VertexElementType::D3DColor,
+        index_type: VertexElementType::Ignore,
     }
 }

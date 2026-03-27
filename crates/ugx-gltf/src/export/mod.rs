@@ -69,172 +69,80 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
 /// Stores material flags, UVW velocity, and non-PBR texture maps
 /// so they survive a glTF roundtrip.
 fn build_material_extras(mat: &Material) -> json::Extras {
+    use crate::extras::{HoganExtrasJson, MapEntryJson, MaterialExtrasJson, ShaderPermJson};
     use ugx::types::MaterialData;
 
-    let mut extras = serde_json::Map::new();
-
-    // Store material version for roundtrip (4 = HW1, 5 = HW2 legacy)
-    extras.insert(
-        "ugx_material_version".into(),
-        serde_json::Value::Number(mat.material_version.into()),
-    );
+    let mut ext = MaterialExtrasJson {
+        ugx_material_version: mat.material_version,
+        ..Default::default()
+    };
 
     match &mat.data {
         MaterialData::Legacy(legacy) => {
-            // Always store flags and blend_type (even if 0, for roundtrip fidelity)
-            extras.insert(
-                "ugx_flags".into(),
-                serde_json::Value::Number(legacy.flags.into()),
-            );
-            extras.insert(
-                "ugx_blend_type".into(),
-                serde_json::Value::Number(legacy.blend_type.into()),
-            );
+            ext.ugx_flags = Some(legacy.flags);
+            ext.ugx_blend_type = Some(legacy.blend_type);
+            ext.ugx_spec_power = Some(legacy.spec_power);
+            ext.ugx_spec_color = Some(legacy.spec_color);
+            ext.ugx_env_reflectivity = Some(legacy.env_reflectivity);
+            ext.ugx_env_sharpness = Some(legacy.env_sharpness);
+            ext.ugx_env_fresnel = Some(legacy.env_fresnel);
+            ext.ugx_env_fresnel_power = Some(legacy.env_fresnel_power);
+            ext.ugx_accessory_index = Some(legacy.accessory_index);
+            ext.ugx_opacity = Some(legacy.opacity);
 
-            // Store all material properties for lossless roundtrip
-            extras.insert(
-                "ugx_spec_power".into(),
-                serde_json::Value::from(legacy.spec_power),
-            );
-            extras.insert(
-                "ugx_spec_color".into(),
-                serde_json::Value::Array(vec![
-                    serde_json::Value::from(legacy.spec_color[0]),
-                    serde_json::Value::from(legacy.spec_color[1]),
-                    serde_json::Value::from(legacy.spec_color[2]),
-                ]),
-            );
-            extras.insert(
-                "ugx_env_reflectivity".into(),
-                serde_json::Value::from(legacy.env_reflectivity),
-            );
-            extras.insert(
-                "ugx_env_sharpness".into(),
-                serde_json::Value::from(legacy.env_sharpness),
-            );
-            extras.insert(
-                "ugx_env_fresnel".into(),
-                serde_json::Value::from(legacy.env_fresnel),
-            );
-            extras.insert(
-                "ugx_env_fresnel_power".into(),
-                serde_json::Value::from(legacy.env_fresnel_power),
-            );
-            extras.insert(
-                "ugx_accessory_index".into(),
-                serde_json::Value::Number(legacy.accessory_index.into()),
-            );
-            extras.insert(
-                "ugx_opacity".into(),
-                serde_json::Value::from(legacy.opacity),
-            );
-
-            // Store UVW velocity arrays that have non-zero values
+            // UVW velocity (only if any non-zero)
             let has_any_uvw = legacy
                 .uvw_velocity
                 .iter()
                 .any(|v| v[0] != 0.0 || v[1] != 0.0 || v[2] != 0.0);
             if has_any_uvw {
-                let uvw_arr: Vec<serde_json::Value> = legacy
-                    .uvw_velocity
-                    .iter()
-                    .map(|v| {
-                        serde_json::Value::Array(vec![
-                            serde_json::Value::from(v[0]),
-                            serde_json::Value::from(v[1]),
-                            serde_json::Value::from(v[2]),
-                        ])
-                    })
-                    .collect();
-                extras.insert("ugx_uvw_velocity".into(), serde_json::Value::Array(uvw_arr));
+                ext.ugx_uvw_velocity = Some(legacy.uvw_velocity.to_vec());
             }
 
-            // Store ALL texture maps with their flags (including PBR maps, for flag fidelity)
-            let mut maps_obj = serde_json::Map::new();
+            // Texture maps
+            let mut maps = std::collections::BTreeMap::new();
             for map_type in MapType::ALL {
                 let idx = map_type as usize;
                 if !legacy.maps[idx].is_empty() {
-                    let maps_arr: Vec<serde_json::Value> = legacy.maps[idx]
+                    let entries: Vec<MapEntryJson> = legacy.maps[idx]
                         .iter()
-                        .map(|m| {
-                            let mut obj = serde_json::Map::new();
-                            obj.insert("name".into(), serde_json::Value::String(m.name.clone()));
-                            obj.insert(
-                                "channel".into(),
-                                serde_json::Value::Number((m.channel as i64).into()),
-                            );
-                            obj.insert(
-                                "flags".into(),
-                                serde_json::Value::Number((m.flags as u64).into()),
-                            );
-                            serde_json::Value::Object(obj)
+                        .map(|m| MapEntryJson {
+                            name: m.name.clone(),
+                            channel: m.channel,
+                            flags: m.flags,
                         })
                         .collect();
-                    maps_obj.insert(
-                        map_type.name().to_string(),
-                        serde_json::Value::Array(maps_arr),
-                    );
+                    maps.insert(map_type.name().to_string(), entries);
                 }
             }
-            if !maps_obj.is_empty() {
-                extras.insert("ugx_maps".into(), serde_json::Value::Object(maps_obj));
+            if !maps.is_empty() {
+                ext.ugx_maps = Some(maps);
             }
         }
         MaterialData::Hogan(hogan) => {
-            let mut hogan_obj = serde_json::Map::new();
-            let perms: Vec<serde_json::Value> = hogan
-                .shader_permutations
-                .iter()
-                .map(|p| {
-                    let mut obj = serde_json::Map::new();
-                    obj.insert("name".into(), serde_json::Value::String(p.name.clone()));
-                    obj.insert("hash".into(), serde_json::Value::Number(p.hash.into()));
-                    serde_json::Value::Object(obj)
-                })
-                .collect();
-            hogan_obj.insert(
-                "shader_permutations".into(),
-                serde_json::Value::Array(perms),
-            );
-            hogan_obj.insert(
-                "ufx_version".into(),
-                serde_json::Value::Number(hogan.ufx_version.into()),
-            );
-            hogan_obj.insert(
-                "blend_mode".into(),
-                serde_json::Value::Number(hogan.blend_mode.into()),
-            );
-            hogan_obj.insert(
-                "shadow_requires_consts".into(),
-                serde_json::Value::Bool(hogan.shadow_requires_consts),
-            );
-            hogan_obj.insert("skinned".into(), serde_json::Value::Bool(hogan.skinned));
-            hogan_obj.insert(
-                "terrain_blending".into(),
-                serde_json::Value::Bool(hogan.terrain_blending),
-            );
-            hogan_obj.insert(
-                "vs_cb_data".into(),
-                serde_json::Value::Number(hogan.vs_cb_data.into()),
-            );
-            hogan_obj.insert(
-                "ps_cb_data".into(),
-                serde_json::Value::Number(hogan.ps_cb_data.into()),
-            );
-            hogan_obj.insert(
-                "textures".into(),
-                serde_json::Value::String(hogan.textures.clone()),
-            );
-            extras.insert("ugx_hogan".into(), serde_json::Value::Object(hogan_obj));
+            ext.ugx_hogan = Some(HoganExtrasJson {
+                shader_permutations: hogan
+                    .shader_permutations
+                    .iter()
+                    .map(|p| ShaderPermJson {
+                        name: p.name.clone(),
+                        hash: p.hash,
+                    })
+                    .collect(),
+                ufx_version: hogan.ufx_version,
+                blend_mode: hogan.blend_mode,
+                shadow_requires_consts: hogan.shadow_requires_consts,
+                skinned: hogan.skinned,
+                terrain_blending: hogan.terrain_blending,
+                vs_cb_data: hogan.vs_cb_data,
+                ps_cb_data: hogan.ps_cb_data,
+                textures: hogan.textures.clone(),
+            });
         }
     }
 
-    if extras.is_empty() {
-        None
-    } else {
-        let json_str = serde_json::to_string(&serde_json::Value::Object(extras)).unwrap();
-        Some(serde_json::value::RawValue::from_string(json_str).unwrap())
-    }
+    let json_str = serde_json::to_string(&ext).unwrap();
+    Some(serde_json::value::RawValue::from_string(json_str).unwrap())
 }
 
 /// Export UGX geometry to glTF format with a specific external buffer filename.

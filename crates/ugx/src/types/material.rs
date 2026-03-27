@@ -169,7 +169,7 @@ pub enum MaterialData {
     /// HW1/DE fixed-function material (also used by HW2 legacy `@Ver=5`).
     Legacy(alloc::boxed::Box<LegacyMaterialData>),
     /// HW2 Hogan shader-based material.
-    Hogan(HoganMaterialData),
+    Hogan(alloc::boxed::Box<HoganMaterialData>),
 }
 
 /// Material definition (from BBinaryDataTree packed document).

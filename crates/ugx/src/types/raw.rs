@@ -171,3 +171,83 @@ impl From<&PackedBoneRaw> for Matrix4x4 {
         Self { rows }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Granny raw structs (writer-side — populate fields, then write as bytes)
+// ---------------------------------------------------------------------------
+
+/// Raw on-disk Granny bone struct (164 bytes = 0xA4).
+///
+/// Used by the writer to emit bones in one `IntoBytes` write per bone
+/// instead of individual cursor calls for each field.
+///
+/// String pointers (`name_ptr`) and extended-data pointers are patched
+/// after the initial write via the string table and extended-data pass.
+#[derive(IntoBytes, KnownLayout, Immutable, Debug, Clone)]
+#[repr(C)]
+pub(crate) struct GrannyBoneRaw {
+    /// +0x00: Name string pointer (u64, patched by string table).
+    pub name_ptr: [u8; 8],
+    /// +0x08: Parent bone index (i32).
+    pub parent_index: [u8; 4],
+    /// +0x0C: Local transform flags.
+    pub transform_flags: [u8; 4],
+    /// +0x10: Local position (f32×3).
+    pub position: [[u8; 4]; 3],
+    /// +0x1C: Local orientation quaternion (f32×4, xyzw).
+    pub orientation: [[u8; 4]; 4],
+    /// +0x2C: Local scale/shear matrix (f32×9, 3×3 row-major).
+    pub scale_shear: [[u8; 4]; 9],
+    /// +0x50: Inverse world matrix (f32×16, 4×4 row-major).
+    pub inverse_world: [[u8; 4]; 16],
+    /// +0x90: LOD error (f32).
+    pub lod_error: [u8; 4],
+    /// +0x94: Extended data type pointer (u64, patched later).
+    pub ext_type_ptr: [u8; 8],
+    /// +0x9C: Extended data pointer (u64, patched later).
+    pub ext_data_ptr: [u8; 8],
+}
+
+impl GrannyBoneRaw {
+    /// Size assertion — must match `GRANNY_BONE_SIZE` (164 bytes).
+    const _SIZE_CHECK: () = assert!(core::mem::size_of::<Self>() == 164);
+
+    /// Create a zeroed bone (all fields zero/null).
+    pub fn zeroed() -> Self {
+        Self {
+            name_ptr: [0; 8],
+            parent_index: [0; 4],
+            transform_flags: [0; 4],
+            position: [[0; 4]; 3],
+            orientation: [[0; 4]; 4],
+            scale_shear: [[0; 4]; 9],
+            inverse_world: [[0; 4]; 16],
+            lod_error: [0; 4],
+            ext_type_ptr: [0; 8],
+            ext_data_ptr: [0; 8],
+        }
+    }
+}
+
+/// Raw on-disk Granny skeleton struct (40 bytes = 0x28).
+///
+/// Layout verified from the reader which reads at `skeleton_offs + 0x08`:
+/// `bone_count(u32) + bones_ptr(u64) + lod_type(u32)`.
+#[derive(IntoBytes, KnownLayout, Immutable, Debug, Clone)]
+#[repr(C)]
+pub(crate) struct GrannySkeletonRaw {
+    /// +0x00: Name string pointer (u64, patched by string table).
+    pub name_ptr: [u8; 8],
+    /// +0x08: Bone count (u32).
+    pub bone_count: [u8; 4],
+    /// +0x0C: Bones array pointer (u64) — note: NOT naturally aligned.
+    pub bones_ptr: [u8; 8],
+    /// +0x14: LOD type (u32).
+    pub lod_type: [u8; 4],
+    /// +0x18: Remaining padding to 0x28 (16 bytes).
+    pub _pad: [u8; 16],
+}
+
+impl GrannySkeletonRaw {
+    const _SIZE_CHECK: () = assert!(core::mem::size_of::<Self>() == 0x28);
+}

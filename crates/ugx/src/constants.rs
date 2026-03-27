@@ -136,3 +136,14 @@ pub(crate) const GRANNY_HAS_ORIENTATION: u32 = 0x2;
 
 /// Granny local transform flag: bone has a scale/shear component.
 pub(crate) const GRANNY_HAS_SCALE_SHEAR: u32 = 0x4;
+
+/// Granny type definition entry stride (44 bytes = 11 × u32).
+///
+/// Each `GrannyDataTypeDefinition` entry is 44 bytes on disk:
+/// `MemberType(4) + Name(8) + ReferenceType(8) + ArrayWidth(4) + Extra(12) + Unused(8)`.
+pub(crate) const GRANNY_TYPE_DEF_STRIDE: usize = 44;
+
+/// Offset within a Granny bone struct where the ExtendedData variant ref starts.
+///
+/// This is a 16-byte `{type_def_ptr(u64), data_ptr(u64)}` pair at bone+0x94.
+pub(crate) const GRANNY_BONE_EXTENDED_DATA_OFFSET: usize = 0x94;

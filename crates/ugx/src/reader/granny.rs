@@ -10,7 +10,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::constants::{
-    GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_INVERSE_WORLD_OFFSET, GRANNY_BONE_SIZE,
+    GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_EXTENDED_DATA_OFFSET, GRANNY_BONE_INVERSE_WORLD_OFFSET,
+    GRANNY_BONE_SIZE, GRANNY_TYPE_DEF_STRIDE,
 };
 use crate::error::{Error, Result};
 use crate::types::{
@@ -18,12 +19,6 @@ use crate::types::{
     GrannyTypeMember, GrannyVariant, Matrix4x4,
 };
 use nostdio::{ReadLe, SliceCursor, read_null_terminated_string};
-
-/// Size of a single GrannyDataTypeDefinition on disk: 44 bytes (11 DWORDs).
-const GRANNY_TYPE_DEF_STRIDE: usize = 44;
-
-/// Offset within a bone struct where ExtendedData starts (type_ptr + data_ptr).
-const GRANNY_BONE_EXTENDED_DATA_OFFSET: usize = 0x94;
 
 /// Parse a `GrannyDataTypeDefinition[]` array starting at `offset` in `data`.
 ///

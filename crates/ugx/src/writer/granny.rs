@@ -12,19 +12,14 @@ use alloc::vec::Vec;
 use nostdio::{MutCursor, Seek, SeekFrom, WriteLe};
 
 use crate::constants::{
-    GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_SIZE, GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION,
-    GRANNY_HAS_SCALE_SHEAR, GRANNY_MESH_SIZE,
+    GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_EXTENDED_DATA_OFFSET, GRANNY_BONE_SIZE,
+    GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION, GRANNY_HAS_SCALE_SHEAR, GRANNY_MESH_SIZE,
+    GRANNY_TYPE_DEF_STRIDE,
 };
 use crate::error::Result;
 use crate::types::{
     GrannyBoneBinding, GrannyMemberType, GrannyTypeMember, GrannyVariant, Matrix4x4, UgxGeom,
 };
-
-/// Size of a single GrannyDataTypeDefinition on disk.
-const GRANNY_TYPE_DEF_STRIDE: usize = 44;
-
-/// Offset within a bone struct where ExtendedData {type_ptr, data_ptr} lives.
-const GRANNY_BONE_EXTENDED_DATA_OFFSET: usize = 0x94;
 
 /// Align to 16-byte boundary (matching original engine alignment).
 fn align16(n: usize) -> usize {
@@ -140,11 +135,18 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // ---- Skeleton struct ----
     strings.add(skel_struct, "GrannyRootBone".to_string());
     {
-        let mut cursor = MutCursor::new(&mut buf);
-        cursor.seek(SeekFrom::Start((skel_struct + 0x08) as u64))?;
-        cursor.write_u32_le(bone_count as u32)?;
-        cursor.write_u64_le(bones_start as u64)?;
-        cursor.write_u32_le(geom.skeleton_lod_type)?; // LODType
+        use crate::types::raw::GrannySkeletonRaw;
+        use zerocopy::IntoBytes;
+
+        let skel = GrannySkeletonRaw {
+            name_ptr: [0; 8], // patched by string table
+            bone_count: (bone_count as u32).to_le_bytes(),
+            bones_ptr: (bones_start as u64).to_le_bytes(),
+            lod_type: geom.skeleton_lod_type.to_le_bytes(),
+            _pad: [0; 16],
+        };
+        buf[skel_struct..skel_struct + core::mem::size_of::<GrannySkeletonRaw>()]
+            .copy_from_slice(skel.as_bytes());
     }
 
     // ---- Bone array ----
@@ -159,49 +161,44 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     };
 
     {
-        let mut cursor = MutCursor::new(&mut buf);
+        use crate::types::raw::GrannyBoneRaw;
+        use zerocopy::IntoBytes;
+
         for (i, bone) in geom.granny_bones.iter().enumerate() {
             let base = bones_start + i * GRANNY_BONE_SIZE;
             strings.add(base, bone.name.clone());
 
-            cursor.seek(SeekFrom::Start((base + 0x08) as u64))?;
-            cursor.write_i32_le(bone.parent_index)?;
+            // Get transform fields from stored local transform or fallback
+            let (flags, position, orientation, scale_shear) =
+                if let Some(ref lt) = bone.local_transform {
+                    (lt.flags, &lt.position, &lt.orientation, &lt.scale_shear)
+                } else {
+                    let fb = &fallback_transforms.as_ref().unwrap()[i];
+                    (fb.flags, &fb.position, &fb.orientation, &fb.scale_shear)
+                };
 
-            if let Some(ref lt) = bone.local_transform {
-                cursor.write_u32_le(lt.flags)?;
-                for &v in &lt.position {
-                    cursor.write_f32_le(v)?;
-                }
-                for &v in &lt.orientation {
-                    cursor.write_f32_le(v)?;
-                }
-                for row in &lt.scale_shear {
-                    for &v in row {
-                        cursor.write_f32_le(v)?;
-                    }
-                }
-            } else {
-                let fb = &fallback_transforms.as_ref().unwrap()[i];
-                cursor.write_u32_le(fb.flags)?;
-                for &v in &fb.position {
-                    cursor.write_f32_le(v)?;
-                }
-                for &v in &fb.orientation {
-                    cursor.write_f32_le(v)?;
-                }
-                for row in &fb.scale_shear {
-                    for &v in row {
-                        cursor.write_f32_le(v)?;
-                    }
+            let mut raw = GrannyBoneRaw::zeroed();
+            raw.parent_index = bone.parent_index.to_le_bytes();
+            raw.transform_flags = flags.to_le_bytes();
+            for (j, &v) in position.iter().enumerate() {
+                raw.position[j] = v.to_le_bytes();
+            }
+            for (j, &v) in orientation.iter().enumerate() {
+                raw.orientation[j] = v.to_le_bytes();
+            }
+            for (j, row) in scale_shear.iter().enumerate() {
+                for (k, &v) in row.iter().enumerate() {
+                    raw.scale_shear[j * 3 + k] = v.to_le_bytes();
                 }
             }
-
-            for row in &bone.inverse_world_matrix.rows {
-                for &val in row {
-                    cursor.write_f32_le(val)?;
+            for (j, row) in bone.inverse_world_matrix.rows.iter().enumerate() {
+                for (k, &v) in row.iter().enumerate() {
+                    raw.inverse_world[j * 4 + k] = v.to_le_bytes();
                 }
             }
-            cursor.write_f32_le(bone.lod_error)?;
+            raw.lod_error = bone.lod_error.to_le_bytes();
+
+            buf[base..base + GRANNY_BONE_SIZE].copy_from_slice(raw.as_bytes());
         }
     }
 
@@ -381,25 +378,19 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
     // +0x10: InitialPlacement (identity transform: flags=0, pos=0, ori=[0,0,0,1], scale=I)
     {
-        let mut cursor = MutCursor::new(&mut buf);
-        cursor.seek(SeekFrom::Start((model_struct + 0x10) as u64))?;
-        cursor.write_u32_le(0)?; // Flags
-        for _ in 0..3 {
-            cursor.write_f32_le(0.0)?;
-        }
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(1.0)?;
-        cursor.write_f32_le(1.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(1.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(0.0)?;
-        cursor.write_f32_le(1.0)?;
+        // 68 bytes: flags(4) + position(12) + orientation(16) + scale_shear(36)
+        let identity_transform: [u8; 68] = {
+            let mut t = [0u8; 68];
+            // orientation.w = 1.0 at offset 28 (flags(4) + pos(12) + quat_xyz(12))
+            t[28..32].copy_from_slice(&1.0f32.to_le_bytes());
+            // scale_shear identity: diag = 1.0 at offsets 32, 44, 56
+            t[32..36].copy_from_slice(&1.0f32.to_le_bytes());
+            t[44..48].copy_from_slice(&1.0f32.to_le_bytes());
+            t[56..60].copy_from_slice(&1.0f32.to_le_bytes());
+            t
+        };
+        let off = model_struct + 0x10;
+        buf[off..off + 68].copy_from_slice(&identity_transform);
     }
 
     // +0x54: MeshBindingCount + MeshBindings pointer

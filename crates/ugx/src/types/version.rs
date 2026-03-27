@@ -1,5 +1,7 @@
 //! UGX format version enumeration.
 
+use crate::vertex::VertexElementType;
+
 /// UGX format version, derived from the geometry header signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UgxVersion {
@@ -48,5 +50,46 @@ impl UgxVersion {
     /// for validAccessories in BOTH HW1 and HW2. They are always i32 indices.
     pub fn accessory_is_struct(self) -> bool {
         false
+    }
+
+    /// Default position element type. Both versions use HalfFloat4 (8 bytes).
+    pub fn default_pos_type(self) -> VertexElementType {
+        VertexElementType::HalfFloat4
+    }
+
+    /// Default normal element type.
+    /// HW1: Float3 (12 bytes), HW2: Dec3N (4 bytes).
+    pub fn default_normal_type(self) -> VertexElementType {
+        match self {
+            Self::Hw1 => VertexElementType::Float3,
+            Self::Hw2 => VertexElementType::Dec3N,
+        }
+    }
+
+    /// Default tangent element type.
+    /// HW1: Float3 (12 bytes), HW2: Dec3N (4 bytes).
+    pub fn default_tangent_type(self) -> VertexElementType {
+        match self {
+            Self::Hw1 => VertexElementType::Float3,
+            Self::Hw2 => VertexElementType::Dec3N,
+        }
+    }
+
+    /// Default basis (binormal) element type.
+    /// HW1: Float3 (12 bytes), HW2: Dec3N (4 bytes).
+    pub fn default_basis_type(self) -> VertexElementType {
+        match self {
+            Self::Hw1 => VertexElementType::Float3,
+            Self::Hw2 => VertexElementType::Dec3N,
+        }
+    }
+
+    /// Default basis scale element type.
+    /// HW1: Ignore (not used), HW2: HalfFloat2 (4 bytes).
+    pub fn default_basis_scale_type(self) -> VertexElementType {
+        match self {
+            Self::Hw1 => VertexElementType::Ignore,
+            Self::Hw2 => VertexElementType::HalfFloat2,
+        }
     }
 }

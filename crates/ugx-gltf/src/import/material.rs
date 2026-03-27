@@ -97,7 +97,7 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
             }
 
             let data = if let Some(hogan) = mat_extras.hogan {
-                MaterialData::Hogan(hogan)
+                MaterialData::Hogan(Box::new(hogan))
             } else {
                 MaterialData::Legacy(Box::new(LegacyMaterialData {
                     maps: final_maps,
@@ -147,6 +147,8 @@ fn read_material_extras(
     extras: &gltf_json::Extras,
     _existing_maps: &[Vec<Map>; MapType::NUM_TYPES],
 ) -> MaterialExtras {
+    use crate::extras::MaterialExtrasJson;
+
     let mut result = MaterialExtras {
         flags: 0,
         blend_type: None,
@@ -169,106 +171,45 @@ fn read_material_extras(
         None => return result,
     };
 
-    let parsed: serde_json::Value = match serde_json::from_str(raw.get()) {
+    let ext: MaterialExtrasJson = match serde_json::from_str(raw.get()) {
         Ok(v) => v,
         Err(_) => return result,
     };
 
-    let obj = match parsed.as_object() {
-        Some(o) => o,
-        None => return result,
-    };
+    result.material_version = Some(ext.ugx_material_version);
+    result.flags = ext.ugx_flags.unwrap_or(0);
+    result.blend_type = ext.ugx_blend_type;
+    result.spec_power = ext.ugx_spec_power;
+    result.spec_color = ext.ugx_spec_color;
+    result.env_reflectivity = ext.ugx_env_reflectivity;
+    result.env_sharpness = ext.ugx_env_sharpness;
+    result.env_fresnel = ext.ugx_env_fresnel;
+    result.env_fresnel_power = ext.ugx_env_fresnel_power;
+    result.accessory_index = ext.ugx_accessory_index;
+    result.opacity = ext.ugx_opacity;
 
-    // Read flags
-    if let Some(v) = obj.get("ugx_flags") {
-        result.flags = v.as_u64().unwrap_or(0) as u32;
-    }
-
-    // Read blend_type
-    if let Some(v) = obj.get("ugx_blend_type") {
-        result.blend_type = Some(v.as_u64().unwrap_or(0) as u8);
-    }
-
-    // Read material properties
-    if let Some(v) = obj.get("ugx_spec_power") {
-        result.spec_power = Some(v.as_f64().unwrap_or(10.0) as f32);
-    }
-    if let Some(serde_json::Value::Array(arr)) = obj.get("ugx_spec_color")
-        && arr.len() >= 3
-    {
-        result.spec_color = Some([
-            arr[0].as_f64().unwrap_or(1.0) as f32,
-            arr[1].as_f64().unwrap_or(1.0) as f32,
-            arr[2].as_f64().unwrap_or(1.0) as f32,
-        ]);
-    }
-    if let Some(v) = obj.get("ugx_env_reflectivity") {
-        result.env_reflectivity = Some(v.as_f64().unwrap_or(1.0) as f32);
-    }
-    if let Some(v) = obj.get("ugx_env_sharpness") {
-        result.env_sharpness = Some(v.as_f64().unwrap_or(1.0) as f32);
-    }
-    if let Some(v) = obj.get("ugx_env_fresnel") {
-        result.env_fresnel = Some(v.as_f64().unwrap_or(0.5) as f32);
-    }
-    if let Some(v) = obj.get("ugx_env_fresnel_power") {
-        result.env_fresnel_power = Some(v.as_f64().unwrap_or(4.0) as f32);
-    }
-    if let Some(v) = obj.get("ugx_accessory_index") {
-        result.accessory_index = Some(v.as_u64().unwrap_or(0) as u32);
-    }
-    if let Some(v) = obj.get("ugx_opacity") {
-        result.opacity = Some(v.as_f64().unwrap_or(1.0) as f32);
-    }
-
-    // Read material version
-    if let Some(v) = obj.get("ugx_material_version") {
-        result.material_version = Some(v.as_u64().unwrap_or(4) as u32);
-    }
-
-    // Read Hogan material data (HW2)
-    if let Some(serde_json::Value::Object(hogan_obj)) = obj.get("ugx_hogan") {
-        result.hogan = Some(parse_hogan_extras(hogan_obj));
-    }
-
-    // Read UVW velocity
-    if let Some(serde_json::Value::Array(arr)) = obj.get("ugx_uvw_velocity") {
-        for (i, val) in arr.iter().enumerate() {
+    // UVW velocity
+    if let Some(uvw) = ext.ugx_uvw_velocity {
+        for (i, v) in uvw.iter().enumerate() {
             if i >= MapType::NUM_TYPES {
                 break;
             }
-            if let serde_json::Value::Array(v) = val
-                && v.len() >= 3
-            {
-                result.uvw_velocity[i][0] = v[0].as_f64().unwrap_or(0.0) as f32;
-                result.uvw_velocity[i][1] = v[1].as_f64().unwrap_or(0.0) as f32;
-                result.uvw_velocity[i][2] = v[2].as_f64().unwrap_or(0.0) as f32;
-            }
+            result.uvw_velocity[i] = *v;
         }
     }
 
-    // Read maps (all types — extras override PBR-derived maps for flag fidelity)
-    if let Some(serde_json::Value::Object(maps_obj)) = obj.get("ugx_maps") {
+    // Maps
+    if let Some(maps) = ext.ugx_maps {
         for map_type in MapType::ALL {
-            let type_name = map_type.name();
-            if let Some(serde_json::Value::Array(arr)) = maps_obj.get(type_name) {
-                let mut map_vec = Vec::new();
-                for entry in arr {
-                    if let serde_json::Value::Object(m) = entry {
-                        let name = m
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let channel = m.get("channel").and_then(|v| v.as_i64()).unwrap_or(0) as i16;
-                        let map_flags = m.get("flags").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                        map_vec.push(Map {
-                            name,
-                            channel,
-                            flags: map_flags,
-                        });
-                    }
-                }
+            if let Some(entries) = maps.get(map_type.name()) {
+                let map_vec: Vec<Map> = entries
+                    .iter()
+                    .map(|e| Map {
+                        name: e.name.clone(),
+                        channel: e.channel,
+                        flags: e.flags,
+                    })
+                    .collect();
                 if !map_vec.is_empty() {
                     result.extra_maps.push((map_type as usize, map_vec));
                 }
@@ -276,48 +217,27 @@ fn read_material_extras(
         }
     }
 
+    // Hogan
+    if let Some(h) = ext.ugx_hogan {
+        result.hogan = Some(HoganMaterialData {
+            shader_permutations: h
+                .shader_permutations
+                .into_iter()
+                .map(|p| ShaderPermutation {
+                    name: p.name,
+                    hash: p.hash,
+                })
+                .collect(),
+            ufx_version: h.ufx_version,
+            blend_mode: h.blend_mode,
+            shadow_requires_consts: h.shadow_requires_consts,
+            skinned: h.skinned,
+            terrain_blending: h.terrain_blending,
+            vs_cb_data: h.vs_cb_data,
+            ps_cb_data: h.ps_cb_data,
+            textures: h.textures,
+        });
+    }
+
     result
-}
-
-/// Parse HW2 Hogan material data from glTF extras JSON.
-fn parse_hogan_extras(obj: &serde_json::Map<String, serde_json::Value>) -> HoganMaterialData {
-    let mut perms = Vec::new();
-    if let Some(serde_json::Value::Array(arr)) = obj.get("shader_permutations") {
-        for entry in arr {
-            if let serde_json::Value::Object(p) = entry {
-                let name = p
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let hash = p.get("hash").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                perms.push(ShaderPermutation { name, hash });
-            }
-        }
-    }
-
-    HoganMaterialData {
-        shader_permutations: perms,
-        ufx_version: obj.get("ufx_version").and_then(|v| v.as_u64()).unwrap_or(9) as u32,
-        blend_mode: obj.get("blend_mode").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        shadow_requires_consts: obj
-            .get("shadow_requires_consts")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        skinned: obj
-            .get("skinned")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        terrain_blending: obj
-            .get("terrain_blending")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        vs_cb_data: obj.get("vs_cb_data").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        ps_cb_data: obj.get("ps_cb_data").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        textures: obj
-            .get("textures")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-    }
 }

@@ -2,6 +2,7 @@
 //!
 //! Reads materials from BBinaryDataTree packed document.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -50,7 +51,7 @@ fn read_material(node: &bdt::Node) -> Material {
 
     // Check for HW2 Hogan material format
     let data = if let Some(hogan_node) = node.children.iter().find(|c| c.name == "HoganMaterial") {
-        MaterialData::Hogan(read_hogan_material(hogan_node))
+        MaterialData::Hogan(Box::new(read_hogan_material(hogan_node)))
     } else {
         MaterialData::Legacy(alloc::boxed::Box::new(read_legacy_material(node)))
     };
