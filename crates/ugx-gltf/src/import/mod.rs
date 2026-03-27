@@ -476,13 +476,14 @@ fn compute_bone_obb(
             continue;
         }
 
-        // Transform position into bone-local space: p' = inverse_world_matrix * p
+        // Transform position into bone-local space using row-vector convention:
+        // p' = p * M  (DirectX/Granny row-major, translation in row 3)
         let px = v.position[0];
         let py = v.position[1];
         let pz = v.position[2];
-        let lx = m[0][0] * px + m[0][1] * py + m[0][2] * pz + m[0][3];
-        let ly = m[1][0] * px + m[1][1] * py + m[1][2] * pz + m[1][3];
-        let lz = m[2][0] * px + m[2][1] * py + m[2][2] * pz + m[2][3];
+        let lx = px * m[0][0] + py * m[1][0] + pz * m[2][0] + m[3][0];
+        let ly = px * m[0][1] + py * m[1][1] + pz * m[2][1] + m[3][1];
+        let lz = px * m[0][2] + py * m[1][2] + pz * m[2][2] + m[3][2];
 
         for (i, &val) in [lx, ly, lz].iter().enumerate() {
             if val < min[i] {

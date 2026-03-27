@@ -389,7 +389,8 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
         }
     }
 
-    // Granny mesh bone binding OBBs — verify non-zero when original has them
+    // Granny mesh bone binding OBBs — verify non-zero when original has them,
+    // and report value differences for diagnostics.
     for (mi, om) in original.granny_meshes.iter().enumerate() {
         let rm = re_read.granny_meshes.get(mi);
         for ob in &om.bone_bindings {
@@ -398,7 +399,6 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
             if !has_orig_obb {
                 continue;
             }
-            // The roundtripped mesh should also have a non-zero OBB for this bone
             if let Some(rm) = rm
                 && let Some(rb) = rm
                     .bone_bindings
@@ -411,6 +411,33 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
                     fail!(
                         "{label}: mesh {mi} bone '{}' OBB zeroed after roundtrip",
                         ob.bone_name
+                    );
+                }
+                // Report value differences
+                let max_diff = (0..3)
+                    .map(|c| {
+                        (ob.obb_min[c] - rb.obb_min[c])
+                            .abs()
+                            .max((ob.obb_max[c] - rb.obb_max[c]).abs())
+                    })
+                    .fold(0.0f32, f32::max);
+                if max_diff > 0.1 {
+                    eprintln!(
+                        "  OBB diff {label} mesh[{mi}] bone '{}': max_err={:.4}  orig=[{:.2},{:.2},{:.2}]-[{:.2},{:.2},{:.2}]  rt=[{:.2},{:.2},{:.2}]-[{:.2},{:.2},{:.2}]",
+                        ob.bone_name,
+                        max_diff,
+                        ob.obb_min[0],
+                        ob.obb_min[1],
+                        ob.obb_min[2],
+                        ob.obb_max[0],
+                        ob.obb_max[1],
+                        ob.obb_max[2],
+                        rb.obb_min[0],
+                        rb.obb_min[1],
+                        rb.obb_min[2],
+                        rb.obb_max[0],
+                        rb.obb_max[1],
+                        rb.obb_max[2],
                     );
                 }
             }
