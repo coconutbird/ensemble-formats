@@ -7,7 +7,7 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use crate::error::Result;
-use crate::types::{MapType, Material, UgxGeom};
+use crate::types::{MapType, Material, MaterialData, UgxGeom};
 
 /// Build the material chunk (0x704) as a BBinaryDataTree packed document.
 ///
@@ -46,30 +46,32 @@ pub(super) fn build_material_data(geom: &UgxGeom) -> Result<Vec<u8>> {
 
 /// Build a single material BDT node.
 ///
-/// If the material has `hogan` data, writes the Hogan format.
-/// Otherwise writes the legacy format using `material_version`.
+/// Matches on `MaterialData` to write either the Hogan or legacy format.
 fn build_material_node(mat: &Material) -> bdt::Node {
     let mut node = bdt::Node::new("Material");
 
-    if let Some(ref hogan) = mat.hogan {
-        // HW2 Hogan format: <Material> with <HoganMaterial> child, no @Name/@Ver
-        node.children.push(build_hogan_node(hogan));
-    } else {
-        // Legacy format: <Material @Name @Ver> with <NameValues> + <Maps>
-        node.attributes
-            .push(bdt::Attribute::with_string("Name", &mat.name));
-        node.attributes.push(bdt::Attribute::new(
-            "Ver",
-            bdt::Variant::UInt(mat.material_version),
-        ));
-        build_legacy_children(mat, &mut node);
+    match &mat.data {
+        MaterialData::Hogan(hogan) => {
+            // HW2 Hogan format: <Material> with <HoganMaterial> child, no @Name/@Ver
+            node.children.push(build_hogan_node(hogan));
+        }
+        MaterialData::Legacy(legacy) => {
+            // Legacy format: <Material @Name @Ver> with <NameValues> + <Maps>
+            node.attributes
+                .push(bdt::Attribute::with_string("Name", &mat.name));
+            node.attributes.push(bdt::Attribute::new(
+                "Ver",
+                bdt::Variant::UInt(mat.material_version),
+            ));
+            build_legacy_children(legacy, &mut node);
+        }
     }
 
     node
 }
 
 /// Build legacy NameValues + Maps children for a material node.
-fn build_legacy_children(mat: &Material, node: &mut bdt::Node) {
+fn build_legacy_children(mat: &crate::types::LegacyMaterialData, node: &mut bdt::Node) {
     let mut nv = bdt::Node::new("NameValues");
 
     fn push_float(nv: &mut bdt::Node, name: &str, val: f32) {

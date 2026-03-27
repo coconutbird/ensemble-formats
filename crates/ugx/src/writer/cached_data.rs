@@ -17,7 +17,7 @@ use zerocopy::IntoBytes;
 
 use crate::constants::EMPTY_OFFSET_SENTINEL_32;
 use crate::error::Result;
-use crate::raw::{AccessoryRaw, GeomHeaderRaw, PackedArrayRaw};
+use crate::types::raw::{AccessoryRaw, GeomHeaderRaw, PackedArrayRaw};
 use crate::types::{Accessory, UgxGeom, UgxVersion};
 
 /// Positions of the six packed-array header placeholders written after the
@@ -216,7 +216,7 @@ fn write_sections(
 
     for (section_idx, section) in geom.sections.iter().enumerate() {
         // Fixed section fields (40 bytes, shared by both versions).
-        let fixed = crate::raw::PackedSectionFixedRaw {
+        let fixed = crate::types::raw::PackedSectionFixedRaw {
             material_index: section.material_index.to_le_bytes(),
             accessory_index: section.accessory_index.to_le_bytes(),
             max_bones: section.max_bones.to_le_bytes(),
@@ -353,7 +353,7 @@ fn write_bones(
         } else {
             [0; 4]
         };
-        let packed = crate::raw::PackedBoneRaw {
+        let packed = crate::types::raw::PackedBoneRaw {
             name_offset: 0u64.to_le_bytes(), // placeholder
             model_to_bone: mtb,
             parent_index: bone.parent_index.to_le_bytes(),

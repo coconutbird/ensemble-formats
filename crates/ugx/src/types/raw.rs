@@ -91,35 +91,3 @@ pub(crate) struct PackedSectionFixedRaw {
     pub vert_size: [u8; 4],
     pub num_verts: [u8; 4],
 }
-
-/// Granny bone size in bytes (164 = 0xA4).
-///
-/// Per-bone layout:
-/// - `+0x00` (8 bytes): u64 name string offset
-/// - `+0x08` (4 bytes): i32 parent index
-/// - `+0x0C` (4 bytes): u32 local transform flags
-/// - `+0x10` (12 bytes): f32×3 local position
-/// - `+0x1C` (16 bytes): f32×4 local orientation (quaternion xyzw)
-/// - `+0x2C` (36 bytes): f32×9 local scale_shear (3×3 row-major)
-/// - `+0x50` (64 bytes): f32×16 inverse world matrix (4×4 row-major)
-/// - `+0x90` (4 bytes): f32 LOD error
-/// - `+0x94` (16 bytes): extended data (zeros)
-pub(crate) const GRANNY_BONE_SIZE: usize = 164;
-
-/// Granny mesh struct size in bytes (76 = 0x4C).
-///
-/// Verified from IDA: BoneBindingCount at +0x30, BoneBindings at +0x34.
-pub(crate) const GRANNY_MESH_SIZE: usize = 0x4C;
-
-/// Granny bone_binding struct size in bytes (44 = 0x2C).
-///
-/// Verified from IDA: loop stride is 44 bytes in NewMeshBinding.
-pub(crate) const GRANNY_BONE_BINDING_SIZE: usize = 0x2C;
-
-/// Offset within a Granny bone struct where the inverse world matrix starts.
-pub(crate) const GRANNY_BONE_INVERSE_WORLD_OFFSET: usize = 0x50;
-
-/// Granny local transform flags.
-pub(crate) const GRANNY_HAS_POSITION: u32 = 0x1;
-pub(crate) const GRANNY_HAS_ORIENTATION: u32 = 0x2;
-pub(crate) const GRANNY_HAS_SCALE_SHEAR: u32 = 0x4;

@@ -1,6 +1,8 @@
 //! Material import from glTF.
 
-use ugx::{HoganMaterialData, Map, MapType, Material, ShaderPermutation};
+use ugx::{
+    HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData, ShaderPermutation,
+};
 
 /// Resolve a glTF texture index to the image URI (or name as fallback).
 fn resolve_texture_uri(root: &gltf_json::Root, texture_idx: usize) -> String {
@@ -94,23 +96,29 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                 final_maps[idx] = extra;
             }
 
+            let data = if let Some(hogan) = mat_extras.hogan {
+                MaterialData::Hogan(hogan)
+            } else {
+                MaterialData::Legacy(Box::new(LegacyMaterialData {
+                    maps: final_maps,
+                    spec_power: mat_extras.spec_power.unwrap_or((1.0 - roughness) * 100.0),
+                    opacity: mat_extras.opacity.unwrap_or(base_color[3]),
+                    blend_type,
+                    flags: mat_extras.flags,
+                    uvw_velocity: mat_extras.uvw_velocity,
+                    spec_color: mat_extras.spec_color.unwrap_or([1.0, 1.0, 1.0]),
+                    env_reflectivity: mat_extras.env_reflectivity.unwrap_or(1.0),
+                    env_sharpness: mat_extras.env_sharpness.unwrap_or(1.0),
+                    env_fresnel: mat_extras.env_fresnel.unwrap_or(0.5),
+                    env_fresnel_power: mat_extras.env_fresnel_power.unwrap_or(4.0),
+                    accessory_index: mat_extras.accessory_index.unwrap_or(0),
+                }))
+            };
+
             Material {
                 name: mat.name.clone().unwrap_or_default(),
                 material_version: mat_extras.material_version.unwrap_or(4),
-                maps: final_maps,
-                // Prefer extras values; fall back to PBR-derived
-                spec_power: mat_extras.spec_power.unwrap_or((1.0 - roughness) * 100.0),
-                opacity: mat_extras.opacity.unwrap_or(base_color[3]),
-                blend_type,
-                flags: mat_extras.flags,
-                uvw_velocity: mat_extras.uvw_velocity,
-                spec_color: mat_extras.spec_color.unwrap_or([1.0, 1.0, 1.0]),
-                env_reflectivity: mat_extras.env_reflectivity.unwrap_or(1.0),
-                env_sharpness: mat_extras.env_sharpness.unwrap_or(1.0),
-                env_fresnel: mat_extras.env_fresnel.unwrap_or(0.5),
-                env_fresnel_power: mat_extras.env_fresnel_power.unwrap_or(4.0),
-                accessory_index: mat_extras.accessory_index.unwrap_or(0),
-                hogan: mat_extras.hogan,
+                data,
             }
         })
         .collect()

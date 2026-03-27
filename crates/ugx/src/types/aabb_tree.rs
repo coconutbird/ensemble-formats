@@ -32,11 +32,8 @@
 
 use alloc::vec::Vec;
 
-/// AABB tree version magic (`BAABBTree::StreamVersion`).
-pub const AABB_TREE_VERSION: u32 = 0x33440002;
-
-/// Sentinel value meaning "no child" / "no parent" (NULL pointer offset).
-pub const AABB_NULL_INDEX: u32 = 0xFFFFFFFF;
+// Re-export from constants for backward compatibility.
+pub use crate::constants::{AABB_NULL_INDEX, AABB_TREE_VERSION};
 
 /// Parsed AABB tree — spatial acceleration structure.
 ///

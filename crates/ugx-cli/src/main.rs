@@ -127,10 +127,50 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Materials: {}", geom.materials.len());
     for (i, mat) in geom.materials.iter().enumerate() {
-        println!("  [{}] {}", i, mat.name);
-        // Show diffuse texture if present
-        if !mat.maps[0].is_empty() {
-            println!("      Diffuse: {}", mat.maps[0][0].name);
+        match &mat.data {
+            ugx::types::MaterialData::Hogan(hogan) => {
+                println!("  [{}] (Hogan)", i);
+                for (j, perm) in hogan.shader_permutations.iter().enumerate() {
+                    println!(
+                        "      Permutation[{}]: {} (hash=0x{:08X})",
+                        j, perm.name, perm.hash
+                    );
+                }
+                println!(
+                    "      ufx_version={}, blend_mode={}",
+                    hogan.ufx_version, hogan.blend_mode
+                );
+                println!(
+                    "      skinned={}, terrain_blending={}, shadow_requires_consts={}",
+                    hogan.skinned, hogan.terrain_blending, hogan.shadow_requires_consts
+                );
+                println!(
+                    "      vs_cb_data={}, ps_cb_data={}",
+                    hogan.vs_cb_data, hogan.ps_cb_data
+                );
+                println!("      textures: {}", hogan.textures);
+            }
+            ugx::types::MaterialData::Legacy(legacy) => {
+                println!("  [{}] {} (legacy v{})", i, mat.name, mat.material_version);
+                println!(
+                    "      blend_type={}, opacity={}, flags=0x{:X}",
+                    legacy.blend_type, legacy.opacity, legacy.flags
+                );
+                println!(
+                    "      spec_power={}, env_fresnel={}, env_fresnel_power={}",
+                    legacy.spec_power, legacy.env_fresnel, legacy.env_fresnel_power
+                );
+                for (t, maps) in legacy.maps.iter().enumerate() {
+                    if !maps.is_empty() {
+                        let names: Vec<&str> = maps.iter().map(|m| m.name.as_str()).collect();
+                        println!(
+                            "      {}: {}",
+                            ugx::types::material::MapType::ALL[t].name(),
+                            names.join(", ")
+                        );
+                    }
+                }
+            }
         }
     }
     println!();

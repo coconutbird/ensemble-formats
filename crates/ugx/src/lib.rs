@@ -28,8 +28,6 @@ extern crate std;
 mod bytes;
 mod constants;
 mod error;
-pub mod math;
-mod raw;
 pub use error::{Error, Result};
 
 pub mod vertex;
@@ -38,8 +36,8 @@ pub use vertex::{MAX_UV, UnivertPacker, UnpackedVertex, VertexElementType};
 pub mod types;
 pub use types::*;
 
+mod processing;
 mod reader;
-mod rebuild;
 pub use reader::{Reader, read_materials};
 
 mod writer;

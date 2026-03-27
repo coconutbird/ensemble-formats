@@ -78,3 +78,61 @@ pub(crate) const EMPTY_OFFSET_SENTINEL: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
 /// Alternative 32-bit sentinel used in some older packed-array offset checks.
 pub(crate) const EMPTY_OFFSET_SENTINEL_32: u32 = 0xFFFF_FFFF;
+
+// ---------------------------------------------------------------------------
+// UGX file ID
+// ---------------------------------------------------------------------------
+
+/// UGX ECF file-level version magic (written in ECF header `id` field).
+pub const UGX_VERSION: u32 = 0xECDA1015;
+
+// ---------------------------------------------------------------------------
+// AABB tree
+// ---------------------------------------------------------------------------
+
+/// AABB tree stream version magic (`BAABBTree::StreamVersion`).
+pub const AABB_TREE_VERSION: u32 = 0x33440002;
+
+/// Sentinel value meaning "no child" / "no parent" (NULL pointer offset).
+pub const AABB_NULL_INDEX: u32 = 0xFFFF_FFFF;
+
+// ---------------------------------------------------------------------------
+// Granny layout (binary struct sizes & field offsets)
+// ---------------------------------------------------------------------------
+
+/// Granny bone struct size in bytes (164 = 0xA4).
+///
+/// Layout:
+/// - `+0x00` (12 bytes): BPackedString name (pointer + count)
+///   - `+0x00` (8 bytes): u64 name offset
+///   - `+0x08` (4 bytes): u32 parent bone index
+/// - `+0x0C` (4 bytes): u32 local transform flags
+/// - `+0x10` (12 bytes): f32×3 local position
+/// - `+0x1C` (16 bytes): f32×4 local orientation (quaternion xyzw)
+/// - `+0x2C` (36 bytes): f32×9 local scale_shear (3×3 row-major)
+/// - `+0x50` (64 bytes): f32×16 inverse world matrix (4×4 row-major)
+/// - `+0x90` (4 bytes): f32 LOD error
+/// - `+0x94` (16 bytes): extended data (zeros)
+pub(crate) const GRANNY_BONE_SIZE: usize = 164;
+
+/// Granny mesh struct size in bytes (76 = 0x4C).
+///
+/// Verified from IDA: BoneBindingCount at +0x30, BoneBindings at +0x34.
+pub(crate) const GRANNY_MESH_SIZE: usize = 0x4C;
+
+/// Granny bone_binding struct size in bytes (44 = 0x2C).
+///
+/// Verified from IDA: loop stride is 44 bytes in NewMeshBinding.
+pub(crate) const GRANNY_BONE_BINDING_SIZE: usize = 0x2C;
+
+/// Offset within a Granny bone struct where the inverse world matrix starts.
+pub(crate) const GRANNY_BONE_INVERSE_WORLD_OFFSET: usize = 0x50;
+
+/// Granny local transform flag: bone has a position component.
+pub(crate) const GRANNY_HAS_POSITION: u32 = 0x1;
+
+/// Granny local transform flag: bone has an orientation component.
+pub(crate) const GRANNY_HAS_ORIENTATION: u32 = 0x2;
+
+/// Granny local transform flag: bone has a scale/shear component.
+pub(crate) const GRANNY_HAS_SCALE_SHEAR: u32 = 0x4;

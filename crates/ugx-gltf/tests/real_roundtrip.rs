@@ -126,36 +126,39 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
             );
         }
 
-        if rm.blend_type != om.blend_type {
+        let ol = om.legacy().expect("expected legacy material in roundtrip");
+        let rl = rm.legacy().expect("expected legacy material in roundtrip");
+
+        if rl.blend_type != ol.blend_type {
             fail!(
                 "{label}: material {mi} blend_type: {} vs {}",
-                rm.blend_type,
-                om.blend_type
+                rl.blend_type,
+                ol.blend_type
             );
         }
 
         // Opacity survives as u8 (0–255) so allow ±1/255 tolerance
-        if (rm.opacity - om.opacity).abs() > (2.0 / 255.0) {
+        if (rl.opacity - ol.opacity).abs() > (2.0 / 255.0) {
             fail!(
                 "{label}: material {mi} opacity: {} vs {}",
-                rm.opacity,
-                om.opacity
+                rl.opacity,
+                ol.opacity
             );
         }
 
         // Check texture map names survive for each map type
         for mt in ugx::MapType::ALL {
             let idx = mt as usize;
-            if rm.maps[idx].len() != om.maps[idx].len() {
+            if rl.maps[idx].len() != ol.maps[idx].len() {
                 fail!(
                     "{label}: material {mi} map {:?} count: {} vs {}",
                     mt,
-                    rm.maps[idx].len(),
-                    om.maps[idx].len()
+                    rl.maps[idx].len(),
+                    ol.maps[idx].len()
                 );
             }
 
-            for (ti, (otex, rtex)) in om.maps[idx].iter().zip(rm.maps[idx].iter()).enumerate() {
+            for (ti, (otex, rtex)) in ol.maps[idx].iter().zip(rl.maps[idx].iter()).enumerate() {
                 if rtex.name != otex.name {
                     fail!(
                         "{label}: material {mi} map {:?}[{ti}] name: {:?} vs {:?}",
@@ -581,13 +584,15 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
         .zip(re_read.materials.iter())
         .enumerate()
     {
-        if rm.flags != om.flags {
-            fail!("{label}: material {mi} flags: {} vs {}", rm.flags, om.flags);
+        let ol = om.legacy().expect("expected legacy material");
+        let rl = rm.legacy().expect("expected legacy material");
+        if rl.flags != ol.flags {
+            fail!("{label}: material {mi} flags: {} vs {}", rl.flags, ol.flags);
         }
-        for (ti, (ov, rv)) in om
+        for (ti, (ov, rv)) in ol
             .uvw_velocity
             .iter()
-            .zip(rm.uvw_velocity.iter())
+            .zip(rl.uvw_velocity.iter())
             .enumerate()
         {
             for c in 0..3 {
@@ -3201,78 +3206,91 @@ fn test_extras_necessity() {
         {
             // Track original values (a = with extras = original)
             total_mats += 1;
-            *val_blend_type.entry(a.blend_type).or_insert(0) += 1;
+            let la = a
+                .legacy()
+                .expect("expected legacy material in roundtrip test");
+            let lb = b
+                .legacy()
+                .expect("expected legacy material in roundtrip test");
+            *val_blend_type.entry(la.blend_type).or_insert(0) += 1;
             *val_spec_power
-                .entry(format!("{:.1}", a.spec_power))
+                .entry(format!("{:.1}", la.spec_power))
                 .or_insert(0) += 1;
             *val_spec_color
-                .entry(format!("{:?}", a.spec_color))
+                .entry(format!("{:?}", la.spec_color))
                 .or_insert(0) += 1;
             *val_env_reflect
-                .entry(format!("{:.2}", a.env_reflectivity))
+                .entry(format!("{:.2}", la.env_reflectivity))
                 .or_insert(0) += 1;
             *val_env_sharp
-                .entry(format!("{:.2}", a.env_sharpness))
+                .entry(format!("{:.2}", la.env_sharpness))
                 .or_insert(0) += 1;
             *val_env_fresnel
-                .entry(format!("{:.2}", a.env_fresnel))
+                .entry(format!("{:.2}", la.env_fresnel))
                 .or_insert(0) += 1;
             *val_env_fp
-                .entry(format!("{:.2}", a.env_fresnel_power))
+                .entry(format!("{:.2}", la.env_fresnel_power))
                 .or_insert(0) += 1;
-            *val_accessory.entry(a.accessory_index).or_insert(0) += 1;
+            *val_accessory.entry(la.accessory_index).or_insert(0) += 1;
 
             let mut diffs = Vec::new();
-            if a.flags != b.flags {
-                diffs.push(format!("flags: {} vs {}", a.flags, b.flags));
+            if la.flags != lb.flags {
+                diffs.push(format!("flags: {} vs {}", la.flags, lb.flags));
             }
-            if a.blend_type != b.blend_type {
-                diffs.push(format!("blend_type: {} vs {}", a.blend_type, b.blend_type));
+            if la.blend_type != lb.blend_type {
+                diffs.push(format!(
+                    "blend_type: {} vs {}",
+                    la.blend_type, lb.blend_type
+                ));
             }
-            if (a.spec_power - b.spec_power).abs() > 0.01 {
-                diffs.push(format!("spec_power: {} vs {}", a.spec_power, b.spec_power));
+            if (la.spec_power - lb.spec_power).abs() > 0.01 {
+                diffs.push(format!(
+                    "spec_power: {} vs {}",
+                    la.spec_power, lb.spec_power
+                ));
             }
-            if (a.opacity - b.opacity).abs() > 0.001 {
-                diffs.push(format!("opacity: {} vs {}", a.opacity, b.opacity));
+            if (la.opacity - lb.opacity).abs() > 0.001 {
+                diffs.push(format!("opacity: {} vs {}", la.opacity, lb.opacity));
             }
-            if a.spec_color
+            if la
+                .spec_color
                 .iter()
-                .zip(b.spec_color.iter())
+                .zip(lb.spec_color.iter())
                 .any(|(x, y)| (x - y).abs() > 0.01)
             {
                 diffs.push(format!(
                     "spec_color: {:?} vs {:?}",
-                    a.spec_color, b.spec_color
+                    la.spec_color, lb.spec_color
                 ));
             }
-            if (a.env_reflectivity - b.env_reflectivity).abs() > 0.01 {
+            if (la.env_reflectivity - lb.env_reflectivity).abs() > 0.01 {
                 diffs.push(format!(
                     "env_reflectivity: {} vs {}",
-                    a.env_reflectivity, b.env_reflectivity
+                    la.env_reflectivity, lb.env_reflectivity
                 ));
             }
-            if (a.env_sharpness - b.env_sharpness).abs() > 0.01 {
+            if (la.env_sharpness - lb.env_sharpness).abs() > 0.01 {
                 diffs.push(format!(
                     "env_sharpness: {} vs {}",
-                    a.env_sharpness, b.env_sharpness
+                    la.env_sharpness, lb.env_sharpness
                 ));
             }
-            if (a.env_fresnel - b.env_fresnel).abs() > 0.01 {
+            if (la.env_fresnel - lb.env_fresnel).abs() > 0.01 {
                 diffs.push(format!(
                     "env_fresnel: {} vs {}",
-                    a.env_fresnel, b.env_fresnel
+                    la.env_fresnel, lb.env_fresnel
                 ));
             }
-            if (a.env_fresnel_power - b.env_fresnel_power).abs() > 0.01 {
+            if (la.env_fresnel_power - lb.env_fresnel_power).abs() > 0.01 {
                 diffs.push(format!(
                     "env_fresnel_power: {} vs {}",
-                    a.env_fresnel_power, b.env_fresnel_power
+                    la.env_fresnel_power, lb.env_fresnel_power
                 ));
             }
-            if a.accessory_index != b.accessory_index {
+            if la.accessory_index != lb.accessory_index {
                 diffs.push(format!(
                     "accessory_index: {} vs {}",
-                    a.accessory_index, b.accessory_index
+                    la.accessory_index, lb.accessory_index
                 ));
             }
             if !diffs.is_empty() {

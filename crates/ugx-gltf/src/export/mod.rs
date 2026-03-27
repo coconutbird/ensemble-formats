@@ -69,52 +69,9 @@ pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<Glt
 /// Stores material flags, UVW velocity, and non-PBR texture maps
 /// so they survive a glTF roundtrip.
 fn build_material_extras(mat: &Material) -> json::Extras {
+    use ugx::types::MaterialData;
+
     let mut extras = serde_json::Map::new();
-
-    // Always store flags and blend_type (even if 0, for roundtrip fidelity)
-    extras.insert(
-        "ugx_flags".into(),
-        serde_json::Value::Number(mat.flags.into()),
-    );
-    extras.insert(
-        "ugx_blend_type".into(),
-        serde_json::Value::Number(mat.blend_type.into()),
-    );
-
-    // Store all material properties for lossless roundtrip
-    extras.insert(
-        "ugx_spec_power".into(),
-        serde_json::Value::from(mat.spec_power),
-    );
-    extras.insert(
-        "ugx_spec_color".into(),
-        serde_json::Value::Array(vec![
-            serde_json::Value::from(mat.spec_color[0]),
-            serde_json::Value::from(mat.spec_color[1]),
-            serde_json::Value::from(mat.spec_color[2]),
-        ]),
-    );
-    extras.insert(
-        "ugx_env_reflectivity".into(),
-        serde_json::Value::from(mat.env_reflectivity),
-    );
-    extras.insert(
-        "ugx_env_sharpness".into(),
-        serde_json::Value::from(mat.env_sharpness),
-    );
-    extras.insert(
-        "ugx_env_fresnel".into(),
-        serde_json::Value::from(mat.env_fresnel),
-    );
-    extras.insert(
-        "ugx_env_fresnel_power".into(),
-        serde_json::Value::from(mat.env_fresnel_power),
-    );
-    extras.insert(
-        "ugx_accessory_index".into(),
-        serde_json::Value::Number(mat.accessory_index.into()),
-    );
-    extras.insert("ugx_opacity".into(), serde_json::Value::from(mat.opacity));
 
     // Store material version for roundtrip (4 = HW1, 5 = HW2 legacy)
     extras.insert(
@@ -122,104 +79,154 @@ fn build_material_extras(mat: &Material) -> json::Extras {
         serde_json::Value::Number(mat.material_version.into()),
     );
 
-    // Store HW2 Hogan material data if present
-    if let Some(ref hogan) = mat.hogan {
-        let mut hogan_obj = serde_json::Map::new();
-        let perms: Vec<serde_json::Value> = hogan
-            .shader_permutations
-            .iter()
-            .map(|p| {
-                let mut obj = serde_json::Map::new();
-                obj.insert("name".into(), serde_json::Value::String(p.name.clone()));
-                obj.insert("hash".into(), serde_json::Value::Number(p.hash.into()));
-                serde_json::Value::Object(obj)
-            })
-            .collect();
-        hogan_obj.insert(
-            "shader_permutations".into(),
-            serde_json::Value::Array(perms),
-        );
-        hogan_obj.insert(
-            "ufx_version".into(),
-            serde_json::Value::Number(hogan.ufx_version.into()),
-        );
-        hogan_obj.insert(
-            "blend_mode".into(),
-            serde_json::Value::Number(hogan.blend_mode.into()),
-        );
-        hogan_obj.insert(
-            "shadow_requires_consts".into(),
-            serde_json::Value::Bool(hogan.shadow_requires_consts),
-        );
-        hogan_obj.insert("skinned".into(), serde_json::Value::Bool(hogan.skinned));
-        hogan_obj.insert(
-            "terrain_blending".into(),
-            serde_json::Value::Bool(hogan.terrain_blending),
-        );
-        hogan_obj.insert(
-            "vs_cb_data".into(),
-            serde_json::Value::Number(hogan.vs_cb_data.into()),
-        );
-        hogan_obj.insert(
-            "ps_cb_data".into(),
-            serde_json::Value::Number(hogan.ps_cb_data.into()),
-        );
-        hogan_obj.insert(
-            "textures".into(),
-            serde_json::Value::String(hogan.textures.clone()),
-        );
-        extras.insert("ugx_hogan".into(), serde_json::Value::Object(hogan_obj));
-    }
+    match &mat.data {
+        MaterialData::Legacy(legacy) => {
+            // Always store flags and blend_type (even if 0, for roundtrip fidelity)
+            extras.insert(
+                "ugx_flags".into(),
+                serde_json::Value::Number(legacy.flags.into()),
+            );
+            extras.insert(
+                "ugx_blend_type".into(),
+                serde_json::Value::Number(legacy.blend_type.into()),
+            );
 
-    // Store UVW velocity arrays that have non-zero values
-    let has_any_uvw = mat
-        .uvw_velocity
-        .iter()
-        .any(|v| v[0] != 0.0 || v[1] != 0.0 || v[2] != 0.0);
-    if has_any_uvw {
-        let uvw_arr: Vec<serde_json::Value> = mat
-            .uvw_velocity
-            .iter()
-            .map(|v| {
+            // Store all material properties for lossless roundtrip
+            extras.insert(
+                "ugx_spec_power".into(),
+                serde_json::Value::from(legacy.spec_power),
+            );
+            extras.insert(
+                "ugx_spec_color".into(),
                 serde_json::Value::Array(vec![
-                    serde_json::Value::from(v[0]),
-                    serde_json::Value::from(v[1]),
-                    serde_json::Value::from(v[2]),
-                ])
-            })
-            .collect();
-        extras.insert("ugx_uvw_velocity".into(), serde_json::Value::Array(uvw_arr));
-    }
+                    serde_json::Value::from(legacy.spec_color[0]),
+                    serde_json::Value::from(legacy.spec_color[1]),
+                    serde_json::Value::from(legacy.spec_color[2]),
+                ]),
+            );
+            extras.insert(
+                "ugx_env_reflectivity".into(),
+                serde_json::Value::from(legacy.env_reflectivity),
+            );
+            extras.insert(
+                "ugx_env_sharpness".into(),
+                serde_json::Value::from(legacy.env_sharpness),
+            );
+            extras.insert(
+                "ugx_env_fresnel".into(),
+                serde_json::Value::from(legacy.env_fresnel),
+            );
+            extras.insert(
+                "ugx_env_fresnel_power".into(),
+                serde_json::Value::from(legacy.env_fresnel_power),
+            );
+            extras.insert(
+                "ugx_accessory_index".into(),
+                serde_json::Value::Number(legacy.accessory_index.into()),
+            );
+            extras.insert(
+                "ugx_opacity".into(),
+                serde_json::Value::from(legacy.opacity),
+            );
 
-    // Store ALL texture maps with their flags (including PBR maps, for flag fidelity)
-    let mut maps_obj = serde_json::Map::new();
-    for map_type in MapType::ALL {
-        let idx = map_type as usize;
-        if !mat.maps[idx].is_empty() {
-            let maps_arr: Vec<serde_json::Value> = mat.maps[idx]
+            // Store UVW velocity arrays that have non-zero values
+            let has_any_uvw = legacy
+                .uvw_velocity
                 .iter()
-                .map(|m| {
+                .any(|v| v[0] != 0.0 || v[1] != 0.0 || v[2] != 0.0);
+            if has_any_uvw {
+                let uvw_arr: Vec<serde_json::Value> = legacy
+                    .uvw_velocity
+                    .iter()
+                    .map(|v| {
+                        serde_json::Value::Array(vec![
+                            serde_json::Value::from(v[0]),
+                            serde_json::Value::from(v[1]),
+                            serde_json::Value::from(v[2]),
+                        ])
+                    })
+                    .collect();
+                extras.insert("ugx_uvw_velocity".into(), serde_json::Value::Array(uvw_arr));
+            }
+
+            // Store ALL texture maps with their flags (including PBR maps, for flag fidelity)
+            let mut maps_obj = serde_json::Map::new();
+            for map_type in MapType::ALL {
+                let idx = map_type as usize;
+                if !legacy.maps[idx].is_empty() {
+                    let maps_arr: Vec<serde_json::Value> = legacy.maps[idx]
+                        .iter()
+                        .map(|m| {
+                            let mut obj = serde_json::Map::new();
+                            obj.insert("name".into(), serde_json::Value::String(m.name.clone()));
+                            obj.insert(
+                                "channel".into(),
+                                serde_json::Value::Number((m.channel as i64).into()),
+                            );
+                            obj.insert(
+                                "flags".into(),
+                                serde_json::Value::Number((m.flags as u64).into()),
+                            );
+                            serde_json::Value::Object(obj)
+                        })
+                        .collect();
+                    maps_obj.insert(
+                        map_type.name().to_string(),
+                        serde_json::Value::Array(maps_arr),
+                    );
+                }
+            }
+            if !maps_obj.is_empty() {
+                extras.insert("ugx_maps".into(), serde_json::Value::Object(maps_obj));
+            }
+        }
+        MaterialData::Hogan(hogan) => {
+            let mut hogan_obj = serde_json::Map::new();
+            let perms: Vec<serde_json::Value> = hogan
+                .shader_permutations
+                .iter()
+                .map(|p| {
                     let mut obj = serde_json::Map::new();
-                    obj.insert("name".into(), serde_json::Value::String(m.name.clone()));
-                    obj.insert(
-                        "channel".into(),
-                        serde_json::Value::Number((m.channel as i64).into()),
-                    );
-                    obj.insert(
-                        "flags".into(),
-                        serde_json::Value::Number((m.flags as u64).into()),
-                    );
+                    obj.insert("name".into(), serde_json::Value::String(p.name.clone()));
+                    obj.insert("hash".into(), serde_json::Value::Number(p.hash.into()));
                     serde_json::Value::Object(obj)
                 })
                 .collect();
-            maps_obj.insert(
-                map_type.name().to_string(),
-                serde_json::Value::Array(maps_arr),
+            hogan_obj.insert(
+                "shader_permutations".into(),
+                serde_json::Value::Array(perms),
             );
+            hogan_obj.insert(
+                "ufx_version".into(),
+                serde_json::Value::Number(hogan.ufx_version.into()),
+            );
+            hogan_obj.insert(
+                "blend_mode".into(),
+                serde_json::Value::Number(hogan.blend_mode.into()),
+            );
+            hogan_obj.insert(
+                "shadow_requires_consts".into(),
+                serde_json::Value::Bool(hogan.shadow_requires_consts),
+            );
+            hogan_obj.insert("skinned".into(), serde_json::Value::Bool(hogan.skinned));
+            hogan_obj.insert(
+                "terrain_blending".into(),
+                serde_json::Value::Bool(hogan.terrain_blending),
+            );
+            hogan_obj.insert(
+                "vs_cb_data".into(),
+                serde_json::Value::Number(hogan.vs_cb_data.into()),
+            );
+            hogan_obj.insert(
+                "ps_cb_data".into(),
+                serde_json::Value::Number(hogan.ps_cb_data.into()),
+            );
+            hogan_obj.insert(
+                "textures".into(),
+                serde_json::Value::String(hogan.textures.clone()),
+            );
+            extras.insert("ugx_hogan".into(), serde_json::Value::Object(hogan_obj));
         }
-    }
-    if !maps_obj.is_empty() {
-        extras.insert("ugx_maps".into(), serde_json::Value::Object(maps_obj));
     }
 
     if extras.is_empty() {
@@ -250,30 +257,33 @@ pub fn export_to_gltf_with_buffer_name(
     // Create materials with texture references if requested
     if options.include_materials {
         // Pass 1: Build texture registry (deduplicated image/texture objects)
+        // Only legacy materials have texture maps.
         let mut texture_map: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
         for mat in &geom.materials {
-            for map_type in MapType::ALL {
-                for map in &mat.maps[map_type as usize] {
-                    if !map.name.is_empty() && !texture_map.contains_key(&map.name) {
-                        let image_idx = images_json.len() as u32;
-                        images_json.push(json::Image {
-                            buffer_view: None,
-                            mime_type: None,
-                            name: Some(map.name.clone()),
-                            uri: Some(map.name.clone()),
-                            extensions: None,
-                            extras: json::Extras::default(),
-                        });
-                        let texture_idx = textures_json.len() as u32;
-                        textures_json.push(json::Texture {
-                            name: None,
-                            sampler: None,
-                            source: json::Index::new(image_idx),
-                            extensions: None,
-                            extras: json::Extras::default(),
-                        });
-                        texture_map.insert(map.name.clone(), texture_idx);
+            if let Some(legacy) = mat.legacy() {
+                for map_type in MapType::ALL {
+                    for map in &legacy.maps[map_type as usize] {
+                        if !map.name.is_empty() && !texture_map.contains_key(&map.name) {
+                            let image_idx = images_json.len() as u32;
+                            images_json.push(json::Image {
+                                buffer_view: None,
+                                mime_type: None,
+                                name: Some(map.name.clone()),
+                                uri: Some(map.name.clone()),
+                                extensions: None,
+                                extras: json::Extras::default(),
+                            });
+                            let texture_idx = textures_json.len() as u32;
+                            textures_json.push(json::Texture {
+                                name: None,
+                                sampler: None,
+                                source: json::Index::new(image_idx),
+                                extensions: None,
+                                extras: json::Extras::default(),
+                            });
+                            texture_map.insert(map.name.clone(), texture_idx);
+                        }
                     }
                 }
             }
@@ -281,51 +291,51 @@ pub fn export_to_gltf_with_buffer_name(
 
         // Pass 2: Create glTF materials with texture references
         for mat in &geom.materials {
-            // Diffuse → baseColorTexture
-            let base_color_texture = mat.maps[MapType::Diffuse as usize]
-                .first()
-                .filter(|m| !m.name.is_empty())
-                .map(|m| json::texture::Info {
-                    index: json::Index::new(texture_map[&m.name]),
-                    tex_coord: m.channel as u32,
-                    extensions: None,
-                    extras: json::Extras::default(),
-                });
-
-            // Normal → normalTexture
-            let normal_texture = mat.maps[MapType::Normal as usize]
-                .first()
-                .filter(|m| !m.name.is_empty())
-                .map(|m| json::material::NormalTexture {
-                    index: json::Index::new(texture_map[&m.name]),
-                    scale: 1.0,
-                    tex_coord: m.channel as u32,
-                    extensions: None,
-                    extras: json::Extras::default(),
-                });
-
-            // AO → occlusionTexture
-            let occlusion_texture = mat.maps[MapType::AO as usize]
-                .first()
-                .filter(|m| !m.name.is_empty())
-                .map(|m| json::material::OcclusionTexture {
-                    index: json::Index::new(texture_map[&m.name]),
-                    strength: json::material::StrengthFactor(1.0),
-                    tex_coord: m.channel as u32,
-                    extensions: None,
-                    extras: json::Extras::default(),
-                });
-
-            // Emissive → emissiveTexture
-            let emissive_texture = mat.maps[MapType::Emissive as usize]
-                .first()
-                .filter(|m| !m.name.is_empty())
-                .map(|m| json::texture::Info {
-                    index: json::Index::new(texture_map[&m.name]),
-                    tex_coord: m.channel as u32,
-                    extensions: None,
-                    extras: json::Extras::default(),
-                });
+            // Legacy materials get full PBR mapping; Hogan materials get defaults + extras
+            let (base_color_texture, normal_texture, occlusion_texture, emissive_texture) =
+                if let Some(legacy) = mat.legacy() {
+                    let bct = legacy.maps[MapType::Diffuse as usize]
+                        .first()
+                        .filter(|m| !m.name.is_empty())
+                        .map(|m| json::texture::Info {
+                            index: json::Index::new(texture_map[&m.name]),
+                            tex_coord: m.channel as u32,
+                            extensions: None,
+                            extras: json::Extras::default(),
+                        });
+                    let nt = legacy.maps[MapType::Normal as usize]
+                        .first()
+                        .filter(|m| !m.name.is_empty())
+                        .map(|m| json::material::NormalTexture {
+                            index: json::Index::new(texture_map[&m.name]),
+                            scale: 1.0,
+                            tex_coord: m.channel as u32,
+                            extensions: None,
+                            extras: json::Extras::default(),
+                        });
+                    let ot = legacy.maps[MapType::AO as usize]
+                        .first()
+                        .filter(|m| !m.name.is_empty())
+                        .map(|m| json::material::OcclusionTexture {
+                            index: json::Index::new(texture_map[&m.name]),
+                            strength: json::material::StrengthFactor(1.0),
+                            tex_coord: m.channel as u32,
+                            extensions: None,
+                            extras: json::Extras::default(),
+                        });
+                    let et = legacy.maps[MapType::Emissive as usize]
+                        .first()
+                        .filter(|m| !m.name.is_empty())
+                        .map(|m| json::texture::Info {
+                            index: json::Index::new(texture_map[&m.name]),
+                            tex_coord: m.channel as u32,
+                            extensions: None,
+                            extras: json::Extras::default(),
+                        });
+                    (bct, nt, ot, et)
+                } else {
+                    (None, None, None, None)
+                };
 
             // Emissive factor must be [1,1,1] for emissive texture to have effect
             let emissive_factor = if emissive_texture.is_some() {
@@ -334,19 +344,25 @@ pub fn export_to_gltf_with_buffer_name(
                 json::material::EmissiveFactor([0.0, 0.0, 0.0])
             };
 
-            // Alpha mode: blend if blend_type > 0 or opacity < 1.0
-            let alpha_mode = if mat.blend_type > 0 || mat.opacity < 1.0 {
+            // Alpha mode and PBR values from legacy data, or defaults for Hogan
+            let (blend_type, opacity, spec_power) = if let Some(legacy) = mat.legacy() {
+                (legacy.blend_type, legacy.opacity, legacy.spec_power)
+            } else {
+                (0u8, 1.0f32, 10.0f32)
+            };
+
+            let alpha_mode = if blend_type > 0 || opacity < 1.0 {
                 Valid(json::material::AlphaMode::Blend)
             } else {
                 Valid(json::material::AlphaMode::Opaque)
             };
 
             let pbr = json::material::PbrMetallicRoughness {
-                base_color_factor: json::material::PbrBaseColorFactor([1.0, 1.0, 1.0, mat.opacity]),
+                base_color_factor: json::material::PbrBaseColorFactor([1.0, 1.0, 1.0, opacity]),
                 base_color_texture,
                 metallic_factor: json::material::StrengthFactor(0.0),
                 roughness_factor: json::material::StrengthFactor(
-                    1.0 - (mat.spec_power / 100.0).clamp(0.0, 1.0),
+                    1.0 - (spec_power / 100.0).clamp(0.0, 1.0),
                 ),
                 metallic_roughness_texture: None,
                 extensions: None,

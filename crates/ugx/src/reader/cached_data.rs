@@ -13,7 +13,7 @@ use crate::bytes::{
 };
 use crate::constants::{EMPTY_OFFSET_SENTINEL, EMPTY_OFFSET_SENTINEL_32};
 use crate::error::{Error, Result};
-use crate::raw::{AccessoryRaw, PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
+use crate::types::raw::{AccessoryRaw, PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
 use crate::types::{AABB, Accessory, Bone, Matrix4x4, Section, UgxVersion};
 use crate::vertex::element::VertexElementType;
 use crate::vertex::packer::UnivertPacker;

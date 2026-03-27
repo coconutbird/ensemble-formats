@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::math::Matrix4x4;
+use super::math::Matrix4x4;
 
 // ---------------------------------------------------------------------------
 // Granny2 type system

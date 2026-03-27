@@ -108,21 +108,12 @@ pub struct HoganMaterialData {
     pub textures: String,
 }
 
-/// Material definition (from BBinaryDataTree packed document).
+/// Legacy material data — the HW1/DE fixed-function material system.
 ///
-/// Materials are stored in UGX chunk 0x704 as a BBinaryDataTree document.
-/// Each material has 13 map type slots, UVW velocities per map type,
-/// and properties from a BNameValueMap.
-///
-/// HW2 files may use either the legacy format (same as HW1 but `@Ver=5`)
-/// or the Hogan shader-based format. When `hogan` is `Some`, the material
-/// uses the Hogan format and legacy fields may contain defaults.
+/// Uses 13 explicit map slots (diffuse, normal, gloss, etc.) and
+/// properties from a `BNameValueMap` (specular, env reflectivity, etc.).
 #[derive(Debug, Clone)]
-pub struct Material {
-    /// Material name (from `@Name` attribute; empty for Hogan materials).
-    pub name: String,
-    /// Material version from `@Ver` attribute (4 = HW1, 5 = HW2 legacy).
-    pub material_version: u32,
+pub struct LegacyMaterialData {
     /// Texture maps indexed by MapType (13 slots, each can have multiple maps).
     pub maps: [Vec<Map>; MapType::NUM_TYPES],
     /// UVW velocity per map type.
@@ -147,15 +138,11 @@ pub struct Material {
     pub blend_type: u8,
     /// Opacity (default: 1.0).
     pub opacity: f32,
-    /// HW2 Hogan material data (if present, this material uses the Hogan format).
-    pub hogan: Option<HoganMaterialData>,
 }
 
-impl Default for Material {
+impl Default for LegacyMaterialData {
     fn default() -> Self {
         Self {
-            name: String::new(),
-            material_version: 4,
             maps: Default::default(),
             uvw_velocity: [[0.0; 3]; MapType::NUM_TYPES],
             spec_power: 10.0,
@@ -168,7 +155,88 @@ impl Default for Material {
             flags: 0,
             blend_type: 0,
             opacity: 1.0,
-            hogan: None,
+        }
+    }
+}
+
+/// Discriminated material format — either Legacy (HW1 map-based) or
+/// Hogan (HW2 shader-based).
+///
+/// This enum gives type-level separation between the two material systems
+/// and makes cross-version conversion a natural `match` arm.
+#[derive(Debug, Clone)]
+pub enum MaterialData {
+    /// HW1/DE fixed-function material (also used by HW2 legacy `@Ver=5`).
+    Legacy(alloc::boxed::Box<LegacyMaterialData>),
+    /// HW2 Hogan shader-based material.
+    Hogan(HoganMaterialData),
+}
+
+/// Material definition (from BBinaryDataTree packed document).
+///
+/// Materials are stored in UGX chunk 0x704 as a BBinaryDataTree document.
+/// The `data` field determines whether this is a legacy (map-based) or
+/// Hogan (shader-based) material.
+#[derive(Debug, Clone)]
+pub struct Material {
+    /// Material name (from `@Name` attribute; empty for Hogan materials).
+    pub name: String,
+    /// Material version from `@Ver` attribute (4 = HW1, 5 = HW2 legacy).
+    pub material_version: u32,
+    /// Format-specific material data.
+    pub data: MaterialData,
+}
+
+impl Material {
+    /// Returns `true` if this is a legacy (map-based) material.
+    pub fn is_legacy(&self) -> bool {
+        matches!(self.data, MaterialData::Legacy(_))
+    }
+
+    /// Returns `true` if this is a Hogan (shader-based) material.
+    pub fn is_hogan(&self) -> bool {
+        matches!(self.data, MaterialData::Hogan(_))
+    }
+
+    /// Returns a reference to the legacy data, or `None` if Hogan.
+    pub fn legacy(&self) -> Option<&LegacyMaterialData> {
+        match &self.data {
+            MaterialData::Legacy(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    /// Returns a mutable reference to the legacy data, or `None` if Hogan.
+    pub fn legacy_mut(&mut self) -> Option<&mut LegacyMaterialData> {
+        match &mut self.data {
+            MaterialData::Legacy(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    /// Returns a reference to the Hogan data, or `None` if legacy.
+    pub fn hogan(&self) -> Option<&HoganMaterialData> {
+        match &self.data {
+            MaterialData::Hogan(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    /// Returns a mutable reference to the Hogan data, or `None` if legacy.
+    pub fn hogan_mut(&mut self) -> Option<&mut HoganMaterialData> {
+        match &mut self.data {
+            MaterialData::Hogan(h) => Some(h),
+            _ => None,
+        }
+    }
+}
+
+impl Default for Material {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            material_version: 4,
+            data: MaterialData::Legacy(alloc::boxed::Box::default()),
         }
     }
 }

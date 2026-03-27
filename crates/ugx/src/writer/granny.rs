@@ -11,11 +11,11 @@ use alloc::vec::Vec;
 
 use ecf::io::{MutCursor, Seek, SeekFrom, WriteLe};
 
-use crate::error::Result;
-use crate::raw::{
+use crate::constants::{
     GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_SIZE, GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION,
     GRANNY_HAS_SCALE_SHEAR, GRANNY_MESH_SIZE,
 };
+use crate::error::Result;
 use crate::types::{
     GrannyBoneBinding, GrannyMemberType, GrannyTypeMember, GrannyVariant, Matrix4x4, UgxGeom,
 };

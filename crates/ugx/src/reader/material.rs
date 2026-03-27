@@ -6,7 +6,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::error::Result;
-use crate::types::{HoganMaterialData, Map, MapType, Material, ShaderPermutation};
+use crate::types::{
+    HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData, ShaderPermutation,
+};
 
 /// Read materials from BBinaryDataTree packed document (chunk 0x704).
 ///
@@ -34,48 +36,53 @@ pub(crate) fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
 /// - **Hogan** (HW2): `<Material>` with a single `<HoganMaterial>` child containing
 ///   shader permutations, constant buffer data, and texture paths.
 fn read_material(node: &bdt::Node) -> Material {
-    let mut mat = Material::default();
-
     // Name from attribute (legacy format; absent for Hogan)
-    if let Some(attr) = node.get_attribute("Name") {
-        mat.name = attr.value.to_string_value();
-    }
+    let name = node
+        .get_attribute("Name")
+        .map(|a| a.value.to_string_value())
+        .unwrap_or_default();
 
     // Ver from attribute (4 = HW1, 5 = HW2 legacy; absent for Hogan)
-    if let Some(attr) = node.get_attribute("Ver") {
-        mat.material_version = variant_to_u32(&attr.value);
-    }
+    let material_version = node
+        .get_attribute("Ver")
+        .map(|a| variant_to_u32(&a.value))
+        .unwrap_or(4);
 
     // Check for HW2 Hogan material format
-    if let Some(hogan_node) = node.children.iter().find(|c| c.name == "HoganMaterial") {
-        mat.hogan = Some(read_hogan_material(hogan_node));
-        return mat;
-    }
+    let data = if let Some(hogan_node) = node.children.iter().find(|c| c.name == "HoganMaterial") {
+        MaterialData::Hogan(read_hogan_material(hogan_node))
+    } else {
+        MaterialData::Legacy(alloc::boxed::Box::new(read_legacy_material(node)))
+    };
 
-    // Legacy format: read NameValues + Maps
-    read_legacy_material(node, &mut mat);
-    mat
+    Material {
+        name,
+        material_version,
+        data,
+    }
 }
 
 /// Parse the legacy material format (NameValues + Maps children).
-fn read_legacy_material(node: &bdt::Node, mat: &mut Material) {
+fn read_legacy_material(node: &bdt::Node) -> LegacyMaterialData {
+    let mut legacy = LegacyMaterialData::default();
+
     if let Some(nv_node) = node.children.iter().find(|c| c.name == "NameValues") {
         for prop in &nv_node.children {
             match prop.name.as_str() {
-                "SpecPower" => mat.spec_power = variant_to_f32(&prop.text),
-                "SpecColorR" => mat.spec_color[0] = variant_to_f32(&prop.text),
-                "SpecColorG" => mat.spec_color[1] = variant_to_f32(&prop.text),
-                "SpecColorB" => mat.spec_color[2] = variant_to_f32(&prop.text),
-                "EnvReflectivity" => mat.env_reflectivity = variant_to_f32(&prop.text),
-                "EnvSharpness" => mat.env_sharpness = variant_to_f32(&prop.text),
-                "EnvFresnel" => mat.env_fresnel = variant_to_f32(&prop.text),
-                "EnvFresnelPower" => mat.env_fresnel_power = variant_to_f32(&prop.text),
-                "AccessoryIndex" => mat.accessory_index = variant_to_u32(&prop.text),
-                "Flags" => mat.flags = variant_to_u32(&prop.text),
-                "BlendType" => mat.blend_type = variant_to_u8(&prop.text),
+                "SpecPower" => legacy.spec_power = variant_to_f32(&prop.text),
+                "SpecColorR" => legacy.spec_color[0] = variant_to_f32(&prop.text),
+                "SpecColorG" => legacy.spec_color[1] = variant_to_f32(&prop.text),
+                "SpecColorB" => legacy.spec_color[2] = variant_to_f32(&prop.text),
+                "EnvReflectivity" => legacy.env_reflectivity = variant_to_f32(&prop.text),
+                "EnvSharpness" => legacy.env_sharpness = variant_to_f32(&prop.text),
+                "EnvFresnel" => legacy.env_fresnel = variant_to_f32(&prop.text),
+                "EnvFresnelPower" => legacy.env_fresnel_power = variant_to_f32(&prop.text),
+                "AccessoryIndex" => legacy.accessory_index = variant_to_u32(&prop.text),
+                "Flags" => legacy.flags = variant_to_u32(&prop.text),
+                "BlendType" => legacy.blend_type = variant_to_u8(&prop.text),
                 "Opacity" => {
                     let raw = variant_to_u32(&prop.text);
-                    mat.opacity = raw as f32 / 255.0;
+                    legacy.opacity = raw as f32 / 255.0;
                 }
                 _ => {}
             }
@@ -90,7 +97,7 @@ fn read_legacy_material(node: &bdt::Node, mat: &mut Material) {
                 .find(|c| c.name == map_type.name())
             {
                 if let Some(uvw_attr) = type_node.get_attribute("UVWVel") {
-                    mat.uvw_velocity[map_type as usize][0] = variant_to_f32(&uvw_attr.value);
+                    legacy.uvw_velocity[map_type as usize][0] = variant_to_f32(&uvw_attr.value);
                 }
 
                 for map_child in &type_node.children {
@@ -105,12 +112,14 @@ fn read_legacy_material(node: &bdt::Node, mat: &mut Material) {
                         if let Some(a) = map_child.get_attribute("Flags") {
                             map.flags = variant_to_u8(&a.value);
                         }
-                        mat.maps[map_type as usize].push(map);
+                        legacy.maps[map_type as usize].push(map);
                     }
                 }
             }
         }
     }
+
+    legacy
 }
 
 /// Parse HW2 Hogan material data from a `<HoganMaterial>` BDT node.

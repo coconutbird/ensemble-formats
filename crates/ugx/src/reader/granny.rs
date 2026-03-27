@@ -12,8 +12,10 @@ use alloc::vec::Vec;
 use crate::bytes::{
     read_f32_le, read_i32_le, read_null_terminated_string, read_u32_le, read_u64_le,
 };
+use crate::constants::{
+    GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_INVERSE_WORLD_OFFSET, GRANNY_BONE_SIZE,
+};
 use crate::error::{Error, Result};
-use crate::raw::{GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_INVERSE_WORLD_OFFSET, GRANNY_BONE_SIZE};
 use crate::types::{
     GrannyBone, GrannyBoneBinding, GrannyLocalTransform, GrannyMemberType, GrannyMesh,
     GrannyTypeMember, GrannyVariant, Matrix4x4,
