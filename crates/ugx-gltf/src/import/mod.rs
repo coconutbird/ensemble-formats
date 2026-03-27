@@ -97,7 +97,7 @@ pub fn import_from_gltf(
 
     // Track mesh names, vertex ranges, and section ranges for granny_meshes generation
     // (name, start_vertex, end_vertex, start_section, end_section)
-    let mut mesh_infos: Vec<(String, usize, usize, usize, usize)> = Vec::new();
+    let mut mesh_infos: Vec<(String, usize, usize, usize, usize, Option<usize>)> = Vec::new();
 
     let has_skeleton = !bones.is_empty();
 
@@ -125,6 +125,10 @@ pub fn import_from_gltf(
             .as_ref()
             .and_then(|v| v.get("ugx_rigid_bone_index").and_then(|b| b.as_i64()))
             .map(|i| i as i32);
+        let extras_granny_mesh_index: Option<usize> = mesh_extras_json
+            .as_ref()
+            .and_then(|v| v.get("ugx_granny_mesh_index").and_then(|b| b.as_u64()))
+            .map(|i| i as usize);
 
         for primitive in &mesh.primitives {
             let (vertices, indices, material_index) =
@@ -152,7 +156,7 @@ pub fn import_from_gltf(
 
             // Build pack order and vertex types based on target version.
             //
-            // HW1/DE (v4) — PNA0ST0 byte order, Float3 types:
+            // HW1 (v4) — PNA0ST0 byte order, Float3 types:
             //   Position(Float3) → Normal(Float3) → Tangent(Float3) → Skin → UV(Float2) → Color
             //
             // HW2 (v6) — PT0NA0S byte order, compact types:
@@ -280,6 +284,7 @@ pub fn import_from_gltf(
                 mesh_end_vertex,
                 mesh_start_section,
                 mesh_end_section,
+                extras_granny_mesh_index,
             ));
         }
     }
@@ -360,60 +365,97 @@ pub fn import_from_gltf(
 
 /// Generate `GrannyMesh` entries from vertex skin data and section info.
 ///
-/// For glTF imports, we analyze which bones each vertex uses (via bone_weights > 0)
-/// and create one mesh per glTF mesh, preserving the original mesh names.
-/// For global_bones sections (zero weights), we use the rigid_bone_index instead.
-/// This allows the game to properly skin the vertices.
+/// When `ugx_granny_mesh_index` is present in the glTF extras (our exporter),
+/// sections (glTF meshes) are grouped by that index into shared `GrannyMesh`
+/// containers. This preserves the original mesh identity for multi-section
+/// rigid models where all sections share the same bone set.
+///
+/// For third-party glTFs (no extras), each glTF mesh becomes its own `GrannyMesh`.
+/// (name, start_vertex, end_vertex, start_section, end_section, granny_mesh_index)
+type MeshInfo = (String, usize, usize, usize, usize, Option<usize>);
+
 fn generate_granny_meshes_from_vertices(
     vertices: &[UnpackedVertex],
     granny_bones: &[GrannyBone],
-    mesh_infos: &[(String, usize, usize, usize, usize)], // (name, start_vertex, end_vertex, start_section, end_section)
+    mesh_infos: &[MeshInfo],
     sections: &[Section],
 ) -> Vec<GrannyMesh> {
+    // Group mesh_infos by granny_mesh_index. If any entry has an explicit index,
+    // use that to merge multiple glTF meshes into one GrannyMesh. Otherwise each
+    // entry stays separate.
+    let has_explicit_indices = mesh_infos.iter().any(|m| m.5.is_some());
+
+    // Build groups: Vec<(name, Vec<(start_vert, end_vert, start_sec, end_sec)>)>
+    // ordered by granny_mesh_index.
+    struct MeshGroup {
+        name: String,
+        ranges: Vec<(usize, usize, usize, usize)>, // (start_vert, end_vert, start_sec, end_sec)
+    }
+
+    let groups: Vec<MeshGroup> = if has_explicit_indices {
+        // Collect by index, preserving order
+        let mut map: std::collections::BTreeMap<usize, MeshGroup> =
+            std::collections::BTreeMap::new();
+        for (name, sv, ev, ss, es, idx_opt) in mesh_infos {
+            let idx = idx_opt.unwrap_or(map.len() + 10000); // fallback: unique high idx
+            let group = map.entry(idx).or_insert_with(|| MeshGroup {
+                name: name.clone(),
+                ranges: Vec::new(),
+            });
+
+            group.ranges.push((*sv, *ev, *ss, *es));
+        }
+
+        map.into_values().collect()
+    } else {
+        // No explicit indices — one group per mesh_info (original behavior)
+        mesh_infos
+            .iter()
+            .map(|(name, sv, ev, ss, es, _)| MeshGroup {
+                name: name.clone(),
+                ranges: vec![(*sv, *ev, *ss, *es)],
+            })
+            .collect()
+    };
+
     let mut granny_meshes = Vec::new();
 
-    for (mesh_name, start_vertex, end_vertex, start_section, end_section) in mesh_infos {
-        // Collect all unique bone indices used by this mesh's vertices
+    for group in &groups {
         let mut used_bones: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
+        let mut rigid_bone_indices: std::collections::BTreeSet<u16> =
+            std::collections::BTreeSet::new();
 
-        for v in &vertices[*start_vertex..*end_vertex] {
-            for k in 0..4 {
-                // bone_indices are 1-based, bone_weights[k] > 0 means the bone is used
-                if v.bone_weights[k] > 0.0 && v.bone_indices[k] > 0 {
-                    used_bones.insert(v.bone_indices[k]);
+        for &(sv, ev, ss, es) in &group.ranges {
+            for v in &vertices[sv..ev] {
+                for k in 0..4 {
+                    if v.bone_weights[k] > 0.0 && v.bone_indices[k] > 0 {
+                        used_bones.insert(v.bone_indices[k]);
+                    }
+                }
+            }
+            for section in &sections[ss..es] {
+                if section.global_bones && section.rigid_bone_index >= 0 {
+                    let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
+                    used_bones.insert(bone_idx_1based);
+                }
+                if (section.global_bones || section.rigid_only) && section.rigid_bone_index >= 0 {
+                    let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
+                    rigid_bone_indices.insert(bone_idx_1based);
                 }
             }
         }
 
-        // For global_bones sections, vertices have zero weights but use rigid_bone_index
-        // We need to include that bone in the mesh bindings
-        for section in &sections[*start_section..*end_section] {
-            if section.global_bones && section.rigid_bone_index >= 0 {
-                // rigid_bone_index is 0-based, convert to 1-based for the set
-                let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
-                used_bones.insert(bone_idx_1based);
-            }
-        }
-
         if used_bones.is_empty() {
-            // No bones used in this mesh - skip it (fully rigid mesh with no bone reference)
             continue;
         }
 
-        // Collect rigid bone indices that implicitly own all their section's vertices
-        let mut rigid_bone_indices: std::collections::BTreeSet<u16> =
-            std::collections::BTreeSet::new();
-        for section in &sections[*start_section..*end_section] {
-            if (section.global_bones || section.rigid_only) && section.rigid_bone_index >= 0 {
-                let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
-                rigid_bone_indices.insert(bone_idx_1based);
-            }
-        }
+        // Gather all vertices across all ranges in this group for OBB calculation
+        let all_group_verts: Vec<&UnpackedVertex> = group
+            .ranges
+            .iter()
+            .flat_map(|&(sv, ev, _, _)| &vertices[sv..ev])
+            .collect();
 
-        // Convert bone indices to bone names and calculate OBBs from vertex data.
-        // bone_indices are 1-based, so subtract 1 to get the granny_bones index.
-        // OBB = bounding box of all vertices weighted to this bone, in bone-local space.
-        let mesh_verts = &vertices[*start_vertex..*end_vertex];
         let bone_bindings: Vec<GrannyBoneBinding> = used_bones
             .iter()
             .filter_map(|&idx| {
@@ -421,7 +463,7 @@ fn generate_granny_meshes_from_vertices(
                 granny_bones.get(idx_0based).map(|b| {
                     let owns_all = rigid_bone_indices.contains(&idx);
                     let (obb_min, obb_max) =
-                        compute_bone_obb(mesh_verts, idx, &b.inverse_world_matrix, owns_all);
+                        compute_bone_obb(&all_group_verts, idx, &b.inverse_world_matrix, owns_all);
                     GrannyBoneBinding {
                         bone_name: b.name.clone(),
                         obb_min,
@@ -434,7 +476,7 @@ fn generate_granny_meshes_from_vertices(
 
         if !bone_bindings.is_empty() {
             granny_meshes.push(GrannyMesh {
-                name: mesh_name.clone(),
+                name: group.name.clone(),
                 bone_bindings,
             });
         }
@@ -454,7 +496,7 @@ fn generate_granny_meshes_from_vertices(
 ///
 /// If no vertices reference this bone, returns zeroed min/max.
 fn compute_bone_obb(
-    vertices: &[UnpackedVertex],
+    vertices: &[&UnpackedVertex],
     bone_idx_1based: u16,
     inverse_world_matrix: &ugx::Matrix4x4,
     owns_all: bool,
@@ -466,7 +508,6 @@ fn compute_bone_obb(
     let m = &inverse_world_matrix.rows;
 
     for v in vertices {
-        // Check if this vertex is weighted to this bone
         let weighted = if owns_all {
             true
         } else {
@@ -476,8 +517,6 @@ fn compute_bone_obb(
             continue;
         }
 
-        // Transform position into bone-local space using row-vector convention:
-        // p' = p * M  (DirectX/Granny row-major, translation in row 3)
         let px = v.position[0];
         let py = v.position[1];
         let pz = v.position[2];

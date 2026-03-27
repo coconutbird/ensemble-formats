@@ -11,6 +11,10 @@ use ugx::{Bone, GrannyBone, UgxGeom};
 
 /// Build a mapping from section index to mesh index.
 /// Analyzes which bones each section uses and matches against granny_mesh bone_bindings.
+///
+/// When multiple granny_meshes have identical bone sets (common for multi-section
+/// rigid models all bound to `GrannyRootBone`), sections are distributed among
+/// the matching meshes in order rather than all mapping to the first match.
 pub(crate) fn build_section_to_mesh_mapping(
     geom: &UgxGeom,
     granny_bones: &[GrannyBone],
@@ -32,6 +36,10 @@ pub(crate) fn build_section_to_mesh_mapping(
         })
         .collect();
 
+    // Track how many sections have been assigned to each mesh.
+    // Used to distribute sections among meshes with identical bone sets.
+    let mut mesh_usage_count: Vec<usize> = vec![0; geom.granny_meshes.len()];
+
     // For each section, find which mesh it belongs to by matching bone usage
     let mut section_to_mesh = Vec::with_capacity(geom.sections.len());
 
@@ -39,8 +47,12 @@ pub(crate) fn build_section_to_mesh_mapping(
         // Get bones used by this section's vertices
         let section_bones = get_section_bone_names(geom, section_idx, granny_bones);
 
-        // Find the mesh whose bone_bindings best matches this section's bones
-        let mesh_idx = find_best_matching_mesh(&section_bones, &mesh_bone_sets);
+        // Find the mesh whose bone_bindings best matches this section's bones,
+        // preferring meshes that haven't been used yet (for identical bone sets).
+        let mesh_idx = find_best_matching_mesh(&section_bones, &mesh_bone_sets, &mesh_usage_count);
+        if mesh_idx < mesh_usage_count.len() {
+            mesh_usage_count[mesh_idx] += 1;
+        }
         section_to_mesh.push(mesh_idx);
     }
 
@@ -70,12 +82,13 @@ fn get_section_bone_names(
         }
     }
 
-    // If no bones found from vertices (e.g., global_bones section), use rigid_bone_index
+    // If no bones found from vertices (e.g., global_bones section), use rigid_bone_index.
+    // rigid_bone_index is 0-based; a negative value means "none".
     if used_bones.is_empty() && section_idx < geom.sections.len() {
         let section = &geom.sections[section_idx];
-        let rigid_idx = section.rigid_bone_index as usize;
-        if rigid_idx > 0 && rigid_idx <= granny_bones.len() {
-            used_bones.insert(granny_bones[rigid_idx - 1].name.clone());
+        let rigid_idx = section.rigid_bone_index;
+        if rigid_idx >= 0 && (rigid_idx as usize) < granny_bones.len() {
+            used_bones.insert(granny_bones[rigid_idx as usize].name.clone());
         }
     }
 
@@ -84,21 +97,25 @@ fn get_section_bone_names(
 
 /// Find the mesh index whose bone_bindings best matches the section's bones.
 /// Prefers:
-/// 1. Exact match (section bones == mesh bones)
-/// 2. Smallest superset (mesh contains all section bones with fewest extras)
-/// 3. Highest overlap if no complete containment
+/// 1. Unused meshes over already-used ones (when bone sets are identical)
+/// 2. Exact match (section bones == mesh bones)
+/// 3. Smallest superset (mesh contains all section bones with fewest extras)
+/// 4. Highest overlap if no complete containment
 ///
 /// Returns the mesh index, or mesh count to create a new mesh if none match.
 fn find_best_matching_mesh(
     section_bones: &std::collections::HashSet<String>,
     mesh_bone_sets: &[std::collections::HashSet<&str>],
+    mesh_usage_count: &[usize],
 ) -> usize {
     if section_bones.is_empty() || mesh_bone_sets.is_empty() {
         return mesh_bone_sets.len(); // Fallback: create new mesh
     }
 
     let mut best_mesh = mesh_bone_sets.len();
-    let mut best_score = (false, usize::MAX, 0usize); // (is_superset, mesh_size, overlap)
+    // (is_superset, already_used, mesh_size, overlap)
+    // Lower `already_used` is better (prefer unused meshes first).
+    let mut best_score: (bool, usize, usize, usize) = (false, usize::MAX, usize::MAX, 0);
 
     for (mesh_idx, mesh_bones) in mesh_bone_sets.iter().enumerate() {
         // Count how many section bones are in this mesh's bone_bindings
@@ -110,29 +127,34 @@ fn find_best_matching_mesh(
         // Check if mesh contains ALL section bones (is a superset)
         let is_superset = overlap == section_bones.len();
         let mesh_size = mesh_bones.len();
+        let usage = mesh_usage_count.get(mesh_idx).copied().unwrap_or(0);
 
-        // Score: prefer superset, then smallest mesh, then highest overlap
-        let score = (is_superset, mesh_size, overlap);
-
-        // Better if: is superset when best isn't, OR both superset and smaller, OR more overlap
+        // Better if: superset beats non-superset, then prefer unused, then smaller, then more overlap
         let is_better = if is_superset && !best_score.0 {
-            true // Superset beats non-superset
+            true
         } else if is_superset && best_score.0 {
-            mesh_size < best_score.1 // Among supersets, prefer smaller
+            // Among supersets: prefer unused, then smaller
+            if usage < best_score.1 {
+                true
+            } else if usage == best_score.1 {
+                mesh_size < best_score.2
+            } else {
+                false
+            }
         } else if !is_superset && !best_score.0 {
-            overlap > best_score.2 // Among non-supersets, prefer more overlap
+            overlap > best_score.3
         } else {
-            false // Non-superset doesn't beat superset
+            false
         };
 
         if is_better {
-            best_score = score;
+            best_score = (is_superset, usage, mesh_size, overlap);
             best_mesh = mesh_idx;
         }
     }
 
     // If no overlap found at all, return mesh count to create a new mesh
-    if best_score.2 == 0 {
+    if best_score.3 == 0 {
         mesh_bone_sets.len()
     } else {
         best_mesh

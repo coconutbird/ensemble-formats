@@ -360,6 +360,13 @@ pub fn export_to_gltf_with_buffer_name(
                 "ugx_rigid_bone_index".into(),
                 serde_json::Value::Number(section.rigid_bone_index.into()),
             );
+            // Store the granny_mesh index so the import path can reconstruct
+            // the correct section-to-mesh grouping (critical when multiple meshes
+            // share the same bone set, e.g., multi-section rigid models).
+            map.insert(
+                "ugx_granny_mesh_index".into(),
+                serde_json::Value::Number((mesh_idx as u64).into()),
+            );
             let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
             Some(serde_json::value::RawValue::from_string(raw).unwrap())
         };
