@@ -86,6 +86,51 @@ pub(crate) struct ShaderPermJson {
     pub hash: u32,
 }
 
+/// Mesh-level extras stored in glTF mesh `extras`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct MeshExtrasJson {
+    /// Triangle indices per bone name (from Granny bone bindings).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ugx_triangle_indices: Option<std::collections::BTreeMap<String, Vec<i32>>>,
+
+    // The following fields are read by import but NOT written by the current
+    // exporter (the import side infers them from vertex bone weights).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ugx_global_bones: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ugx_rigid_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ugx_rigid_bone_index: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ugx_granny_mesh_index: Option<usize>,
+}
+
+impl MeshExtrasJson {
+    /// Returns `true` when no extras data is present.
+    pub fn is_empty(&self) -> bool {
+        self.ugx_triangle_indices.is_none()
+            && self.ugx_global_bones.is_none()
+            && self.ugx_rigid_only.is_none()
+            && self.ugx_rigid_bone_index.is_none()
+            && self.ugx_granny_mesh_index.is_none()
+    }
+}
+
+/// Scene-level extras stored in glTF scene `extras`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SceneExtrasJson {
+    pub ugx_max_instances: i16,
+}
+
+/// Serialize a value to a `Box<RawValue>` suitable for glTF `extras`.
+///
+/// Returns `None` only if serialization fails (which shouldn't happen for
+/// well-formed types).
+pub(crate) fn to_raw_value<T: Serialize>(val: &T) -> Option<Box<serde_json::value::RawValue>> {
+    let json_str = serde_json::to_string(val).ok()?;
+    serde_json::value::RawValue::from_string(json_str).ok()
+}
+
 fn default_mat_version() -> u32 {
     4
 }

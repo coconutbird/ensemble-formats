@@ -171,18 +171,25 @@ fn write_array_header_placeholders(cursor: &mut MutCursor<'_>) -> Result<ArrayHe
         _padding: [0; 4],
         offset: [0; 8],
     };
+
     let sections = cursor.stream_position()? as usize;
     cursor.write_all(empty.as_bytes())?;
+
     let bones = cursor.stream_position()? as usize;
     cursor.write_all(empty.as_bytes())?;
+
     let accessories = cursor.stream_position()? as usize;
     cursor.write_all(empty.as_bytes())?;
+
     let valid_accessories = cursor.stream_position()? as usize;
     cursor.write_all(empty.as_bytes())?;
+
     let bounds_low = cursor.stream_position()? as usize;
     cursor.write_all(empty.as_bytes())?;
+
     let bounds_high = cursor.stream_position()? as usize;
     cursor.write_all(empty.as_bytes())?;
+
     Ok(ArrayHeaderPositions {
         sections,
         bones,

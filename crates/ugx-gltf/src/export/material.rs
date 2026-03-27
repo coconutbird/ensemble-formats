@@ -83,8 +83,7 @@ pub(super) fn build_material_extras(mat: &Material) -> json::Extras {
         }
     }
 
-    let json_str = serde_json::to_string(&ext).unwrap();
-    Some(serde_json::value::RawValue::from_string(json_str).unwrap())
+    crate::extras::to_raw_value(&ext)
 }
 
 /// Result of building glTF materials from UGX material data.

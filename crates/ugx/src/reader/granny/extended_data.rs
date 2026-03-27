@@ -1,30 +1,23 @@
-//! Granny chunk (0x703) parser.
+//! Granny2 type definition and variant data parsing.
 //!
-//! Parses granny bones (inverse world matrices), granny meshes
-//! (bone bindings per mesh), and bone ExtendedData (Granny2 variant system)
-//! from the Granny2-compatible serialized chunk.
+//! Parses `GrannyDataTypeDefinition[]` arrays (the Granny2 schema/type system)
+//! and their associated variant data blobs from a serialized Granny2 chunk.
 
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::constants::{
-    GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_EXTENDED_DATA_OFFSET, GRANNY_BONE_INVERSE_WORLD_OFFSET,
-    GRANNY_BONE_SIZE, GRANNY_TYPE_DEF_STRIDE,
-};
-use crate::error::{Error, Result};
-use crate::types::{
-    GrannyBone, GrannyBoneBinding, GrannyLocalTransform, GrannyMemberType, GrannyMesh,
-    GrannyTypeMember, GrannyVariant, Matrix4x4,
-};
+use crate::constants::GRANNY_TYPE_DEF_STRIDE;
+use crate::error::Result;
+use crate::types::{GrannyMemberType, GrannyTypeMember, GrannyVariant};
 use nostdio::{ReadLe, SliceCursor, read_null_terminated_string};
 
 /// Parse a `GrannyDataTypeDefinition[]` array starting at `offset` in `data`.
 ///
 /// Each entry is 44 bytes. The array is terminated by an entry with `MemberType == 0` (End).
 /// Nested reference types are parsed recursively.
-fn parse_type_def_array(data: &[u8], offset: usize) -> Result<Vec<GrannyTypeMember>> {
+pub(super) fn parse_type_def_array(data: &[u8], offset: usize) -> Result<Vec<GrannyTypeMember>> {
     let mut members = Vec::new();
     let mut pos = offset;
 
@@ -118,7 +111,7 @@ fn compute_type_size(members: &[GrannyTypeMember]) -> usize {
 /// Parse variant data described by `members` from `data` starting at `offset`.
 ///
 /// Returns a `GrannyVariant::Struct` containing all parsed fields.
-fn parse_variant_data(
+pub(super) fn parse_variant_data(
     data: &[u8],
     offset: usize,
     members: &[GrannyTypeMember],
@@ -153,6 +146,7 @@ fn parse_variant_data(
                 cur = end;
                 GrannyVariant::Int8(vals)
             }
+
             GrannyMemberType::UInt8 | GrannyMemberType::NormalUInt8 => {
                 let end = cur + width;
                 let vals: Vec<u8> = if end <= data.len() {
@@ -314,324 +308,4 @@ fn parse_variant_data(
     }
 
     Ok(GrannyVariant::Struct(fields))
-}
-
-/// Validate the Granny chunk (0x703) by reading `FromFileName` at +0x10.
-///
-/// The engine (`BGrannyModel::load`) rejects the chunk unless this string is `"gr2ugx"`.
-/// Returns `Err(InvalidGrannyChunk)` if the chunk is present but invalid.
-pub(super) fn validate_granny_chunk(data: &[u8]) -> Result<()> {
-    if data.len() < 0x18 {
-        return Err(Error::InvalidGrannyChunk {
-            actual: String::from("<chunk too small>"),
-        });
-    }
-    let mut sc = SliceCursor::new(&data[0x10..]);
-    let ptr = sc.read_u64_le()? as usize;
-    if ptr == 0 || ptr >= data.len() {
-        return Err(Error::InvalidGrannyChunk {
-            actual: String::from("<null or OOB pointer>"),
-        });
-    }
-    let name = read_null_terminated_string(&data[ptr..]);
-    if !name.eq_ignore_ascii_case("gr2ugx") {
-        return Err(Error::InvalidGrannyChunk { actual: name });
-    }
-    Ok(())
-}
-
-/// Parse granny bones from granny chunk (0x703).
-///
-/// Granny file_info layout (verified from IDA and real file dump):
-///   +0x30: u32 SkeletonCount
-///   +0x34: u64 Skeletons -> skeleton pointer array
-///
-/// Skeleton struct layout:
-///   +0x00: u64 Name
-///   +0x08: u32 BoneCount
-///   +0x0C: u64 Bones -> bone array
-///
-/// Bone struct (164 bytes each):
-///   +0x00: u64 nameOffs
-///   +0x08: i32 parent
-///   +0x0C: transform LocalTransform (68 bytes)
-///   +0x50: matrix_4x4 InverseWorld4x4 (64 bytes)
-///   +0x90: f32 LODError
-///   +0x94: variant ExtendedData (16 bytes)
-pub(super) fn parse_granny_bones(granny: &[u8]) -> Result<(Vec<GrannyBone>, u32)> {
-    if granny.len() < 0x40 {
-        return Err(Error::UnsupportedFormat(format!(
-            "Granny chunk too small for skeleton header ({} < 0x40)",
-            granny.len()
-        )));
-    }
-
-    let mut sc = SliceCursor::new(&granny[0x30..]);
-    let skeleton_count = sc.read_u32_le()? as usize;
-    if skeleton_count == 0 {
-        return Ok((Vec::new(), 0));
-    }
-
-    let skeleton_ptr_array_offs = sc.read_u64_le()? as usize;
-    if skeleton_ptr_array_offs + 8 > granny.len() {
-        return Err(Error::UnsupportedFormat(format!(
-            "Granny skeleton pointer array out of bounds (0x{:X} + 8 > 0x{:X})",
-            skeleton_ptr_array_offs,
-            granny.len()
-        )));
-    }
-
-    let mut sc = SliceCursor::new(&granny[skeleton_ptr_array_offs..]);
-    let skeleton_offs = sc.read_u64_le()? as usize;
-    if skeleton_offs + 0x28 > granny.len() {
-        return Err(Error::UnsupportedFormat(format!(
-            "Granny skeleton data out of bounds (0x{:X} + 0x28 > 0x{:X})",
-            skeleton_offs,
-            granny.len()
-        )));
-    }
-
-    let mut sc = SliceCursor::new(&granny[skeleton_offs + 0x08..]);
-    let bones_len = sc.read_u32_le()? as usize;
-    let bones_offs = sc.read_u64_le()? as usize;
-    let skeleton_lod_type = sc.read_u32_le()?;
-
-    if bones_len == 0 {
-        return Ok((Vec::new(), skeleton_lod_type));
-    }
-
-    let mut bones = Vec::with_capacity(bones_len);
-
-    for i in 0..bones_len {
-        let bone_start = bones_offs + (i * GRANNY_BONE_SIZE);
-        if bone_start + GRANNY_BONE_SIZE > granny.len() {
-            break;
-        }
-
-        let mut sc = SliceCursor::new(&granny[bone_start..]);
-        let name_offs = sc.read_u64_le()? as usize;
-        let parent_index = sc.read_i32_le()?;
-
-        let name = if name_offs < granny.len() {
-            read_null_terminated_string(&granny[name_offs..])
-        } else {
-            String::new()
-        };
-
-        // Parse local transform at bone+0x0C (68 bytes: flags + pos + quat + scale_shear)
-        let mut sc = SliceCursor::new(&granny[bone_start + 0x0C..]);
-        let lt_flags = sc.read_u32_le()?;
-        let mut lt_position = [0.0f32; 3];
-        for v in &mut lt_position {
-            *v = sc.read_f32_le()?;
-        }
-        let mut lt_orientation = [0.0f32; 4];
-        for v in &mut lt_orientation {
-            *v = sc.read_f32_le()?;
-        }
-        let mut lt_scale_shear = [[0.0f32; 3]; 3];
-        for row in &mut lt_scale_shear {
-            for v in row {
-                *v = sc.read_f32_le()?;
-            }
-        }
-        let local_transform = Some(GrannyLocalTransform {
-            flags: lt_flags,
-            position: lt_position,
-            orientation: lt_orientation,
-            scale_shear: lt_scale_shear,
-        });
-
-        // Parse inverse world matrix at bone+0x50 (64 bytes)
-        let iw_start = bone_start + GRANNY_BONE_INVERSE_WORLD_OFFSET;
-        if iw_start + 64 > granny.len() {
-            break;
-        }
-
-        let mut iw_pos = iw_start;
-        let inverse_world_matrix = Matrix4x4::read(granny, &mut iw_pos)?;
-
-        // Parse LOD error at bone+0x90 (4 bytes)
-        let mut sc = SliceCursor::new(&granny[bone_start + 0x90..]);
-        let lod_error = sc.read_f32_le()?;
-
-        // Parse ExtendedData at bone+0x94: {type_def_ptr (u64), data_ptr (u64)}
-        let ext_offset = bone_start + GRANNY_BONE_EXTENDED_DATA_OFFSET;
-        let (extended_data, extended_data_type) = if ext_offset + 16 <= granny.len() {
-            let mut sc = SliceCursor::new(&granny[ext_offset..]);
-            let type_ptr = sc.read_u64_le()? as usize;
-            let data_ptr = sc.read_u64_le()? as usize;
-
-            if type_ptr > 0 && type_ptr < granny.len() && data_ptr > 0 && data_ptr < granny.len() {
-                let type_members = parse_type_def_array(granny, type_ptr)?;
-                let variant = parse_variant_data(granny, data_ptr, &type_members)?;
-                (Some(variant), Some(type_members))
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
-
-        bones.push(GrannyBone {
-            name,
-            parent_index,
-            local_transform,
-            inverse_world_matrix,
-            lod_error,
-            extended_data,
-            extended_data_type,
-        });
-    }
-
-    Ok((bones, skeleton_lod_type))
-}
-
-/// Parse Granny mesh data from the Granny chunk (0x703).
-///
-/// file_info:
-///   +0x60: i32 ModelCount (must be 1)
-///   +0x64: u64 Models ptr (to array of model pointers)
-///
-/// Model:
-///   +0x54: i32 MeshBindingCount
-///   +0x58: u64 MeshBindings ptr (to array of mesh pointers)
-///
-/// Mesh (76 bytes = 0x4C):
-///   +0x00: u64 Name ptr
-///   +0x30: i32 BoneBindingCount
-///   +0x34: u64 BoneBindings ptr
-///
-/// bone_binding (44 bytes = 0x2C):
-///   +0x00: u64 BoneName ptr
-pub(super) fn parse_granny_meshes(granny: &[u8]) -> Result<Vec<GrannyMesh>> {
-    if granny.len() < 0x70 {
-        return Err(Error::UnsupportedFormat(format!(
-            "Granny chunk too small for model header ({} < 0x70)",
-            granny.len()
-        )));
-    }
-
-    let mut sc = SliceCursor::new(&granny[0x60..]);
-    let model_count = sc.read_u32_le()? as usize;
-    if model_count == 0 {
-        return Ok(Vec::new());
-    }
-
-    let models_ptr_offs = sc.read_u64_le()? as usize;
-    if models_ptr_offs + 8 > granny.len() {
-        return Err(Error::UnsupportedFormat(format!(
-            "Granny model pointer array out of bounds (0x{:X} + 8 > 0x{:X})",
-            models_ptr_offs,
-            granny.len()
-        )));
-    }
-
-    let mut sc = SliceCursor::new(&granny[models_ptr_offs..]);
-    let model_offs = sc.read_u64_le()? as usize;
-    if model_offs + 0x60 > granny.len() {
-        return Err(Error::UnsupportedFormat(format!(
-            "Granny model data out of bounds (0x{:X} + 0x60 > 0x{:X})",
-            model_offs,
-            granny.len()
-        )));
-    }
-
-    let mut sc = SliceCursor::new(&granny[model_offs + 0x54..]);
-    let mesh_binding_count = sc.read_u32_le()? as usize;
-    let mesh_bindings_ptr = sc.read_u64_le()? as usize;
-
-    if mesh_binding_count == 0 {
-        return Ok(Vec::new());
-    }
-
-    let mut meshes = Vec::with_capacity(mesh_binding_count);
-
-    for i in 0..mesh_binding_count {
-        let bp = mesh_bindings_ptr + i * 8;
-        if bp + 8 > granny.len() {
-            break;
-        }
-
-        let mut bsc = SliceCursor::new(&granny[bp..]);
-        let mesh_offs = bsc.read_u64_le()? as usize;
-        if mesh_offs + 0x3C > granny.len() {
-            continue;
-        }
-
-        let mut nsc = SliceCursor::new(&granny[mesh_offs..]);
-        let name_ptr = nsc.read_u64_le()? as usize;
-        let name = if name_ptr < granny.len() {
-            read_null_terminated_string(&granny[name_ptr..])
-        } else {
-            format!("mesh_{}", i)
-        };
-
-        let mut bbsc = SliceCursor::new(&granny[mesh_offs + 0x30..]);
-        let bone_binding_count = bbsc.read_u32_le()? as usize;
-        let bone_bindings_ptr = bbsc.read_u64_le()? as usize;
-
-        let mut bone_bindings = Vec::with_capacity(bone_binding_count);
-
-        for j in 0..bone_binding_count {
-            let bb_start = bone_bindings_ptr + j * GRANNY_BONE_BINDING_SIZE;
-            if bb_start + GRANNY_BONE_BINDING_SIZE > granny.len() {
-                break;
-            }
-
-            let mut bbsc = SliceCursor::new(&granny[bb_start..]);
-            let bone_name_ptr = bbsc.read_u64_le()? as usize;
-            let bone_name = if bone_name_ptr < granny.len() {
-                read_null_terminated_string(&granny[bone_name_ptr..])
-            } else {
-                String::new()
-            };
-
-            // OBBMin[3] at +0x08
-            let obb_min = [
-                bbsc.read_f32_le()?,
-                bbsc.read_f32_le()?,
-                bbsc.read_f32_le()?,
-            ];
-
-            // OBBMax[3] at +0x14
-            let obb_max = [
-                bbsc.read_f32_le()?,
-                bbsc.read_f32_le()?,
-                bbsc.read_f32_le()?,
-            ];
-
-            // TriangleIndices RTA at +0x20: count(i32) + ptr(u64)
-            let tri_count = bbsc.read_i32_le()? as usize;
-            let tri_ptr = bbsc.read_u64_le()? as usize;
-
-            let triangle_indices =
-                if tri_count > 0 && tri_ptr > 0 && tri_ptr + tri_count * 4 <= granny.len() {
-                    let mut indices = Vec::with_capacity(tri_count);
-                    let mut tsc = SliceCursor::new(&granny[tri_ptr..]);
-                    for _ in 0..tri_count {
-                        indices.push(tsc.read_i32_le()?);
-                    }
-                    indices
-                } else {
-                    Vec::new()
-                };
-
-            if !bone_name.is_empty() {
-                bone_bindings.push(GrannyBoneBinding {
-                    bone_name,
-                    obb_min,
-                    obb_max,
-                    triangle_indices,
-                });
-            }
-        }
-
-        meshes.push(GrannyMesh {
-            name,
-            bone_bindings,
-        });
-    }
-
-    Ok(meshes)
 }

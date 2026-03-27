@@ -459,8 +459,7 @@ fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
         map.insert("granny_lod_error".into(), json_f32(bone.lod_error));
     }
 
-    let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
-    Some(serde_json::value::RawValue::from_string(raw).unwrap())
+    crate::extras::to_raw_value(&serde_json::Value::Object(map))
 }
 
 /// Convert an f32 to a JSON value, preserving exact float representation.

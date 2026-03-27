@@ -28,6 +28,8 @@ use skeleton::{
     build_section_to_mesh_mapping, create_skeleton_nodes, create_skeleton_nodes_from_granny,
 };
 
+use crate::extras::{MeshExtrasJson, SceneExtrasJson, to_raw_value};
+
 /// glTF export options.
 #[derive(Debug, Clone, Default)]
 pub struct GltfExportOptions {
@@ -142,7 +144,7 @@ pub fn export_to_gltf_with_buffer_name(
         // granny_mesh_index are NOT stored — the import side accurately infers
         // them from vertex bone weights via detect_global_bones().
         let mesh_extras = {
-            let mut map = serde_json::Map::new();
+            let mut ext = MeshExtrasJson::default();
 
             // Store triangle_indices from bone bindings (when non-empty).
             // These can't be recalculated from vertex data.
@@ -150,33 +152,19 @@ pub fn export_to_gltf_with_buffer_name(
                 let bindings = &geom.granny_meshes[mesh_idx].bone_bindings;
                 let has_any_tri = bindings.iter().any(|b| !b.triangle_indices.is_empty());
                 if has_any_tri {
-                    let tri_map: serde_json::Map<String, serde_json::Value> = bindings
+                    let tri_map: std::collections::BTreeMap<String, Vec<i32>> = bindings
                         .iter()
                         .filter(|b| !b.triangle_indices.is_empty())
-                        .map(|b| {
-                            (
-                                b.bone_name.clone(),
-                                serde_json::Value::Array(
-                                    b.triangle_indices
-                                        .iter()
-                                        .map(|&i| serde_json::Value::Number(i.into()))
-                                        .collect(),
-                                ),
-                            )
-                        })
+                        .map(|b| (b.bone_name.clone(), b.triangle_indices.clone()))
                         .collect();
-                    map.insert(
-                        "ugx_triangle_indices".into(),
-                        serde_json::Value::Object(tri_map),
-                    );
+                    ext.ugx_triangle_indices = Some(tri_map);
                 }
             }
 
-            if map.is_empty() {
+            if ext.is_empty() {
                 None
             } else {
-                let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
-                Some(serde_json::value::RawValue::from_string(raw).unwrap())
+                to_raw_value(&ext)
             }
         };
 
@@ -306,15 +294,9 @@ pub fn export_to_gltf_with_buffer_name(
         scene_node_indices = (0..nodes.len() as u32).map(json::Index::new).collect();
     }
 
-    let scene_extras = {
-        let mut map = serde_json::Map::new();
-        map.insert(
-            "ugx_max_instances".into(),
-            serde_json::Value::Number(geom.max_instances.into()),
-        );
-        let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
-        Some(serde_json::value::RawValue::from_string(raw).unwrap())
-    };
+    let scene_extras = to_raw_value(&SceneExtrasJson {
+        ugx_max_instances: geom.max_instances,
+    });
 
     let scene = json::Scene {
         extensions: None,

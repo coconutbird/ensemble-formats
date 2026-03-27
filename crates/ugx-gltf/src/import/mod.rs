@@ -16,6 +16,8 @@ mod skeleton;
 
 use ugx::{Error, Result, Section, UgxGeom, UgxVersion, UnpackedVertex};
 
+use crate::extras::{MeshExtrasJson, SceneExtrasJson};
+
 use accessor::resolve_buffer;
 use bounds::compute_bounds;
 use material::import_materials;
@@ -71,15 +73,12 @@ pub fn import_from_gltf(
     };
 
     // Read geom-level extras from the default scene (if present).
-    let scene_extras_json: Option<serde_json::Value> = root
+    let scene_extras: Option<SceneExtrasJson> = root
         .scenes
         .first()
         .and_then(|s| s.extras.as_ref())
         .and_then(|raw| serde_json::from_str(raw.get()).ok());
-    let extras_max_instances: Option<i16> = scene_extras_json
-        .as_ref()
-        .and_then(|v| v.get("ugx_max_instances").and_then(|n| n.as_i64()))
-        .map(|i| i as i16);
+    let extras_max_instances: Option<i16> = scene_extras.as_ref().map(|e| e.ugx_max_instances);
 
     // Import materials
     let materials = if options.include_materials {
@@ -110,24 +109,16 @@ pub fn import_from_gltf(
 
         // Read section flags from mesh extras if present (written by our exporter).
         // None means third-party glTF (Blender etc.) → fall back to heuristic.
-        let mesh_extras_json: Option<serde_json::Value> = mesh
+        let mesh_ext: Option<MeshExtrasJson> = mesh
             .extras
             .as_ref()
             .and_then(|raw| serde_json::from_str(raw.get()).ok());
-        let extras_global_bones: Option<bool> = mesh_extras_json
-            .as_ref()
-            .and_then(|v| v.get("ugx_global_bones").and_then(|b| b.as_bool()));
-        let extras_rigid_only: Option<bool> = mesh_extras_json
-            .as_ref()
-            .and_then(|v| v.get("ugx_rigid_only").and_then(|b| b.as_bool()));
-        let extras_rigid_bone_index: Option<i32> = mesh_extras_json
-            .as_ref()
-            .and_then(|v| v.get("ugx_rigid_bone_index").and_then(|b| b.as_i64()))
-            .map(|i| i as i32);
-        let extras_granny_mesh_index: Option<usize> = mesh_extras_json
-            .as_ref()
-            .and_then(|v| v.get("ugx_granny_mesh_index").and_then(|b| b.as_u64()))
-            .map(|i| i as usize);
+        let extras_global_bones: Option<bool> = mesh_ext.as_ref().and_then(|e| e.ugx_global_bones);
+        let extras_rigid_only: Option<bool> = mesh_ext.as_ref().and_then(|e| e.ugx_rigid_only);
+        let extras_rigid_bone_index: Option<i32> =
+            mesh_ext.as_ref().and_then(|e| e.ugx_rigid_bone_index);
+        let extras_granny_mesh_index: Option<usize> =
+            mesh_ext.as_ref().and_then(|e| e.ugx_granny_mesh_index);
 
         for primitive in &mesh.primitives {
             let (vertices, indices, material_index) =

@@ -55,7 +55,7 @@ impl UgxGeom {
 /// to match the original layout expected by the engine.
 fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
     let cached_data = cached_data::build_cached_data(geom, version)?;
-    let ib_data = build_index_buffer(geom);
+    let ib_data = build_index_buffer(geom)?;
 
     // ECF file ID 0xAAC93746 is required for UGX files - the game validates this in BGrannyModel::load
     let mut ecf = ecf::Writer::new(0xAAC93746);
@@ -114,12 +114,13 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
 /// (via `BUGXGeomData::loadIndexBuffer`) and never splits or replicates
 /// indices at runtime. The `rebuild_instanced_index_buffer()` method in
 /// `rebuild.rs` is responsible for producing this baked layout.
-fn build_index_buffer(geom: &UgxGeom) -> Vec<u8> {
+fn build_index_buffer(geom: &UgxGeom) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
     for &idx in &geom.index_buffer {
-        buf.write_u16_le(idx).unwrap();
+        buf.write_u16_le(idx)?;
     }
-    buf
+
+    Ok(buf)
 }
 
 #[cfg(test)]
