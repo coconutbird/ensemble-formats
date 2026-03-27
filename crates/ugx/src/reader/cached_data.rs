@@ -8,15 +8,13 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use zerocopy::Ref;
 
-use crate::bytes::{
-    read_f32_le, read_i32_le, read_null_terminated_string, read_u32_le, read_u64_le,
-};
 use crate::constants::{EMPTY_OFFSET_SENTINEL, EMPTY_OFFSET_SENTINEL_32};
 use crate::error::{Error, Result};
 use crate::types::raw::{AccessoryRaw, PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
 use crate::types::{AABB, Accessory, Bone, Matrix4x4, Section, UgxVersion};
 use crate::vertex::element::VertexElementType;
 use crate::vertex::packer::UnivertPacker;
+use nostdio::{ReadLe, SliceCursor, read_null_terminated_string};
 
 /// Read packed sections array from cached data.
 ///
@@ -91,9 +89,11 @@ fn read_packed_section_de(data: &[u8], pos: &mut usize) -> Result<Section> {
     // +0x38: UnivertPacker (84 bytes)
     let base_vert_packer = read_packed_univert_packer(data, pos)?;
 
-    let rigid_only = read_i32_le(data, pos)? != 0;
-    let global_bones = read_i32_le(data, pos)? != 0;
-    let _padding = read_i32_le(data, pos)?;
+    let mut cur = SliceCursor::new(&data[*pos..]);
+    let rigid_only = cur.read_i32_le()? != 0;
+    let global_bones = cur.read_i32_le()? != 0;
+    let _padding = cur.read_i32_le()?;
+    *pos += cur.position();
 
     Ok(Section {
         material_index,
@@ -135,12 +135,14 @@ fn read_packed_section_hw2(data: &[u8], pos: &mut usize) -> Result<Section> {
     *pos += core::mem::size_of::<PackedSectionFixedRaw>();
 
     // +0x28: flags (8 bytes)
-    let rigid_only = read_i32_le(data, pos)? != 0;
-    let global_bones = read_i32_le(data, pos)? != 0;
+    let mut cur = SliceCursor::new(&data[*pos..]);
+    let rigid_only = cur.read_i32_le()? != 0;
+    let global_bones = cur.read_i32_le()? != 0;
 
     // +0x30: unknown (8 bytes) — skip
-    let _unknown1 = read_i32_le(data, pos)?;
-    let _unknown2 = read_i32_le(data, pos)?;
+    let _unknown1 = cur.read_i32_le()?;
+    let _unknown2 = cur.read_i32_le()?;
+    *pos += cur.position();
 
     // +0x38: BoneRemap packed array (16 bytes)
     let (remap_arr, _): (Ref<_, PackedArrayRaw>, _) =
@@ -180,38 +182,40 @@ fn read_packed_section_hw2(data: &[u8], pos: &mut usize) -> Result<Section> {
 
 /// Read packed UnivertPacker (84 bytes on-disk).
 fn read_packed_univert_packer(data: &[u8], pos: &mut usize) -> Result<UnivertPacker> {
-    let pack_order_offset = read_u64_le(data, pos)? as usize;
-    let decl_order_offset = read_u64_le(data, pos)? as usize;
+    let mut cur = SliceCursor::new(&data[*pos..]);
+    let pack_order_offset = cur.read_u64_le()? as usize;
+    let decl_order_offset = cur.read_u64_le()? as usize;
 
     let pack_order =
         if pack_order_offset == EMPTY_OFFSET_SENTINEL as usize || pack_order_offset >= data.len() {
             String::new()
         } else {
-            read_null_terminated_string(&data[pack_order_offset..])?
+            read_null_terminated_string(&data[pack_order_offset..])
         };
 
     let decl_order =
         if decl_order_offset == EMPTY_OFFSET_SENTINEL as usize || decl_order_offset >= data.len() {
             String::new()
         } else {
-            read_null_terminated_string(&data[decl_order_offset..])?
+            read_null_terminated_string(&data[decl_order_offset..])
         };
 
-    let pos_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
-    let basis_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
-    let basis_scale_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
-    let tangent_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
-    let normal_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+    let pos_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    let basis_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    let basis_scale_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    let tangent_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    let normal_type = VertexElementType::from_u32(cur.read_u32_le()?);
 
     let mut uv_types = [VertexElementType::Ignore; 8];
     for uv_type in &mut uv_types {
-        *uv_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+        *uv_type = VertexElementType::from_u32(cur.read_u32_le()?);
     }
 
-    let indices_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
-    let weights_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
-    let diffuse_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
-    let index_type = VertexElementType::from_u32(read_u32_le(data, pos)?);
+    let indices_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    let weights_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    let diffuse_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    let index_type = VertexElementType::from_u32(cur.read_u32_le()?);
+    *pos += cur.position();
 
     Ok(UnivertPacker {
         pack_order,
@@ -265,7 +269,7 @@ fn read_packed_bone(data: &[u8], pos: &mut usize) -> Result<Bone> {
     let name = if name_offset == EMPTY_OFFSET_SENTINEL as usize || name_offset >= data.len() {
         String::new()
     } else {
-        read_null_terminated_string(&data[name_offset..])?
+        read_null_terminated_string(&data[name_offset..])
     };
 
     let mut rows = [[0.0f32; 4]; 4];
@@ -274,8 +278,8 @@ fn read_packed_bone(data: &[u8], pos: &mut usize) -> Result<Bone> {
             *col = f32::from_le_bytes(raw.model_to_bone[i * 4 + j]);
         }
     }
-    let model_to_bone = Matrix4x4 { rows };
 
+    let model_to_bone = Matrix4x4 { rows };
     let parent_index = i32::from_le_bytes(raw.parent_index);
 
     Ok(Bone {
@@ -312,23 +316,25 @@ pub(super) fn read_bone_bounds(data: &[u8], pos: &mut usize) -> Result<Vec<AABB>
     let mut bounds = Vec::with_capacity(low_count);
 
     for i in 0..low_count {
-        let mut low_pos = low_offset + i * 12;
-        let mut high_pos = high_offset + i * 12;
+        let low_pos = low_offset + i * 12;
+        let high_pos = high_offset + i * 12;
 
         if low_pos + 12 > data.len() || high_pos + 12 > data.len() {
             break;
         }
 
+        let mut low_cur = SliceCursor::new(&data[low_pos..]);
+        let mut high_cur = SliceCursor::new(&data[high_pos..]);
         bounds.push(AABB {
             min: [
-                read_f32_le(data, &mut low_pos)?,
-                read_f32_le(data, &mut low_pos)?,
-                read_f32_le(data, &mut low_pos)?,
+                low_cur.read_f32_le()?,
+                low_cur.read_f32_le()?,
+                low_cur.read_f32_le()?,
             ],
             max: [
-                read_f32_le(data, &mut high_pos)?,
-                read_f32_le(data, &mut high_pos)?,
-                read_f32_le(data, &mut high_pos)?,
+                high_cur.read_f32_le()?,
+                high_cur.read_f32_le()?,
+                high_cur.read_f32_le()?,
             ],
         });
     }
@@ -382,9 +388,9 @@ pub(super) fn read_packed_accessories(data: &[u8], pos: &mut usize) -> Result<Ve
             && inner_offset + inner_count * 4 <= data.len()
         {
             let mut indices = Vec::with_capacity(inner_count);
-            let mut idx_pos = inner_offset;
+            let mut idx_cur = SliceCursor::new(&data[inner_offset..]);
             for _ in 0..inner_count {
-                indices.push(read_i32_le(data, &mut idx_pos)?);
+                indices.push(idx_cur.read_i32_le()?);
             }
             indices
         } else {
@@ -429,10 +435,10 @@ pub(super) fn read_valid_accessory_indices(
     }
 
     let mut valid = Vec::with_capacity(count);
-    let mut idx_pos = offset;
+    let mut idx_cur = SliceCursor::new(&data[offset..]);
 
     for _ in 0..count {
-        let idx = read_i32_le(data, &mut idx_pos)? as usize;
+        let idx = idx_cur.read_i32_le()? as usize;
         if idx < accessories.len() {
             valid.push(accessories[idx].clone());
         }

@@ -29,7 +29,8 @@
 use alloc::vec::Vec;
 use half::f16;
 
-use crate::bytes::{read_f32_le, read_i16_le, read_u16_le, read_u32_le};
+use nostdio::{ReadLe, SliceCursor};
+
 use crate::error::{Error, Result};
 
 /// Vertex element data types (matches C++ `VertexElement::EType` enum).
@@ -149,29 +150,30 @@ impl VertexElementType {
 
     /// Unpack this element type from raw bytes into a Vec4 [x, y, z, w].
     pub fn unpack(self, data: &[u8], pos: &mut usize) -> Result<[f32; 4]> {
-        match self {
+        let mut cur = SliceCursor::new(&data[*pos..]);
+        let result = match self {
             Self::Ignore => Ok([0.0, 0.0, 0.0, 1.0]),
-            Self::Float1 => Ok([read_f32_le(data, pos)?, 0.0, 0.0, 1.0]),
+            Self::Float1 => Ok([cur.read_f32_le()?, 0.0, 0.0, 1.0]),
             Self::Float2 => {
-                let x = read_f32_le(data, pos)?;
-                let y = read_f32_le(data, pos)?;
+                let x = cur.read_f32_le()?;
+                let y = cur.read_f32_le()?;
                 Ok([x, y, 0.0, 1.0])
             }
             Self::Float3 => {
-                let x = read_f32_le(data, pos)?;
-                let y = read_f32_le(data, pos)?;
-                let z = read_f32_le(data, pos)?;
+                let x = cur.read_f32_le()?;
+                let y = cur.read_f32_le()?;
+                let z = cur.read_f32_le()?;
                 Ok([x, y, z, 1.0])
             }
             Self::Float4 => {
-                let x = read_f32_le(data, pos)?;
-                let y = read_f32_le(data, pos)?;
-                let z = read_f32_le(data, pos)?;
-                let w = read_f32_le(data, pos)?;
+                let x = cur.read_f32_le()?;
+                let y = cur.read_f32_le()?;
+                let z = cur.read_f32_le()?;
+                let w = cur.read_f32_le()?;
                 Ok([x, y, z, w])
             }
             Self::D3DColor => {
-                let packed = read_u32_le(data, pos)?;
+                let packed = cur.read_u32_le()?;
                 let a = ((packed >> 24) & 0xFF) as f32 / 255.0;
                 let r = ((packed >> 16) & 0xFF) as f32 / 255.0;
                 let g = ((packed >> 8) & 0xFF) as f32 / 255.0;
@@ -179,7 +181,7 @@ impl VertexElementType {
                 Ok([r, g, b, a])
             }
             Self::UByte4 => {
-                let packed = read_u32_le(data, pos)?;
+                let packed = cur.read_u32_le()?;
                 Ok([
                     (packed & 0xFF) as f32,
                     ((packed >> 8) & 0xFF) as f32,
@@ -188,19 +190,19 @@ impl VertexElementType {
                 ])
             }
             Self::Short2 => {
-                let x = read_i16_le(data, pos)? as f32;
-                let y = read_i16_le(data, pos)? as f32;
+                let x = cur.read_i16_le()? as f32;
+                let y = cur.read_i16_le()? as f32;
                 Ok([x, y, 0.0, 1.0])
             }
             Self::Short4 => {
-                let x = read_i16_le(data, pos)? as f32;
-                let y = read_i16_le(data, pos)? as f32;
-                let z = read_i16_le(data, pos)? as f32;
-                let w = read_i16_le(data, pos)? as f32;
+                let x = cur.read_i16_le()? as f32;
+                let y = cur.read_i16_le()? as f32;
+                let z = cur.read_i16_le()? as f32;
+                let w = cur.read_i16_le()? as f32;
                 Ok([x, y, z, w])
             }
             Self::UByte4N => {
-                let packed = read_u32_le(data, pos)?;
+                let packed = cur.read_u32_le()?;
                 Ok([
                     (packed & 0xFF) as f32 / 255.0,
                     ((packed >> 8) & 0xFF) as f32 / 255.0,
@@ -209,31 +211,31 @@ impl VertexElementType {
                 ])
             }
             Self::Short2N => {
-                let x = read_i16_le(data, pos)? as f32 / 32767.0;
-                let y = read_i16_le(data, pos)? as f32 / 32767.0;
+                let x = cur.read_i16_le()? as f32 / 32767.0;
+                let y = cur.read_i16_le()? as f32 / 32767.0;
                 Ok([x, y, 0.0, 1.0])
             }
             Self::Short4N => {
-                let x = read_i16_le(data, pos)? as f32 / 32767.0;
-                let y = read_i16_le(data, pos)? as f32 / 32767.0;
-                let z = read_i16_le(data, pos)? as f32 / 32767.0;
-                let w = read_i16_le(data, pos)? as f32 / 32767.0;
+                let x = cur.read_i16_le()? as f32 / 32767.0;
+                let y = cur.read_i16_le()? as f32 / 32767.0;
+                let z = cur.read_i16_le()? as f32 / 32767.0;
+                let w = cur.read_i16_le()? as f32 / 32767.0;
                 Ok([x, y, z, w])
             }
             Self::UShort2N => {
-                let x = read_u16_le(data, pos)? as f32 / 65535.0;
-                let y = read_u16_le(data, pos)? as f32 / 65535.0;
+                let x = cur.read_u16_le()? as f32 / 65535.0;
+                let y = cur.read_u16_le()? as f32 / 65535.0;
                 Ok([x, y, 0.0, 1.0])
             }
             Self::UShort4N => {
-                let x = read_u16_le(data, pos)? as f32 / 65535.0;
-                let y = read_u16_le(data, pos)? as f32 / 65535.0;
-                let z = read_u16_le(data, pos)? as f32 / 65535.0;
-                let w = read_u16_le(data, pos)? as f32 / 65535.0;
+                let x = cur.read_u16_le()? as f32 / 65535.0;
+                let y = cur.read_u16_le()? as f32 / 65535.0;
+                let z = cur.read_u16_le()? as f32 / 65535.0;
+                let w = cur.read_u16_le()? as f32 / 65535.0;
                 Ok([x, y, z, w])
             }
             Self::UDec3 => {
-                let packed = read_u32_le(data, pos)?;
+                let packed = cur.read_u32_le()?;
                 Ok([
                     (packed & 0x3FF) as f32,
                     ((packed >> 10) & 0x3FF) as f32,
@@ -242,7 +244,7 @@ impl VertexElementType {
                 ])
             }
             Self::Dec3N => {
-                let packed = read_u32_le(data, pos)?;
+                let packed = cur.read_u32_le()?;
 
                 // X:10, Y:10, Z:10 signed normalized, W:2 (handedness flag).
                 // No clamp — preserve raw value so unpack→repack is byte-identical.
@@ -257,23 +259,23 @@ impl VertexElementType {
                 Ok([x, y, z, w])
             }
             Self::HalfFloat2 => {
-                let x = f16::from_bits(read_u16_le(data, pos)?).to_f32();
-                let y = f16::from_bits(read_u16_le(data, pos)?).to_f32();
+                let x = f16::from_bits(cur.read_u16_le()?).to_f32();
+                let y = f16::from_bits(cur.read_u16_le()?).to_f32();
                 Ok([x, y, 0.0, 1.0])
             }
             Self::HalfFloat4 => {
-                let x = f16::from_bits(read_u16_le(data, pos)?).to_f32();
-                let y = f16::from_bits(read_u16_le(data, pos)?).to_f32();
-                let z = f16::from_bits(read_u16_le(data, pos)?).to_f32();
-                let w = f16::from_bits(read_u16_le(data, pos)?).to_f32();
+                let x = f16::from_bits(cur.read_u16_le()?).to_f32();
+                let y = f16::from_bits(cur.read_u16_le()?).to_f32();
+                let z = f16::from_bits(cur.read_u16_le()?).to_f32();
+                let w = f16::from_bits(cur.read_u16_le()?).to_f32();
                 Ok([x, y, z, w])
             }
             Self::HalfFloat1 => {
-                let x = f16::from_bits(read_u16_le(data, pos)?).to_f32();
+                let x = f16::from_bits(cur.read_u16_le()?).to_f32();
                 Ok([x, 0.0, 0.0, 1.0])
             }
             Self::UDec3N => {
-                let packed = read_u32_le(data, pos)?;
+                let packed = cur.read_u32_le()?;
                 Ok([
                     (packed & 0x3FF) as f32 / 1023.0,
                     ((packed >> 10) & 0x3FF) as f32 / 1023.0,
@@ -282,7 +284,9 @@ impl VertexElementType {
                 ])
             }
             Self::Invalid => Ok([0.0, 0.0, 0.0, 0.0]),
-        }
+        };
+        *pos += cur.position();
+        result
     }
 
     /// Unpack as raw integer indices (no normalization).
@@ -291,9 +295,10 @@ impl VertexElementType {
     /// normalized types like UByte4N or UShort4N. Use this for bone indices
     /// where you need the actual index values, not normalized floats.
     pub fn unpack_as_indices(self, data: &[u8], pos: &mut usize) -> Result<[u16; 4]> {
-        match self {
+        let mut cur = SliceCursor::new(&data[*pos..]);
+        let result = match self {
             Self::UByte4 | Self::UByte4N => {
-                let packed = read_u32_le(data, pos)?;
+                let packed = cur.read_u32_le()?;
                 Ok([
                     (packed & 0xFF) as u16,
                     ((packed >> 8) & 0xFF) as u16,
@@ -302,24 +307,27 @@ impl VertexElementType {
                 ])
             }
             Self::Short4 | Self::Short4N => {
-                let x = read_i16_le(data, pos)?.max(0) as u16;
-                let y = read_i16_le(data, pos)?.max(0) as u16;
-                let z = read_i16_le(data, pos)?.max(0) as u16;
-                let w = read_i16_le(data, pos)?.max(0) as u16;
+                let x = cur.read_i16_le()?.max(0) as u16;
+                let y = cur.read_i16_le()?.max(0) as u16;
+                let z = cur.read_i16_le()?.max(0) as u16;
+                let w = cur.read_i16_le()?.max(0) as u16;
                 Ok([x, y, z, w])
             }
             Self::UShort4N => {
-                let x = read_u16_le(data, pos)?;
-                let y = read_u16_le(data, pos)?;
-                let z = read_u16_le(data, pos)?;
-                let w = read_u16_le(data, pos)?;
+                let x = cur.read_u16_le()?;
+                let y = cur.read_u16_le()?;
+                let z = cur.read_u16_le()?;
+                let w = cur.read_u16_le()?;
                 Ok([x, y, z, w])
             }
             other => {
+                *pos += cur.position();
                 let v = other.unpack(data, pos)?;
-                Ok([v[0] as u16, v[1] as u16, v[2] as u16, v[3] as u16])
+                return Ok([v[0] as u16, v[1] as u16, v[2] as u16, v[3] as u16]);
             }
-        }
+        };
+        *pos += cur.position();
+        result
     }
 
     /// Pack a Vec4 [x, y, z, w] into raw bytes (inverse of `unpack()`).

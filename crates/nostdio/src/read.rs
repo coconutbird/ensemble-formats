@@ -26,19 +26,19 @@ use crate::traits::{IoError, Read};
 /// let mut cur = SliceCursor::new(&data);
 ///
 /// assert_eq!(cur.read_u32_le().unwrap(), 1);
-/// assert_eq!(cur.read_u8().unwrap(), 0xFF);
+/// assert_eq!(cur.read_u8_le().unwrap(), 0xFF);
 /// ```
 pub trait ReadLe: Read {
-    /// Read a `u8`.
-    fn read_u8(&mut self) -> Result<u8, IoError> {
+    /// Read a `u8` in little-endian byte order (identity, but named for consistency).
+    fn read_u8_le(&mut self) -> Result<u8, IoError> {
         let mut buf = [0u8; 1];
         self.read_exact(&mut buf)?;
         Ok(buf[0])
     }
 
-    /// Read an `i8`.
-    fn read_i8(&mut self) -> Result<i8, IoError> {
-        Ok(self.read_u8()? as i8)
+    /// Read an `i8` in little-endian byte order (identity, but named for consistency).
+    fn read_i8_le(&mut self) -> Result<i8, IoError> {
+        Ok(self.read_u8_le()? as i8)
     }
 
     /// Read a `u16` in little-endian byte order.
@@ -116,14 +116,14 @@ impl<T: Read + ?Sized> ReadLe for T {}
 /// assert_eq!(cur.read_u32_be().unwrap(), 1);
 /// ```
 pub trait ReadBe: Read {
-    /// Read a `u8`.
+    /// Read a `u8` in big-endian byte order (identity, but named for consistency).
     fn read_u8_be(&mut self) -> Result<u8, IoError> {
         let mut buf = [0u8; 1];
         self.read_exact(&mut buf)?;
         Ok(buf[0])
     }
 
-    /// Read an `i8`.
+    /// Read an `i8` in big-endian byte order (identity, but named for consistency).
     fn read_i8_be(&mut self) -> Result<i8, IoError> {
         Ok(self.read_u8_be()? as i8)
     }

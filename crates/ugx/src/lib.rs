@@ -25,7 +25,6 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-mod bytes;
 mod constants;
 mod error;
 pub use error::{Error, Result};

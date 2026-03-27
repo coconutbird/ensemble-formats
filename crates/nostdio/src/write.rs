@@ -26,20 +26,20 @@ use crate::traits::{IoError, Write};
 /// let mut buf = Vec::new();
 /// let mut cur = MutCursor::new(&mut buf);
 ///
-/// cur.write_u8(0xFF).unwrap();
+/// cur.write_u8_le(0xFF).unwrap();
 /// cur.write_u16_le(1000).unwrap();
 /// cur.write_f32_le(3.14).unwrap();
 ///
 /// assert_eq!(buf.len(), 1 + 2 + 4);
 /// ```
 pub trait WriteLe: Write {
-    /// Write a `u8`.
-    fn write_u8(&mut self, v: u8) -> Result<(), IoError> {
+    /// Write a `u8` in little-endian byte order (identity, but named for consistency).
+    fn write_u8_le(&mut self, v: u8) -> Result<(), IoError> {
         self.write_all(&[v])
     }
 
-    /// Write an `i8`.
-    fn write_i8(&mut self, v: i8) -> Result<(), IoError> {
+    /// Write an `i8` in little-endian byte order (identity, but named for consistency).
+    fn write_i8_le(&mut self, v: i8) -> Result<(), IoError> {
         self.write_all(&v.to_le_bytes())
     }
 
@@ -102,12 +102,12 @@ impl<T: Write + ?Sized> WriteLe for T {}
 /// assert_eq!(buf, [0x00, 0x00, 0x00, 0x01]);
 /// ```
 pub trait WriteBe: Write {
-    /// Write a `u8`.
+    /// Write a `u8` in big-endian byte order (identity, but named for consistency).
     fn write_u8_be(&mut self, v: u8) -> Result<(), IoError> {
         self.write_all(&[v])
     }
 
-    /// Write an `i8`.
+    /// Write an `i8` in big-endian byte order (identity, but named for consistency).
     fn write_i8_be(&mut self, v: i8) -> Result<(), IoError> {
         self.write_all(&v.to_be_bytes())
     }

@@ -40,6 +40,10 @@
 //! [`Read`] or [`Write`] implementation.  They are blanket-implemented,
 //! so importing the trait is all you need.
 //!
+//! When the byte order is only known at runtime, [`ReadEndian`] /
+//! [`WriteEndian`] accept an [`Endian`] parameter and dispatch
+//! accordingly (e.g. `cur.read_u32(Endian::Big)`).
+//!
 //! # Progress reporting
 //!
 //! The [`Progress`] trait provides a standard way for long-running
@@ -55,6 +59,7 @@ extern crate alloc;
 extern crate std;
 
 mod cursor;
+mod endian;
 mod progress;
 mod read;
 mod traits;
@@ -62,6 +67,7 @@ mod write;
 
 // Re-export everything at the crate root for a flat public API.
 pub use cursor::*;
+pub use endian::*;
 pub use progress::*;
 pub use read::*;
 pub use traits::*;

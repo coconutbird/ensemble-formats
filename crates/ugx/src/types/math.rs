@@ -3,7 +3,8 @@
 //! Contains `Matrix4x4` (row-major 4×4) and `QForm` (quaternion + translation)
 //! used for bone transforms in UGX geometry data.
 
-use crate::bytes::read_f32_le;
+use nostdio::{ReadLe, SliceCursor};
+
 use crate::error::Result;
 
 /// Quaternion + translation transform (used in non-packed format).
@@ -231,17 +232,15 @@ impl Matrix4x4 {
 
 impl QForm {
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
+        let mut cur = SliceCursor::new(&data[*pos..]);
         let rotation = [
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
+            cur.read_f32_le()?,
+            cur.read_f32_le()?,
+            cur.read_f32_le()?,
+            cur.read_f32_le()?,
         ];
-        let translation = [
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-        ];
+        let translation = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
+        *pos += cur.position();
         Ok(Self {
             rotation,
             translation,

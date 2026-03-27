@@ -14,6 +14,7 @@ std = ["ecf/std"]
 [dependencies]
 bdt = { workspace = true }
 ecf = { workspace = true }
+nostdio = { workspace = true }
 thiserror = { workspace = true }
 half = { workspace = true }
 zerocopy.workspace = true

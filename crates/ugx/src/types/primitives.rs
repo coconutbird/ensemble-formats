@@ -3,7 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::bytes::read_f32_le;
+use nostdio::{ReadLe, SliceCursor};
+
 use crate::error::{Error, Result};
 
 /// Axis-aligned bounding box.
@@ -17,16 +18,10 @@ pub struct AABB {
 
 impl AABB {
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let min = [
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-        ];
-        let max = [
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-        ];
+        let mut cur = SliceCursor::new(&data[*pos..]);
+        let min = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
+        let max = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
+        *pos += cur.position();
         Ok(Self { min, max })
     }
 }
@@ -42,12 +37,10 @@ pub struct Sphere {
 
 impl Sphere {
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let center = [
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-            read_f32_le(data, pos)?,
-        ];
-        let radius = read_f32_le(data, pos)?;
+        let mut cur = SliceCursor::new(&data[*pos..]);
+        let center = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
+        let radius = cur.read_f32_le()?;
+        *pos += cur.position();
         Ok(Self { center, radius })
     }
 }
@@ -63,16 +56,10 @@ pub struct Keyframe {
 
 impl Keyframe {
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let time = read_f32_le(data, pos)?;
-        let end4 = *pos + 4;
-        if end4 > data.len() {
-            return Err(Error::UnexpectedEof {
-                context: String::from("keyframe length"),
-            });
-        }
-        let len = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]])
-            as usize;
-        *pos = end4;
+        let mut cur = SliceCursor::new(&data[*pos..]);
+        let time = cur.read_f32_le()?;
+        let len = cur.read_u32_le()? as usize;
+        *pos += cur.position();
         let verts_end = *pos + len;
         if verts_end > data.len() {
             return Err(Error::UnexpectedEof {

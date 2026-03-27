@@ -1330,6 +1330,7 @@ dependencies = [
  "bdt",
  "ecf",
  "half",
+ "nostdio",
  "thiserror",
  "zerocopy",
 ]

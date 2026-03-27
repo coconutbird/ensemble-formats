@@ -430,7 +430,7 @@ fn pad_to_alignment<W: Write + Seek>(writer: &mut W, alignment: u64) -> Result<(
     if remainder != 0 {
         let padding = alignment - remainder;
         for _ in 0..padding {
-            writer.write_u8(0)?;
+            writer.write_u8_le(0)?;
         }
     }
     Ok(())
@@ -571,7 +571,7 @@ fn write_packed_univert_packer(
         None => {
             // Write 84 bytes of zeros if no packer
             for _ in 0..84 {
-                cursor.write_u8(0)?;
+                cursor.write_u8_le(0)?;
             }
             return Ok(());
         }

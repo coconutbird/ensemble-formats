@@ -11,7 +11,8 @@
 
 use alloc::vec::Vec;
 
-use crate::bytes::{read_f32_be, read_f32_le, read_i32_be, read_i32_le, read_u32_be, read_u32_le};
+use nostdio::{ReadBe, ReadLe, Seek, SeekFrom, SliceCursor};
+
 use crate::error::{Error, Result};
 use crate::types::aabb_tree::{AABB_NULL_INDEX, AABB_TREE_VERSION, AabbTree, AabbTreeNode};
 
@@ -23,16 +24,16 @@ const NODE_MEM_SIZE: u32 = 72;
 /// Auto-detects endianness: tries LE first, falls back to BE if the version
 /// field is byte-swapped (e.g. `0x02004433` instead of `0x33440002`).
 pub(super) fn read_aabb_tree(data: &[u8]) -> Result<AabbTree> {
-    let pos = &mut 0usize;
+    let mut cur = SliceCursor::new(data);
 
     // Detect endianness from the version header.
-    let version_le = read_u32_le(data, pos)?;
+    let version_le = cur.read_u32_le()?;
     let big_endian = if version_le == AABB_TREE_VERSION {
         false
     } else {
         // Reset and try big-endian.
-        *pos = 0;
-        let version_be = read_u32_be(data, pos)?;
+        cur.seek(SeekFrom::Start(0))?;
+        let version_be = cur.read_u32_be()?;
         if version_be == AABB_TREE_VERSION {
             true
         } else {
@@ -43,20 +44,16 @@ pub(super) fn read_aabb_tree(data: &[u8]) -> Result<AabbTree> {
         }
     };
 
-    let read_u32 = if big_endian { read_u32_be } else { read_u32_le };
-    let read_i32 = if big_endian { read_i32_be } else { read_i32_le };
-    let read_f32 = if big_endian { read_f32_be } else { read_f32_le };
-
     // Node count (BDynamicArray serialization: count first, then elements)
-    let node_count = read_u32(data, pos)? as usize;
+    let node_count = read_u32(&mut cur, big_endian)? as usize;
 
     let mut nodes = Vec::with_capacity(node_count);
     for _ in 0..node_count {
-        nodes.push(read_node(data, pos, read_u32, read_i32, read_f32)?);
+        nodes.push(read_node(&mut cur, big_endian)?);
     }
 
     // Version sentinel
-    let sentinel = read_u32(data, pos)?;
+    let sentinel = read_u32(&mut cur, big_endian)?;
     if sentinel != AABB_TREE_VERSION {
         return Err(Error::InvalidVersion {
             expected: AABB_TREE_VERSION,
@@ -65,6 +62,36 @@ pub(super) fn read_aabb_tree(data: &[u8]) -> Result<AabbTree> {
     }
 
     Ok(AabbTree { nodes })
+}
+
+/// Read a u32 with the correct endianness.
+#[inline]
+fn read_u32(cur: &mut SliceCursor<'_>, big_endian: bool) -> Result<u32> {
+    Ok(if big_endian {
+        cur.read_u32_be()?
+    } else {
+        cur.read_u32_le()?
+    })
+}
+
+/// Read an i32 with the correct endianness.
+#[inline]
+fn read_i32(cur: &mut SliceCursor<'_>, big_endian: bool) -> Result<i32> {
+    Ok(if big_endian {
+        cur.read_i32_be()?
+    } else {
+        cur.read_i32_le()?
+    })
+}
+
+/// Read an f32 with the correct endianness.
+#[inline]
+fn read_f32(cur: &mut SliceCursor<'_>, big_endian: bool) -> Result<f32> {
+    Ok(if big_endian {
+        cur.read_f32_be()?
+    } else {
+        cur.read_f32_le()?
+    })
 }
 
 /// Read a single BNode from the stream.
@@ -79,42 +106,36 @@ pub(super) fn read_aabb_tree(data: &[u8]) -> Result<AabbTree> {
 /// mObjIndices      → BDynamicArray<int> (count + i32[])
 /// mSplitPlane      → f32
 /// ```
-fn read_node(
-    data: &[u8],
-    pos: &mut usize,
-    read_u32: fn(&[u8], &mut usize) -> Result<u32>,
-    read_i32: fn(&[u8], &mut usize) -> Result<i32>,
-    read_f32: fn(&[u8], &mut usize) -> Result<f32>,
-) -> Result<AabbTreeNode> {
+fn read_node(cur: &mut SliceCursor<'_>, big_endian: bool) -> Result<AabbTreeNode> {
     // mBounds (AABB = min[3] + max[3])
     let min = [
-        read_f32(data, pos)?,
-        read_f32(data, pos)?,
-        read_f32(data, pos)?,
+        read_f32(cur, big_endian)?,
+        read_f32(cur, big_endian)?,
+        read_f32(cur, big_endian)?,
     ];
     let max = [
-        read_f32(data, pos)?,
-        read_f32(data, pos)?,
-        read_f32(data, pos)?,
+        read_f32(cur, big_endian)?,
+        read_f32(cur, big_endian)?,
+        read_f32(cur, big_endian)?,
     ];
 
     // Pointers serialized as byte offsets (via offsetize). Convert to node indices.
-    let parent = offset_to_index(read_u32(data, pos)?);
-    let child0 = offset_to_index(read_u32(data, pos)?);
-    let child1 = offset_to_index(read_u32(data, pos)?);
+    let parent = offset_to_index(read_u32(cur, big_endian)?);
+    let child0 = offset_to_index(read_u32(cur, big_endian)?);
+    let child1 = offset_to_index(read_u32(cur, big_endian)?);
 
     // mIndex
-    let index = read_u32(data, pos)?;
+    let index = read_u32(cur, big_endian)?;
 
     // mObjIndices (IntVec = BDynamicArray<int>, serialized as count + elements)
-    let obj_count = read_u32(data, pos)? as usize;
+    let obj_count = read_u32(cur, big_endian)? as usize;
     let mut obj_indices = Vec::with_capacity(obj_count);
     for _ in 0..obj_count {
-        obj_indices.push(read_i32(data, pos)?);
+        obj_indices.push(read_i32(cur, big_endian)?);
     }
 
     // mSplitPlane
-    let split_plane = read_f32(data, pos)?;
+    let split_plane = read_f32(cur, big_endian)?;
 
     Ok(AabbTreeNode {
         min,

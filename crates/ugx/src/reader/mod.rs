@@ -110,7 +110,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use zerocopy::Ref;
 
-use crate::bytes::read_u16_le;
+use nostdio::{ReadLe, SliceCursor};
+
 use crate::constants::*;
 use crate::error::{Error, Result};
 use crate::types::raw::GeomHeaderRaw;
@@ -147,9 +148,9 @@ impl UgxGeom {
 
         let num_indices = ib_data.len() / 2;
         let mut index_buffer = Vec::with_capacity(num_indices);
-        let mut ib_pos = 0usize;
+        let mut ib_cur = SliceCursor::new(&ib_data);
         for _ in 0..num_indices {
-            index_buffer.push(read_u16_le(&ib_data, &mut ib_pos)?);
+            index_buffer.push(ib_cur.read_u16_le()?);
         }
 
         Self::parse_cached_data(
