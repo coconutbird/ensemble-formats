@@ -420,7 +420,7 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     // The engine scans for contiguous 44-byte type def entries between the data
     // and the string table.
     let before_tt = buf.len();
-    let file_info_type = build_file_info_type_tree(geom);
+    let file_info_type = build_file_info_type_tree();
     emit_type_def_array(&mut buf, &mut strings, &file_info_type);
     #[cfg(feature = "std")]
     std::eprintln!(
@@ -961,40 +961,41 @@ fn tm_real32_array(name: &str, width: u32) -> GrannyTypeMember {
     }
 }
 
-/// Build the transform type definition.
-fn build_transform_type() -> Vec<GrannyTypeMember> {
+/// Helper: create an Int32 member with a specific array width.
+fn tm_int32_array(name: &str, width: u32) -> GrannyTypeMember {
+    GrannyTypeMember {
+        member_type: GrannyMemberType::Int32,
+        name: String::from(name),
+        reference_type: None,
+        array_width: width,
+        extra: [0; 3],
+    }
+}
+
+/// Build the bone type definition matching the engine's hardcoded
+/// `GrannyBoneTypeDef` at `0x1414621D0`.
+///
+/// ```text
+/// Name              : String (8 bytes)
+/// ParentIndex       : Int32  (4 bytes)
+/// Transform         : Transform (68 bytes, opaque GrannyTransform)
+/// InverseWorld4x4   : Real32 ×16 (64 bytes, 4×4 float matrix)
+/// LODError          : Real32 (4 bytes)
+/// ExtendedData      : VariantReference (16 bytes)
+/// Total: 0xA4 = 164 bytes
+/// ```
+fn build_bone_type() -> Vec<GrannyTypeMember> {
     vec![
-        tm(GrannyMemberType::Int32, "Flags"),
-        tm_real32_array("Position", 3),
-        tm_real32_array("Orientation", 4),
-        tm_real32_array("ScaleShear", 9),
+        tm(GrannyMemberType::StringMember, "Name"),
+        tm(GrannyMemberType::Int32, "ParentIndex"),
+        tm(GrannyMemberType::Transform, "Transform"),
+        tm_real32_array("InverseWorldTransform", 16),
+        tm(GrannyMemberType::Real32, "LODError"),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
     ]
 }
 
-/// Build the bone type definition, including extended data if present.
-fn build_bone_type(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
-    let mut members = vec![
-        tm(GrannyMemberType::StringMember, "Name"),
-        tm(GrannyMemberType::Int32, "ParentIndex"),
-        tm_ref(
-            GrannyMemberType::Inline,
-            "LocalTransform",
-            build_transform_type(),
-        ),
-        tm_real32_array("InverseWorld4x4", 16),
-        tm(GrannyMemberType::Real32, "LODError"),
-    ];
-
-    // Add ExtendedData variant if any bone has extended data
-    let has_extended = geom.granny_bones.iter().any(|b| b.extended_data.is_some());
-    if has_extended {
-        members.push(tm(GrannyMemberType::VariantReference, "ExtendedData"));
-    }
-
-    members
-}
-
-/// Build the bone_binding type definition.
+/// Build the bone_binding type definition matching the engine's at `0x141460EA0`.
 fn build_bone_binding_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "BoneName"),
@@ -1003,27 +1004,148 @@ fn build_bone_binding_type() -> Vec<GrannyTypeMember> {
         tm_ref(
             GrannyMemberType::ReferenceToArray,
             "TriangleIndices",
-            vec![tm(GrannyMemberType::Int32, "TriangleIndex")],
+            vec![tm(GrannyMemberType::Int32, "Int32")],
         ),
     ]
 }
 
-/// Build the mesh type definition.
+/// Build the VertexData type definition matching the engine's at `0x14145E3E0`.
+fn build_vertex_data_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::ReferenceToVariantArray, "Vertices"),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "VertexComponentNames",
+            vec![tm(GrannyMemberType::StringMember, "String")],
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "VertexAnnotationSets",
+            vec![
+                tm(GrannyMemberType::StringMember, "Name"),
+                tm(
+                    GrannyMemberType::ReferenceToVariantArray,
+                    "VertexAnnotations",
+                ),
+                tm(GrannyMemberType::Int32, "IndicesMapFromVertexToAnnotation"),
+                tm_ref(
+                    GrannyMemberType::ReferenceToArray,
+                    "VertexAnnotationIndices",
+                    vec![tm(GrannyMemberType::Int32, "Int32")],
+                ),
+            ],
+        ),
+    ]
+}
+
+/// Build the TriTopology type definition matching the engine's at `0x14145F1A0`.
+fn build_tri_topology_type() -> Vec<GrannyTypeMember> {
+    let int32_elem = vec![tm(GrannyMemberType::Int32, "Int32")];
+    let int16_elem = vec![tm(GrannyMemberType::Int16, "Int16")];
+    vec![
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "Groups",
+            vec![
+                tm(GrannyMemberType::Int32, "MaterialIndex"),
+                tm(GrannyMemberType::Int32, "TriFirst"),
+                tm(GrannyMemberType::Int32, "TriCount"),
+            ],
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "Indices",
+            int32_elem.clone(),
+        ),
+        tm_ref(GrannyMemberType::ReferenceToArray, "Indices16", int16_elem),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "VertexToVertexMap",
+            int32_elem.clone(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "VertexToTriangleMap",
+            int32_elem.clone(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "SideToNeighborMap",
+            int32_elem.clone(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "PolygonIndexStarts",
+            int32_elem.clone(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "PolygonIndices",
+            int32_elem.clone(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "BonesForTriangle",
+            int32_elem.clone(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "TriangleToBoneIndices",
+            int32_elem,
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "TriAnnotationSets",
+            vec![
+                tm(GrannyMemberType::StringMember, "Name"),
+                tm(GrannyMemberType::ReferenceToVariantArray, "TriAnnotations"),
+                tm(GrannyMemberType::Int32, "IndicesMapFromTriToAnnotation"),
+                tm_ref(
+                    GrannyMemberType::ReferenceToArray,
+                    "TriAnnotationIndices",
+                    vec![tm(GrannyMemberType::Int32, "Int32")],
+                ),
+            ],
+        ),
+    ]
+}
+
+/// Build the mesh type definition matching the engine's at `0x141461090`.
 fn build_mesh_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "Name"),
-        // Vertex/topology data references (empty in UGX — kept for schema compat)
-        tm_ref(GrannyMemberType::Reference, "PrimaryVertexData", Vec::new()),
+        tm_ref(
+            GrannyMemberType::Reference,
+            "PrimaryVertexData",
+            build_vertex_data_type(),
+        ),
         tm_ref(
             GrannyMemberType::ReferenceToArray,
             "MorphTargets",
-            Vec::new(),
+            vec![
+                tm(GrannyMemberType::StringMember, "ScalarName"),
+                tm_ref(
+                    GrannyMemberType::Reference,
+                    "VertexData",
+                    build_vertex_data_type(),
+                ),
+                tm(GrannyMemberType::Int32, "DataIsDeltas"),
+            ],
         ),
-        tm_ref(GrannyMemberType::Reference, "PrimaryTopology", Vec::new()),
+        tm_ref(
+            GrannyMemberType::Reference,
+            "PrimaryTopology",
+            build_tri_topology_type(),
+        ),
         tm_ref(
             GrannyMemberType::ReferenceToArray,
             "MaterialBindings",
-            Vec::new(),
+            // MaterialBinding -> Reference to Material (recursive with Texture)
+            vec![tm_ref(
+                GrannyMemberType::Reference,
+                "Material",
+                build_material_type(),
+            )],
         ),
         tm_ref(
             GrannyMemberType::ReferenceToArray,
@@ -1034,33 +1156,30 @@ fn build_mesh_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the skeleton type definition.
-fn build_skeleton_type(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
+/// Build the skeleton type definition matching the engine's at `0x141462310`.
+fn build_skeleton_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "Name"),
         tm_ref(
             GrannyMemberType::ReferenceToArray,
             "Bones",
-            build_bone_type(geom),
+            build_bone_type(),
         ),
         tm(GrannyMemberType::Int32, "LODType"),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
     ]
 }
 
-/// Build the model type definition.
-fn build_model_type(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
+/// Build the model type definition matching the engine's at `0x14145C980`.
+fn build_model_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "Name"),
         tm_ref(
             GrannyMemberType::Reference,
             "Skeleton",
-            build_skeleton_type(geom),
+            build_skeleton_type(),
         ),
-        tm_ref(
-            GrannyMemberType::Inline,
-            "InitialPlacement",
-            build_transform_type(),
-        ),
+        tm(GrannyMemberType::Transform, "InitialPlacement"),
         tm_ref(
             GrannyMemberType::ReferenceToArray,
             "MeshBindings",
@@ -1070,50 +1189,201 @@ fn build_model_type(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
                 build_mesh_type(),
             )],
         ),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
     ]
 }
 
-/// Build the complete FileInfo type definition tree.
+/// Build the ArtToolInfo type definition matching the engine's at `0x141461330`.
+fn build_art_tool_info_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "FromArtToolName"),
+        tm(GrannyMemberType::Int32, "ArtToolMajorRevision"),
+        tm(GrannyMemberType::Int32, "ArtToolMinorRevision"),
+        tm(GrannyMemberType::Int32, "ArtToolPointerSize"),
+        tm(GrannyMemberType::Real32, "UnitsPerMeter"),
+        tm_real32_array("Origin", 3),
+        tm_real32_array("RightVector", 3),
+        tm_real32_array("UpVector", 3),
+        tm_real32_array("BackVector", 3),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
+}
+
+/// Build the ExporterInfo type definition matching the engine's at `0x1414611F0`.
+fn build_exporter_info_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "ExporterName"),
+        tm(GrannyMemberType::Int32, "ExporterMajorRevision"),
+        tm(GrannyMemberType::Int32, "ExporterMinorRevision"),
+        tm(GrannyMemberType::Int32, "ExporterCustomization"),
+        tm(GrannyMemberType::Int32, "ExporterBuildNumber"),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
+}
+
+/// Build the Texture type definition matching the engine's at `0x1414623F0`.
+fn build_texture_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "FromFileName"),
+        tm(GrannyMemberType::Int32, "TextureType"),
+        tm(GrannyMemberType::Int32, "Width"),
+        tm(GrannyMemberType::Int32, "Height"),
+        tm(GrannyMemberType::Int32, "Encoding"),
+        tm(GrannyMemberType::Int32, "SubFormat"),
+        tm_ref(
+            GrannyMemberType::Inline,
+            "Layout",
+            vec![
+                tm(GrannyMemberType::Int32, "BytesPerPixel"),
+                tm_int32_array("ShiftForComponent", 4),
+                tm_int32_array("BitsForComponent", 4),
+            ],
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "Images",
+            vec![tm_ref(
+                GrannyMemberType::ReferenceToArray,
+                "MIPLevels",
+                vec![
+                    tm(GrannyMemberType::Int32, "Stride"),
+                    tm_ref(
+                        GrannyMemberType::ReferenceToArray,
+                        "PixelBytes",
+                        vec![tm(GrannyMemberType::UInt8, "UInt8")],
+                    ),
+                ],
+            )],
+        ),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
+}
+
+/// Build the Material type definition matching the engine's at `0x141461E60`.
+fn build_material_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "Name"),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "Maps",
+            vec![
+                tm(GrannyMemberType::StringMember, "Usage"),
+                // Material.Maps[].Map is a circular Reference back to Material.
+                // We break the cycle by omitting the nested type (empty ref).
+                tm_ref(GrannyMemberType::Reference, "Map", Vec::new()),
+            ],
+        ),
+        tm_ref(GrannyMemberType::Reference, "Texture", build_texture_type()),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
+}
+
+/// Build the TrackGroup type definition matching the engine's at `0x14145CDA0`.
+fn build_track_group_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "Name"),
+        // VectorTracks, TransformTracks, etc. have deep nesting into curve data.
+        // We include the member names but use empty nested refs for curves.
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "VectorTracks",
+            Vec::new(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "TransformTracks",
+            Vec::new(),
+        ),
+        tm_ref(
+            GrannyMemberType::ReferenceToArray,
+            "TransformLODErrors",
+            Vec::new(),
+        ),
+        tm_ref(GrannyMemberType::ReferenceToArray, "TextTracks", Vec::new()),
+        tm(GrannyMemberType::Transform, "InitialPlacement"),
+        tm(GrannyMemberType::Int32, "AccumulationFlags"),
+        tm_real32_array("LoopTranslation", 3),
+        tm_ref(GrannyMemberType::Reference, "PeriodicLoop", Vec::new()),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
+}
+
+/// Build the Animation type definition matching the engine's at `0x141462890`.
+fn build_animation_type() -> Vec<GrannyTypeMember> {
+    vec![
+        tm(GrannyMemberType::StringMember, "Name"),
+        tm(GrannyMemberType::Real32, "Duration"),
+        tm(GrannyMemberType::Real32, "TimeStep"),
+        tm(GrannyMemberType::Real32, "Oversampling"),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "TrackGroups",
+            build_track_group_type(),
+        ),
+        tm(GrannyMemberType::Int32, "DefaultLoopCount"),
+        tm(GrannyMemberType::Int32, "Flags"),
+        tm(GrannyMemberType::VariantReference, "ExtendedData"),
+    ]
+}
+
+/// Build the complete FileInfo type definition tree matching the engine's
+/// hardcoded `GrannyFileInfoTypeDef` at `0x14145C7D0` → `0x141461B60`.
 ///
 /// This constructs the Granny2 schema matching the `file_info` struct layout:
 /// ```text
 /// struct file_info {
-///     art_tool_info *ArtToolInfo;          // Reference (empty)
-///     exporter_info *ExporterInfo;         // Reference (empty)
-///     char const *FromFileName;            // String
-///     int32 TextureCount; texture **Textures;         // ArrayOfReferences (empty)
-///     int32 MaterialCount; material **Materials;       // ArrayOfReferences (empty)
-///     int32 SkeletonCount; skeleton **Skeletons;       // ArrayOfReferences
-///     int32 VertexDataCount; vertex_data **VertexDatas; // ArrayOfReferences (empty)
-///     int32 TriTopologyCount; tri_topology **TriTopologies; // ArrayOfReferences (empty)
-///     int32 MeshCount; mesh **Meshes;                 // ArrayOfReferences
-///     int32 ModelCount; model **Models;               // ArrayOfReferences
-///     int32 TrackGroupCount; track_group **TrackGroups; // ArrayOfReferences (empty)
-///     int32 AnimationCount; animation **Animations;    // ArrayOfReferences (empty)
-///     variant ExtendedData;               // VariantReference
+///     art_tool_info *ArtToolInfo;       // Reference
+///     exporter_info *ExporterInfo;      // Reference
+///     char const *FromFileName;         // String
+///     texture **Textures;              // ArrayOfReferences
+///     material **Materials;            // ArrayOfReferences
+///     skeleton **Skeletons;            // ArrayOfReferences
+///     vertex_data **VertexDatas;       // ArrayOfReferences
+///     tri_topology **TriTopologies;    // ArrayOfReferences
+///     mesh **Meshes;                   // ArrayOfReferences
+///     model **Models;                  // ArrayOfReferences
+///     track_group **TrackGroups;       // ArrayOfReferences
+///     animation **Animations;          // ArrayOfReferences
+///     variant ExtendedData;            // VariantReference
 /// };
 /// ```
-fn build_file_info_type_tree(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
+fn build_file_info_type_tree() -> Vec<GrannyTypeMember> {
     vec![
-        tm_ref(GrannyMemberType::Reference, "ArtToolInfo", Vec::new()),
-        tm_ref(GrannyMemberType::Reference, "ExporterInfo", Vec::new()),
+        tm_ref(
+            GrannyMemberType::Reference,
+            "ArtToolInfo",
+            build_art_tool_info_type(),
+        ),
+        tm_ref(
+            GrannyMemberType::Reference,
+            "ExporterInfo",
+            build_exporter_info_type(),
+        ),
         tm(GrannyMemberType::StringMember, "FromFileName"),
-        tm_ref(GrannyMemberType::ArrayOfReferences, "Textures", Vec::new()),
-        tm_ref(GrannyMemberType::ArrayOfReferences, "Materials", Vec::new()),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "Textures",
+            build_texture_type(),
+        ),
+        tm_ref(
+            GrannyMemberType::ArrayOfReferences,
+            "Materials",
+            build_material_type(),
+        ),
         tm_ref(
             GrannyMemberType::ArrayOfReferences,
             "Skeletons",
-            build_skeleton_type(geom),
+            build_skeleton_type(),
         ),
         tm_ref(
             GrannyMemberType::ArrayOfReferences,
             "VertexDatas",
-            Vec::new(),
+            build_vertex_data_type(),
         ),
         tm_ref(
             GrannyMemberType::ArrayOfReferences,
             "TriTopologies",
-            Vec::new(),
+            build_tri_topology_type(),
         ),
         tm_ref(
             GrannyMemberType::ArrayOfReferences,
@@ -1123,17 +1393,17 @@ fn build_file_info_type_tree(geom: &UgxGeom) -> Vec<GrannyTypeMember> {
         tm_ref(
             GrannyMemberType::ArrayOfReferences,
             "Models",
-            build_model_type(geom),
+            build_model_type(),
         ),
         tm_ref(
             GrannyMemberType::ArrayOfReferences,
             "TrackGroups",
-            Vec::new(),
+            build_track_group_type(),
         ),
         tm_ref(
             GrannyMemberType::ArrayOfReferences,
             "Animations",
-            Vec::new(),
+            build_animation_type(),
         ),
         tm(GrannyMemberType::VariantReference, "ExtendedData"),
     ]

@@ -2759,75 +2759,75 @@ fn diagnose_chunk_diff_all() {
             if let (Ok(o700), Ok(r700)) = (
                 ecf_orig.chunk_data_by_id(0x700),
                 ecf_rt.chunk_data_by_id(0x700),
-            ) {
-                if o700.len() >= 64 && r700.len() >= 64 {
-                    let read_f32 = |d: &[u8], off: usize| -> f32 {
-                        f32::from_le_bytes([d[off], d[off + 1], d[off + 2], d[off + 3]])
-                    };
-                    let read_i16 =
-                        |d: &[u8], off: usize| -> i16 { i16::from_le_bytes([d[off], d[off + 1]]) };
+            ) && o700.len() >= 64
+                && r700.len() >= 64
+            {
+                let read_f32 = |d: &[u8], off: usize| -> f32 {
+                    f32::from_le_bytes([d[off], d[off + 1], d[off + 2], d[off + 3]])
+                };
+                let read_i16 =
+                    |d: &[u8], off: usize| -> i16 { i16::from_le_bytes([d[off], d[off + 1]]) };
 
-                    // signature @0, rigid_bone @4, sphere_center @8,12,16, sphere_radius @20
-                    // aabb_min @24,28,32, aabb_max @36,40,44
-                    // max_instances @48(i16), inst_idx_mul @50(i16), large_geom_bone @52(i16)
-                    // flags @54-57, padding @58-63
-                    let fields = [
-                        ("sphere_cx", 8),
-                        ("sphere_cy", 12),
-                        ("sphere_cz", 16),
-                        ("sphere_r", 20),
-                        ("aabb_min_x", 24),
-                        ("aabb_min_y", 28),
-                        ("aabb_min_z", 32),
-                        ("aabb_max_x", 36),
-                        ("aabb_max_y", 40),
-                        ("aabb_max_z", 44),
-                    ];
-                    let mut hdr_diffs = Vec::new();
-                    for &(name, off) in &fields {
-                        let ov = read_f32(&o700, off);
-                        let rv = read_f32(&r700, off);
-                        if (ov - rv).abs() > 1e-6 {
-                            hdr_diffs.push(format!(
-                                "    {name}: {ov:.6} -> {rv:.6} (delta={:.6})",
-                                (rv - ov)
-                            ));
-                        }
+                // signature @0, rigid_bone @4, sphere_center @8,12,16, sphere_radius @20
+                // aabb_min @24,28,32, aabb_max @36,40,44
+                // max_instances @48(i16), inst_idx_mul @50(i16), large_geom_bone @52(i16)
+                // flags @54-57, padding @58-63
+                let fields = [
+                    ("sphere_cx", 8),
+                    ("sphere_cy", 12),
+                    ("sphere_cz", 16),
+                    ("sphere_r", 20),
+                    ("aabb_min_x", 24),
+                    ("aabb_min_y", 28),
+                    ("aabb_min_z", 32),
+                    ("aabb_max_x", 36),
+                    ("aabb_max_y", 40),
+                    ("aabb_max_z", 44),
+                ];
+                let mut hdr_diffs = Vec::new();
+                for &(name, off) in &fields {
+                    let ov = read_f32(&o700, off);
+                    let rv = read_f32(&r700, off);
+                    if (ov - rv).abs() > 1e-6 {
+                        hdr_diffs.push(format!(
+                            "    {name}: {ov:.6} -> {rv:.6} (delta={:.6})",
+                            (rv - ov)
+                        ));
                     }
-                    // i16 fields
-                    let oi = read_i16(&o700, 48);
-                    let ri = read_i16(&r700, 48);
-                    if oi != ri {
-                        hdr_diffs.push(format!("    max_instances: {oi} -> {ri}"));
+                }
+                // i16 fields
+                let oi = read_i16(&o700, 48);
+                let ri = read_i16(&r700, 48);
+                if oi != ri {
+                    hdr_diffs.push(format!("    max_instances: {oi} -> {ri}"));
+                }
+                let oi = read_i16(&o700, 50);
+                let ri = read_i16(&r700, 50);
+                if oi != ri {
+                    hdr_diffs.push(format!("    inst_idx_mul: {oi} -> {ri}"));
+                }
+                // rigid_bone_index @4
+                let oi32 = i32::from_le_bytes([o700[4], o700[5], o700[6], o700[7]]);
+                let ri32 = i32::from_le_bytes([r700[4], r700[5], r700[6], r700[7]]);
+                if oi32 != ri32 {
+                    hdr_diffs.push(format!("    rigid_bone_index: {oi32} -> {ri32}"));
+                }
+                // flags byte @54-57
+                for i in 54..58 {
+                    if o700[i] != r700[i] {
+                        hdr_diffs.push(format!(
+                            "    flag_byte[{}]: {} -> {}",
+                            i - 54,
+                            o700[i],
+                            r700[i]
+                        ));
                     }
-                    let oi = read_i16(&o700, 50);
-                    let ri = read_i16(&r700, 50);
-                    if oi != ri {
-                        hdr_diffs.push(format!("    inst_idx_mul: {oi} -> {ri}"));
-                    }
-                    // rigid_bone_index @4
-                    let oi32 = i32::from_le_bytes([o700[4], o700[5], o700[6], o700[7]]);
-                    let ri32 = i32::from_le_bytes([r700[4], r700[5], r700[6], r700[7]]);
-                    if oi32 != ri32 {
-                        hdr_diffs.push(format!("    rigid_bone_index: {oi32} -> {ri32}"));
-                    }
-                    // flags byte @54-57
-                    for i in 54..58 {
-                        if o700[i] != r700[i] {
-                            hdr_diffs.push(format!(
-                                "    flag_byte[{}]: {} -> {}",
-                                i - 54,
-                                o700[i],
-                                r700[i]
-                            ));
-                        }
-                    }
+                }
 
-                    if !hdr_diffs.is_empty() {
-                        eprintln!("  Header diffs ({} fields):", hdr_diffs.len());
-                        for d in &hdr_diffs {
-                            eprintln!("{d}");
-                        }
+                if !hdr_diffs.is_empty() {
+                    eprintln!("  Header diffs ({} fields):", hdr_diffs.len());
+                    for d in &hdr_diffs {
+                        eprintln!("{d}");
                     }
                 }
             }
@@ -2935,14 +2935,14 @@ fn diagnose_chunk_diff_all() {
                 rt_ext,
                 imported.granny_bones.len()
             );
-            if let Some(b) = original.granny_bones.first() {
-                if let Some(ref ty) = b.extended_data_type {
-                    let type_names: Vec<_> = ty
-                        .iter()
-                        .map(|m| format!("{}:{:?}", m.name, m.member_type))
-                        .collect();
-                    eprintln!("  Granny orig bone[0] ext type: {:?}", type_names);
-                }
+            if let Some(b) = original.granny_bones.first()
+                && let Some(ref ty) = b.extended_data_type
+            {
+                let type_names: Vec<_> = ty
+                    .iter()
+                    .map(|m| format!("{}:{:?}", m.name, m.member_type))
+                    .collect();
+                eprintln!("  Granny orig bone[0] ext type: {:?}", type_names);
             }
 
             // Also check ECF header diffs
