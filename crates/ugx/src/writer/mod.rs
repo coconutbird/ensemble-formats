@@ -18,7 +18,7 @@ pub(crate) mod string_table;
 
 use alloc::vec::Vec;
 
-use ecf::io::WriteLe;
+use nostdio::WriteLe;
 
 use crate::constants::*;
 use crate::error::Result;

@@ -12,12 +12,12 @@
 
 use alloc::vec::Vec;
 
-use ecf::io::{MutCursor, Seek, SeekFrom, Write, WriteLe};
+use nostdio::{MutCursor, Seek, SeekFrom, Write, WriteLe};
 use zerocopy::IntoBytes;
 
 use crate::constants::EMPTY_OFFSET_SENTINEL_32;
 use crate::error::Result;
-use crate::types::raw::{AccessoryRaw, GeomHeaderRaw, PackedArrayRaw};
+use crate::types::raw::{AccessoryRaw, BVector3Raw, GeomHeaderRaw, PackedArrayRaw};
 use crate::types::{Accessory, UgxGeom, UgxVersion};
 
 /// Positions of the six packed-array header placeholders written after the
@@ -270,57 +270,51 @@ fn write_section_tail(
 ) -> Result<()> {
     match version {
         UgxVersion::Hw1 => {
-            // BoneRemap packed array (16 bytes)
-            let bone_remap_header_pos = cursor.stream_position()? as usize;
-            let bone_remap_arr = PackedArrayRaw {
-                count: (section.bone_remap.len() as u32).to_le_bytes(),
-                _padding: [0; 4],
-                offset: if section.bone_remap.is_empty() {
-                    (EMPTY_OFFSET_SENTINEL_32 as u64).to_le_bytes()
-                } else {
-                    0u64.to_le_bytes()
-                },
-            };
-            cursor.write_all(bone_remap_arr.as_bytes())?;
-            if !section.bone_remap.is_empty() {
-                bone_remap_fixups.push((bone_remap_header_pos, section_idx));
-            }
+            write_bone_remap_header(cursor, section, section_idx, bone_remap_fixups)?;
 
-            // UnivertPacker (84 bytes)
             write_packed_univert_packer(
                 cursor,
                 section.base_vert_packer.as_ref(),
                 packer_string_fixups,
             )?;
 
-            // Trailing flags (12 bytes)
             cursor.write_i32_le(if section.rigid_only { 1 } else { 0 })?;
             cursor.write_i32_le(if section.global_bones { 1 } else { 0 })?;
             cursor.write_i32_le(0)?; // padding
         }
         UgxVersion::Hw2 => {
-            // Flags first, then bone remap
             cursor.write_i32_le(if section.rigid_only { 1 } else { 0 })?;
             cursor.write_i32_le(if section.global_bones { 1 } else { 0 })?;
             cursor.write_i32_le(0)?; // unknown
             cursor.write_i32_le(0)?; // unknown2
 
-            // BoneRemap packed array (16 bytes)
-            let bone_remap_header_pos = cursor.stream_position()? as usize;
-            let bone_remap_arr = PackedArrayRaw {
-                count: (section.bone_remap.len() as u32).to_le_bytes(),
-                _padding: [0; 4],
-                offset: if section.bone_remap.is_empty() {
-                    (EMPTY_OFFSET_SENTINEL_32 as u64).to_le_bytes()
-                } else {
-                    0u64.to_le_bytes()
-                },
-            };
-            cursor.write_all(bone_remap_arr.as_bytes())?;
-            if !section.bone_remap.is_empty() {
-                bone_remap_fixups.push((bone_remap_header_pos, section_idx));
-            }
+            write_bone_remap_header(cursor, section, section_idx, bone_remap_fixups)?;
         }
+    }
+    Ok(())
+}
+
+/// Write a bone remap `PackedArrayRaw` placeholder (16 bytes) and register a
+/// fixup if the remap is non-empty.
+fn write_bone_remap_header(
+    cursor: &mut MutCursor<'_>,
+    section: &crate::types::Section,
+    section_idx: usize,
+    bone_remap_fixups: &mut Vec<(usize, usize)>,
+) -> Result<()> {
+    let header_pos = cursor.stream_position()? as usize;
+    let arr = PackedArrayRaw {
+        count: (section.bone_remap.len() as u32).to_le_bytes(),
+        _padding: [0; 4],
+        offset: if section.bone_remap.is_empty() {
+            (EMPTY_OFFSET_SENTINEL_32 as u64).to_le_bytes()
+        } else {
+            0u64.to_le_bytes()
+        },
+    };
+    cursor.write_all(arr.as_bytes())?;
+    if !section.bone_remap.is_empty() {
+        bone_remap_fixups.push((header_pos, section_idx));
     }
     Ok(())
 }
@@ -407,17 +401,13 @@ fn write_bone_bounds(cursor: &mut MutCursor<'_>, geom: &UgxGeom) -> Result<(u64,
     pad_to_alignment(cursor, 4)?;
     let low_offset = cursor.stream_position()?;
     for bb in &geom.bone_bounds {
-        for &v in &bb.min {
-            cursor.write_f32_le(v)?;
-        }
+        cursor.write_all(BVector3Raw::from(bb.min).as_bytes())?;
     }
 
     pad_to_alignment(cursor, 4)?;
     let high_offset = cursor.stream_position()?;
     for bb in &geom.bone_bounds {
-        for &v in &bb.max {
-            cursor.write_f32_le(v)?;
-        }
+        cursor.write_all(BVector3Raw::from(bb.max).as_bytes())?;
     }
 
     Ok((low_offset, high_offset, count))

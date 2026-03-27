@@ -230,6 +230,20 @@ impl Matrix4x4 {
     }
 }
 
+impl Matrix4x4 {
+    pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
+        let mut cur = SliceCursor::new(&data[*pos..]);
+        let mut rows = [[0.0f32; 4]; 4];
+        for row in &mut rows {
+            for col in row {
+                *col = cur.read_f32_le()?;
+            }
+        }
+        *pos += cur.position();
+        Ok(Self { rows })
+    }
+}
+
 impl QForm {
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let mut cur = SliceCursor::new(&data[*pos..]);

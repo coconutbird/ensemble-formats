@@ -9,7 +9,7 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::io::{MutCursor, Seek, SeekFrom, WriteLe};
+use nostdio::{MutCursor, Seek, SeekFrom, WriteLe};
 
 use crate::constants::{
     GRANNY_BONE_BINDING_SIZE, GRANNY_BONE_SIZE, GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION,

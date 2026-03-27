@@ -10,7 +10,9 @@ use zerocopy::Ref;
 
 use crate::constants::{EMPTY_OFFSET_SENTINEL, EMPTY_OFFSET_SENTINEL_32};
 use crate::error::{Error, Result};
-use crate::types::raw::{AccessoryRaw, PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw};
+use crate::types::raw::{
+    AccessoryRaw, BVector3Raw, PackedArrayRaw, PackedBoneRaw, PackedSectionFixedRaw,
+};
 use crate::types::{AABB, Accessory, Bone, Matrix4x4, Section, UgxVersion};
 use crate::vertex::element::VertexElementType;
 use crate::vertex::packer::UnivertPacker;
@@ -40,18 +42,19 @@ pub(super) fn read_packed_sections(
     let mut sections = Vec::with_capacity(count);
 
     for _ in 0..count {
-        let section = match version {
-            UgxVersion::Hw1 => read_packed_section_de(data, &mut sec_pos)?,
-            UgxVersion::Hw2 => read_packed_section_hw2(data, &mut sec_pos)?,
-        };
-        sections.push(section);
+        sections.push(read_packed_section(data, &mut sec_pos, version)?);
     }
 
     Ok(sections)
 }
 
-/// Read a single packed section in DE format (152 bytes).
-fn read_packed_section_de(data: &[u8], pos: &mut usize) -> Result<Section> {
+/// Read a single packed section (version-branched tail).
+///
+/// The first 40 bytes are shared between versions (`PackedSectionFixedRaw`).
+/// The trailing layout differs:
+/// - HW1/DE (112 bytes): bone_remap(16) + UnivertPacker(84) + flags(12)
+/// - HW2 (32 bytes): flags(8) + unknown(8) + bone_remap(16)
+fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Result<Section> {
     let (fixed, _): (Ref<_, PackedSectionFixedRaw>, _) =
         Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
             context: String::from("PackedSectionFixedRaw"),
@@ -68,26 +71,36 @@ fn read_packed_section_de(data: &[u8], pos: &mut usize) -> Result<Section> {
     let num_verts = i32::from_le_bytes(fixed.num_verts);
     *pos += core::mem::size_of::<PackedSectionFixedRaw>();
 
-    // +0x28: LocalToGlobalBoneRemap packed array (16 bytes)
-    let (remap_arr, _): (Ref<_, PackedArrayRaw>, _) =
-        Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
-            context: String::from("PackedArrayRaw bone_remap"),
-        })?;
-    let bone_remap_count = u32::from_le_bytes(remap_arr.count) as usize;
-    let bone_remap_offset = u64::from_le_bytes(remap_arr.offset) as usize;
-    *pos += core::mem::size_of::<PackedArrayRaw>();
-
-    let bone_remap = if bone_remap_count > 0
-        && bone_remap_offset != EMPTY_OFFSET_SENTINEL as usize
-        && bone_remap_offset + bone_remap_count <= data.len()
-    {
-        data[bone_remap_offset..bone_remap_offset + bone_remap_count].to_vec()
-    } else {
-        Vec::new()
+    let (bone_remap, base_vert_packer, rigid_only, global_bones) = match version {
+        UgxVersion::Hw1 => read_section_tail_hw1(data, pos)?,
+        UgxVersion::Hw2 => read_section_tail_hw2(data, pos)?,
     };
 
-    // +0x38: UnivertPacker (84 bytes)
-    let base_vert_packer = read_packed_univert_packer(data, pos)?;
+    Ok(Section {
+        material_index,
+        accessory_index,
+        max_bones,
+        rigid_bone_index,
+        ib_offset,
+        num_tris,
+        vb_offset,
+        vb_bytes,
+        vert_size,
+        num_verts,
+        base_vert_packer,
+        bone_remap,
+        rigid_only,
+        global_bones,
+    })
+}
+
+/// HW1/DE section tail: bone_remap(16) + UnivertPacker(84) + flags(12).
+fn read_section_tail_hw1(
+    data: &[u8],
+    pos: &mut usize,
+) -> Result<(Vec<u8>, Option<UnivertPacker>, bool, bool)> {
+    let bone_remap = read_bone_remap(data, pos)?;
+    let packer = read_packed_univert_packer(data, pos)?;
 
     let mut cur = SliceCursor::new(&data[*pos..]);
     let rigid_only = cur.read_i32_le()? != 0;
@@ -95,89 +108,41 @@ fn read_packed_section_de(data: &[u8], pos: &mut usize) -> Result<Section> {
     let _padding = cur.read_i32_le()?;
     *pos += cur.position();
 
-    Ok(Section {
-        material_index,
-        accessory_index,
-        max_bones,
-        rigid_bone_index,
-        ib_offset,
-        num_tris,
-        vb_offset,
-        vb_bytes,
-        vert_size,
-        num_verts,
-        base_vert_packer: Some(base_vert_packer),
-        bone_remap,
-        rigid_only,
-        global_bones,
-    })
+    Ok((bone_remap, Some(packer), rigid_only, global_bones))
 }
 
-/// Read a single packed section in HW2 format (72 bytes).
-///
-/// Layout: 40 bytes fixed fields + 8 bytes flags + 8 bytes unknown + 16 bytes bone_remap PA.
-/// No UnivertPacker (vertex format is determined externally in HW2).
-fn read_packed_section_hw2(data: &[u8], pos: &mut usize) -> Result<Section> {
-    let (fixed, _): (Ref<_, PackedSectionFixedRaw>, _) =
-        Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
-            context: String::from("PackedSectionFixedRaw (HW2)"),
-        })?;
-    let material_index = i32::from_le_bytes(fixed.material_index);
-    let accessory_index = i32::from_le_bytes(fixed.accessory_index);
-    let max_bones = i32::from_le_bytes(fixed.max_bones);
-    let rigid_bone_index = i32::from_le_bytes(fixed.rigid_bone_index);
-    let ib_offset = i32::from_le_bytes(fixed.ib_offset);
-    let num_tris = i32::from_le_bytes(fixed.num_tris);
-    let vb_offset = i32::from_le_bytes(fixed.vb_offset);
-    let vb_bytes = i32::from_le_bytes(fixed.vb_bytes);
-    let vert_size = i32::from_le_bytes(fixed.vert_size);
-    let num_verts = i32::from_le_bytes(fixed.num_verts);
-    *pos += core::mem::size_of::<PackedSectionFixedRaw>();
-
-    // +0x28: flags (8 bytes)
+/// HW2 section tail: flags(8) + unknown(8) + bone_remap(16).
+fn read_section_tail_hw2(
+    data: &[u8],
+    pos: &mut usize,
+) -> Result<(Vec<u8>, Option<UnivertPacker>, bool, bool)> {
     let mut cur = SliceCursor::new(&data[*pos..]);
     let rigid_only = cur.read_i32_le()? != 0;
     let global_bones = cur.read_i32_le()? != 0;
-
-    // +0x30: unknown (8 bytes) — skip
     let _unknown1 = cur.read_i32_le()?;
     let _unknown2 = cur.read_i32_le()?;
     *pos += cur.position();
 
-    // +0x38: BoneRemap packed array (16 bytes)
-    let (remap_arr, _): (Ref<_, PackedArrayRaw>, _) =
+    let bone_remap = read_bone_remap(data, pos)?;
+
+    Ok((bone_remap, None, rigid_only, global_bones))
+}
+
+/// Read a bone remap packed array: overlay `PackedArrayRaw`, resolve offset, copy bytes.
+fn read_bone_remap(data: &[u8], pos: &mut usize) -> Result<Vec<u8>> {
+    let (arr, _): (Ref<_, PackedArrayRaw>, _) =
         Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
-            context: String::from("PackedArrayRaw bone_remap (HW2)"),
+            context: String::from("PackedArrayRaw bone_remap"),
         })?;
-    let bone_remap_count = u32::from_le_bytes(remap_arr.count) as usize;
-    let bone_remap_offset = u64::from_le_bytes(remap_arr.offset) as usize;
+    let count = u32::from_le_bytes(arr.count) as usize;
+    let offset = u64::from_le_bytes(arr.offset) as usize;
     *pos += core::mem::size_of::<PackedArrayRaw>();
 
-    let bone_remap = if bone_remap_count > 0
-        && bone_remap_offset != EMPTY_OFFSET_SENTINEL as usize
-        && bone_remap_offset + bone_remap_count <= data.len()
-    {
-        data[bone_remap_offset..bone_remap_offset + bone_remap_count].to_vec()
+    if count > 0 && offset != EMPTY_OFFSET_SENTINEL as usize && offset + count <= data.len() {
+        Ok(data[offset..offset + count].to_vec())
     } else {
-        Vec::new()
-    };
-
-    Ok(Section {
-        material_index,
-        accessory_index,
-        max_bones,
-        rigid_bone_index,
-        ib_offset,
-        num_tris,
-        vb_offset,
-        vb_bytes,
-        vert_size,
-        num_verts,
-        base_vert_packer: None,
-        bone_remap,
-        rigid_only,
-        global_bones,
-    })
+        Ok(Vec::new())
+    }
 }
 
 /// Read packed UnivertPacker (84 bytes on-disk).
@@ -272,14 +237,7 @@ fn read_packed_bone(data: &[u8], pos: &mut usize) -> Result<Bone> {
         read_null_terminated_string(&data[name_offset..])
     };
 
-    let mut rows = [[0.0f32; 4]; 4];
-    for (i, row) in rows.iter_mut().enumerate() {
-        for (j, col) in row.iter_mut().enumerate() {
-            *col = f32::from_le_bytes(raw.model_to_bone[i * 4 + j]);
-        }
-    }
-
-    let model_to_bone = Matrix4x4 { rows };
+    let model_to_bone = Matrix4x4::from(&*raw);
     let parent_index = i32::from_le_bytes(raw.parent_index);
 
     Ok(Bone {
@@ -313,29 +271,29 @@ pub(super) fn read_bone_bounds(data: &[u8], pos: &mut usize) -> Result<Vec<AABB>
         return Ok(Vec::new());
     }
 
+    let vec3_size = core::mem::size_of::<BVector3Raw>();
     let mut bounds = Vec::with_capacity(low_count);
 
     for i in 0..low_count {
-        let low_pos = low_offset + i * 12;
-        let high_pos = high_offset + i * 12;
+        let low_pos = low_offset + i * vec3_size;
+        let high_pos = high_offset + i * vec3_size;
 
-        if low_pos + 12 > data.len() || high_pos + 12 > data.len() {
+        if low_pos + vec3_size > data.len() || high_pos + vec3_size > data.len() {
             break;
         }
 
-        let mut low_cur = SliceCursor::new(&data[low_pos..]);
-        let mut high_cur = SliceCursor::new(&data[high_pos..]);
+        let (lo, _): (Ref<_, BVector3Raw>, _) =
+            Ref::from_prefix(&data[low_pos..]).map_err(|_| Error::UnexpectedEof {
+                context: alloc::string::String::from("BVector3Raw boneBoundsLow"),
+            })?;
+        let (hi, _): (Ref<_, BVector3Raw>, _) =
+            Ref::from_prefix(&data[high_pos..]).map_err(|_| Error::UnexpectedEof {
+                context: alloc::string::String::from("BVector3Raw boneBoundsHigh"),
+            })?;
+
         bounds.push(AABB {
-            min: [
-                low_cur.read_f32_le()?,
-                low_cur.read_f32_le()?,
-                low_cur.read_f32_le()?,
-            ],
-            max: [
-                high_cur.read_f32_le()?,
-                high_cur.read_f32_le()?,
-                high_cur.read_f32_le()?,
-            ],
+            min: <[f32; 3]>::from(&*lo),
+            max: <[f32; 3]>::from(&*hi),
         });
     }
 

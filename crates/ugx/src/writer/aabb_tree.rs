@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 
-use ecf::io::WriteBe;
+use nostdio::WriteBe;
 
 use crate::error::Result;
 use crate::types::aabb_tree::{AABB_NULL_INDEX, AABB_TREE_VERSION, AabbTree, AabbTreeNode};

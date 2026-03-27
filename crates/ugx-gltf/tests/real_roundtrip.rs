@@ -126,47 +126,103 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
             );
         }
 
-        let ol = om.legacy().expect("expected legacy material in roundtrip");
-        let rl = rm.legacy().expect("expected legacy material in roundtrip");
-
-        if rl.blend_type != ol.blend_type {
-            fail!(
-                "{label}: material {mi} blend_type: {} vs {}",
-                rl.blend_type,
-                ol.blend_type
-            );
-        }
-
-        // Opacity survives as u8 (0–255) so allow ±1/255 tolerance
-        if (rl.opacity - ol.opacity).abs() > (2.0 / 255.0) {
-            fail!(
-                "{label}: material {mi} opacity: {} vs {}",
-                rl.opacity,
-                ol.opacity
-            );
-        }
-
-        // Check texture map names survive for each map type
-        for mt in ugx::MapType::ALL {
-            let idx = mt as usize;
-            if rl.maps[idx].len() != ol.maps[idx].len() {
-                fail!(
-                    "{label}: material {mi} map {:?} count: {} vs {}",
-                    mt,
-                    rl.maps[idx].len(),
-                    ol.maps[idx].len()
-                );
-            }
-
-            for (ti, (otex, rtex)) in ol.maps[idx].iter().zip(rl.maps[idx].iter()).enumerate() {
-                if rtex.name != otex.name {
+        match (&om.data, &rm.data) {
+            (ugx::MaterialData::Legacy(ol), ugx::MaterialData::Legacy(rl)) => {
+                if rl.blend_type != ol.blend_type {
                     fail!(
-                        "{label}: material {mi} map {:?}[{ti}] name: {:?} vs {:?}",
-                        mt,
-                        rtex.name,
-                        otex.name
+                        "{label}: material {mi} blend_type: {} vs {}",
+                        rl.blend_type,
+                        ol.blend_type
                     );
                 }
+
+                // Opacity survives as u8 (0–255) so allow ±1/255 tolerance
+                if (rl.opacity - ol.opacity).abs() > (2.0 / 255.0) {
+                    fail!(
+                        "{label}: material {mi} opacity: {} vs {}",
+                        rl.opacity,
+                        ol.opacity
+                    );
+                }
+
+                // Check texture map names survive for each map type
+                for mt in ugx::MapType::ALL {
+                    let idx = mt as usize;
+                    if rl.maps[idx].len() != ol.maps[idx].len() {
+                        fail!(
+                            "{label}: material {mi} map {:?} count: {} vs {}",
+                            mt,
+                            rl.maps[idx].len(),
+                            ol.maps[idx].len()
+                        );
+                    }
+
+                    for (ti, (otex, rtex)) in
+                        ol.maps[idx].iter().zip(rl.maps[idx].iter()).enumerate()
+                    {
+                        if rtex.name != otex.name {
+                            fail!(
+                                "{label}: material {mi} map {:?}[{ti}] name: {:?} vs {:?}",
+                                mt,
+                                rtex.name,
+                                otex.name
+                            );
+                        }
+                    }
+                }
+            }
+            (ugx::MaterialData::Hogan(oh), ugx::MaterialData::Hogan(rh)) => {
+                if rh.ufx_version != oh.ufx_version {
+                    fail!(
+                        "{label}: material {mi} ufx_version: {} vs {}",
+                        rh.ufx_version,
+                        oh.ufx_version
+                    );
+                }
+                if rh.blend_mode != oh.blend_mode {
+                    fail!(
+                        "{label}: material {mi} blend_mode: {} vs {}",
+                        rh.blend_mode,
+                        oh.blend_mode
+                    );
+                }
+                if rh.textures != oh.textures {
+                    fail!(
+                        "{label}: material {mi} textures: {:?} vs {:?}",
+                        rh.textures,
+                        oh.textures
+                    );
+                }
+                if rh.shader_permutations.len() != oh.shader_permutations.len() {
+                    fail!(
+                        "{label}: material {mi} shader_permutations count: {} vs {}",
+                        rh.shader_permutations.len(),
+                        oh.shader_permutations.len()
+                    );
+                }
+                for (pi, (op, rp)) in oh
+                    .shader_permutations
+                    .iter()
+                    .zip(rh.shader_permutations.iter())
+                    .enumerate()
+                {
+                    if rp.name != op.name || rp.hash != op.hash {
+                        fail!(
+                            "{label}: material {mi} perm[{pi}]: {:?}/0x{:X} vs {:?}/0x{:X}",
+                            rp.name,
+                            rp.hash,
+                            op.name,
+                            op.hash
+                        );
+                    }
+                }
+            }
+            _ => {
+                fail!(
+                    "{label}: material {mi} type mismatch: orig={} rt={}",
+                    if om.is_legacy() { "legacy" } else { "hogan" },
+                    if rm.is_legacy() { "legacy" } else { "hogan" }
+                );
             }
         }
     }
@@ -577,31 +633,31 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
         fail!("{label}: aabb_tree lost through roundtrip");
     }
 
-    // Material flags and UVW velocity
+    // Material flags and UVW velocity (legacy only; Hogan has no map-based UVW)
     for (mi, (om, rm)) in original
         .materials
         .iter()
         .zip(re_read.materials.iter())
         .enumerate()
     {
-        let ol = om.legacy().expect("expected legacy material");
-        let rl = rm.legacy().expect("expected legacy material");
-        if rl.flags != ol.flags {
-            fail!("{label}: material {mi} flags: {} vs {}", rl.flags, ol.flags);
-        }
-        for (ti, (ov, rv)) in ol
-            .uvw_velocity
-            .iter()
-            .zip(rl.uvw_velocity.iter())
-            .enumerate()
-        {
-            for c in 0..3 {
-                if (ov[c] - rv[c]).abs() > 1e-4 {
-                    fail!(
-                        "{label}: material {mi} uvw_vel[{ti}][{c}]: {} vs {}",
-                        ov[c],
-                        rv[c]
-                    );
+        if let (Some(ol), Some(rl)) = (om.legacy(), rm.legacy()) {
+            if rl.flags != ol.flags {
+                fail!("{label}: material {mi} flags: {} vs {}", rl.flags, ol.flags);
+            }
+            for (ti, (ov, rv)) in ol
+                .uvw_velocity
+                .iter()
+                .zip(rl.uvw_velocity.iter())
+                .enumerate()
+            {
+                for c in 0..3 {
+                    if (ov[c] - rv[c]).abs() > 1e-4 {
+                        fail!(
+                            "{label}: material {mi} uvw_vel[{ti}][{c}]: {} vs {}",
+                            ov[c],
+                            rv[c]
+                        );
+                    }
                 }
             }
         }

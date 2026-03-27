@@ -3,8 +3,15 @@
 //! These `zerocopy` overlay types define the exact binary layout of structures
 //! in the UGX file format. Both the reader (`FromBytes`) and writer (`IntoBytes`)
 //! use these as the single source of truth for on-disk layout.
+//!
+//! Domain-type conversions (`From` impls) are co-located here so that the
+//! mapping between on-disk layout and in-memory representation lives in one
+//! place.
 
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+
+use super::math::Matrix4x4;
+use super::primitives::{AABB, Sphere};
 
 /// Raw on-disk BUGXGeomHeader (64 bytes, little-endian).
 ///
@@ -90,4 +97,77 @@ pub(crate) struct PackedSectionFixedRaw {
     pub vb_bytes: [u8; 4],
     pub vert_size: [u8; 4],
     pub num_verts: [u8; 4],
+}
+/// Raw on-disk BVector3 (12 bytes, little-endian).
+///
+/// Used for bone-bounds min/max arrays in BCachedData.
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone, Copy)]
+#[repr(C)]
+pub(crate) struct BVector3Raw {
+    pub x: [u8; 4],
+    pub y: [u8; 4],
+    pub z: [u8; 4],
+}
+
+impl From<&BVector3Raw> for [f32; 3] {
+    fn from(raw: &BVector3Raw) -> Self {
+        [
+            f32::from_le_bytes(raw.x),
+            f32::from_le_bytes(raw.y),
+            f32::from_le_bytes(raw.z),
+        ]
+    }
+}
+
+impl From<[f32; 3]> for BVector3Raw {
+    fn from(v: [f32; 3]) -> Self {
+        Self {
+            x: v[0].to_le_bytes(),
+            y: v[1].to_le_bytes(),
+            z: v[2].to_le_bytes(),
+        }
+    }
+}
+
+impl From<&GeomHeaderRaw> for Sphere {
+    fn from(hdr: &GeomHeaderRaw) -> Self {
+        Self {
+            center: [
+                f32::from_le_bytes(hdr.sphere_center[0]),
+                f32::from_le_bytes(hdr.sphere_center[1]),
+                f32::from_le_bytes(hdr.sphere_center[2]),
+            ],
+            radius: f32::from_le_bytes(hdr.sphere_radius),
+        }
+    }
+}
+
+impl From<&GeomHeaderRaw> for AABB {
+    fn from(hdr: &GeomHeaderRaw) -> Self {
+        Self {
+            min: [
+                f32::from_le_bytes(hdr.aabb_min[0]),
+                f32::from_le_bytes(hdr.aabb_min[1]),
+                f32::from_le_bytes(hdr.aabb_min[2]),
+            ],
+            max: [
+                f32::from_le_bytes(hdr.aabb_max[0]),
+                f32::from_le_bytes(hdr.aabb_max[1]),
+                f32::from_le_bytes(hdr.aabb_max[2]),
+            ],
+        }
+    }
+}
+
+/// Extract a 4×4 row-major matrix from a `PackedBoneRaw` model-to-bone field.
+impl From<&PackedBoneRaw> for Matrix4x4 {
+    fn from(raw: &PackedBoneRaw) -> Self {
+        let mut rows = [[0.0f32; 4]; 4];
+        for (i, row) in rows.iter_mut().enumerate() {
+            for (j, col) in row.iter_mut().enumerate() {
+                *col = f32::from_le_bytes(raw.model_to_bone[i * 4 + j]);
+            }
+        }
+        Self { rows }
+    }
 }

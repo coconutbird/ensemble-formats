@@ -186,27 +186,8 @@ impl UgxGeom {
 
         let rigid_bone_index = i32::from_le_bytes(hdr.rigid_bone_index);
 
-        let bounding_sphere = Sphere {
-            center: [
-                f32::from_le_bytes(hdr.sphere_center[0]),
-                f32::from_le_bytes(hdr.sphere_center[1]),
-                f32::from_le_bytes(hdr.sphere_center[2]),
-            ],
-            radius: f32::from_le_bytes(hdr.sphere_radius),
-        };
-
-        let bounds = AABB {
-            min: [
-                f32::from_le_bytes(hdr.aabb_min[0]),
-                f32::from_le_bytes(hdr.aabb_min[1]),
-                f32::from_le_bytes(hdr.aabb_min[2]),
-            ],
-            max: [
-                f32::from_le_bytes(hdr.aabb_max[0]),
-                f32::from_le_bytes(hdr.aabb_max[1]),
-                f32::from_le_bytes(hdr.aabb_max[2]),
-            ],
-        };
+        let bounding_sphere = Sphere::from(&*hdr);
+        let bounds = AABB::from(&*hdr);
 
         let max_instances = i16::from_le_bytes(hdr.max_instances);
         let instance_index_multiplier = i16::from_le_bytes(hdr.instance_index_multiplier);

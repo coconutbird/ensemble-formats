@@ -25,10 +25,6 @@ const GRANNY_TYPE_DEF_STRIDE: usize = 44;
 /// Offset within a bone struct where ExtendedData starts (type_ptr + data_ptr).
 const GRANNY_BONE_EXTENDED_DATA_OFFSET: usize = 0x94;
 
-// ---------------------------------------------------------------------------
-// Granny2 type definition parser
-// ---------------------------------------------------------------------------
-
 /// Parse a `GrannyDataTypeDefinition[]` array starting at `offset` in `data`.
 ///
 /// Each entry is 44 bytes. The array is terminated by an entry with `MemberType == 0` (End).
@@ -123,10 +119,6 @@ fn compute_type_size(members: &[GrannyTypeMember]) -> usize {
     }
     total
 }
-
-// ---------------------------------------------------------------------------
-// Granny2 variant data parser
-// ---------------------------------------------------------------------------
 
 /// Parse variant data described by `members` from `data` starting at `offset`.
 ///
@@ -450,14 +442,8 @@ pub(super) fn parse_granny_bones(granny: &[u8]) -> Result<(Vec<GrannyBone>, u32)
             break;
         }
 
-        let mut sc = SliceCursor::new(&granny[iw_start..]);
-        let mut rows = [[0.0f32; 4]; 4];
-        for row in &mut rows {
-            for col in row {
-                *col = sc.read_f32_le()?;
-            }
-        }
-        let inverse_world_matrix = Matrix4x4 { rows };
+        let mut iw_pos = iw_start;
+        let inverse_world_matrix = Matrix4x4::read(granny, &mut iw_pos)?;
 
         // Parse LOD error at bone+0x90 (4 bytes)
         let mut sc = SliceCursor::new(&granny[bone_start + 0x90..]);
