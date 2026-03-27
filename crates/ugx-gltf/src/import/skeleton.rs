@@ -61,6 +61,7 @@ pub(crate) fn import_skeleton(
             if other_idx == joint_idx {
                 continue;
             }
+
             let other_node = &root.nodes[other_node_idx.value()];
             if let Some(ref children) = other_node.children
                 && children.iter().any(|c| c.value() == joint_node_idx.value())
@@ -88,59 +89,136 @@ pub(crate) fn import_skeleton(
             model_to_bone: model_to_bone.clone(),
         });
 
-        // Restore extended data from node extras if present
-        let (extended_data, extended_data_type) = read_bone_extras(&node.extras);
+        // Restore Granny bone metadata from node extras if present
+        let bone_extras = read_bone_extras(&node.extras);
 
         granny_bones.push(GrannyBone {
             name,
             parent_index,
-            local_transform: None,
+            local_transform: bone_extras.local_transform,
             inverse_world_matrix: model_to_bone,
-            lod_error: 0.0,
-            extended_data,
-            extended_data_type,
+            lod_error: bone_extras.lod_error,
+            extended_data: bone_extras.extended_data,
+            extended_data_type: bone_extras.extended_data_type,
         });
     }
 
     Ok((bones, granny_bones))
 }
 
-/// Read bone extended data from glTF node extras.
+/// Parsed bone extras from glTF node.
+struct BoneExtras {
+    extended_data: Option<ugx::GrannyVariant>,
+    extended_data_type: Option<Vec<ugx::GrannyTypeMember>>,
+    local_transform: Option<ugx::GrannyLocalTransform>,
+    lod_error: f32,
+}
+
+impl Default for BoneExtras {
+    fn default() -> Self {
+        Self {
+            extended_data: None,
+            extended_data_type: None,
+            local_transform: None,
+            lod_error: 0.0,
+        }
+    }
+}
+
+/// Read bone Granny metadata from glTF node extras.
 ///
-/// Returns `(extended_data, extended_data_type)` if the extras contain
-/// `granny_ext_type` and `granny_ext_data` keys written by our exporter.
-fn read_bone_extras(
-    extras: &gltf_json::Extras,
-) -> (
-    Option<ugx::GrannyVariant>,
-    Option<Vec<ugx::GrannyTypeMember>>,
-) {
+/// Reads extended data (type + variant), local_transform, and lod_error
+/// written by our exporter.
+fn read_bone_extras(extras: &gltf_json::Extras) -> BoneExtras {
     let raw = match extras.as_ref() {
         Some(raw) => raw,
-        None => return (None, None),
+        None => return BoneExtras::default(),
     };
 
     let val: serde_json::Value = match serde_json::from_str(raw.get()) {
         Ok(v) => v,
-        Err(_) => return (None, None),
+        Err(_) => return BoneExtras::default(),
     };
 
-    let type_val = match val.get("granny_ext_type") {
-        Some(v) => v,
-        None => return (None, None),
+    // Extended data
+    let (extended_data, extended_data_type) = if let (Some(type_val), Some(data_val)) =
+        (val.get("granny_ext_type"), val.get("granny_ext_data"))
+    {
+        if let Some(type_members) = json_to_type_members(type_val) {
+            let variant = json_to_variant(data_val, &type_members);
+            (variant, Some(type_members))
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
     };
 
-    let data_val = match val.get("granny_ext_data") {
-        Some(v) => v,
-        None => return (None, None),
-    };
+    // Local transform
+    let local_transform = val
+        .get("granny_local_transform")
+        .and_then(parse_local_transform);
 
-    let type_members = match json_to_type_members(type_val) {
-        Some(m) => m,
-        None => return (None, None),
-    };
+    // LOD error
+    let lod_error = val
+        .get("granny_lod_error")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as f32)
+        .unwrap_or(0.0);
 
-    let variant = json_to_variant(data_val, &type_members);
+    BoneExtras {
+        extended_data,
+        extended_data_type,
+        local_transform,
+        lod_error,
+    }
+}
 
-    (variant, Some(type_members))
+/// Parse a `GrannyLocalTransform` from a JSON object.
+fn parse_local_transform(val: &serde_json::Value) -> Option<ugx::GrannyLocalTransform> {
+    let flags = val.get("flags")?.as_u64()? as u32;
+
+    let pos_arr = val.get("position")?.as_array()?;
+    if pos_arr.len() != 3 {
+        return None;
+    }
+
+    let position = [
+        pos_arr[0].as_f64()? as f32,
+        pos_arr[1].as_f64()? as f32,
+        pos_arr[2].as_f64()? as f32,
+    ];
+
+    let ori_arr = val.get("orientation")?.as_array()?;
+    if ori_arr.len() != 4 {
+        return None;
+    }
+    let orientation = [
+        ori_arr[0].as_f64()? as f32,
+        ori_arr[1].as_f64()? as f32,
+        ori_arr[2].as_f64()? as f32,
+        ori_arr[3].as_f64()? as f32,
+    ];
+
+    let ss_arr = val.get("scale_shear")?.as_array()?;
+    if ss_arr.len() != 3 {
+        return None;
+    }
+    let mut scale_shear = [[0.0f32; 3]; 3];
+    for (r, row_val) in ss_arr.iter().enumerate() {
+        let row = row_val.as_array()?;
+        if row.len() != 3 {
+            return None;
+        }
+        for (c, v) in row.iter().enumerate() {
+            scale_shear[r][c] = v.as_f64()? as f32;
+        }
+    }
+
+    Some(ugx::GrannyLocalTransform {
+        flags,
+        position,
+        orientation,
+        scale_shear,
+    })
 }

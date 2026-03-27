@@ -433,19 +433,66 @@ pub(crate) fn create_skeleton_nodes_from_granny(
     (nodes, ibm_accessor_idx)
 }
 
-/// Build glTF node extras for a bone's extended data.
+/// Build glTF node extras for a bone's Granny data.
 ///
-/// Stores the Granny2 type definition and variant data as JSON so they
-/// survive a glTF roundtrip.
+/// Stores local_transform, lod_error, and extended data (type + variant)
+/// as JSON so they survive a glTF roundtrip.
 fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
-    let (Some(data), Some(type_members)) = (&bone.extended_data, &bone.extended_data_type) else {
+    let has_extended = bone.extended_data.is_some() && bone.extended_data_type.is_some();
+    let has_local_transform = bone.local_transform.is_some();
+    let has_lod_error = bone.lod_error != 0.0;
+
+    if !has_extended && !has_local_transform && !has_lod_error {
         return json::Extras::default();
-    };
+    }
 
     let mut map = serde_json::Map::new();
-    map.insert("granny_ext_type".into(), type_members_to_json(type_members));
-    map.insert("granny_ext_data".into(), variant_to_json(data));
+
+    // Extended data (type definition + variant values)
+    if let (Some(data), Some(type_members)) = (&bone.extended_data, &bone.extended_data_type) {
+        map.insert("granny_ext_type".into(), type_members_to_json(type_members));
+        map.insert("granny_ext_data".into(), variant_to_json(data));
+    }
+
+    // Local transform (68 bytes: flags + position + orientation + scale_shear)
+    if let Some(lt) = &bone.local_transform {
+        let mut lt_map = serde_json::Map::new();
+        lt_map.insert("flags".into(), serde_json::Value::Number(lt.flags.into()));
+        lt_map.insert(
+            "position".into(),
+            serde_json::Value::Array(lt.position.iter().map(|&v| json_f32(v)).collect()),
+        );
+        lt_map.insert(
+            "orientation".into(),
+            serde_json::Value::Array(lt.orientation.iter().map(|&v| json_f32(v)).collect()),
+        );
+        lt_map.insert(
+            "scale_shear".into(),
+            serde_json::Value::Array(
+                lt.scale_shear
+                    .iter()
+                    .map(|row| serde_json::Value::Array(row.iter().map(|&v| json_f32(v)).collect()))
+                    .collect(),
+            ),
+        );
+        map.insert(
+            "granny_local_transform".into(),
+            serde_json::Value::Object(lt_map),
+        );
+    }
+
+    // LOD error
+    if has_lod_error {
+        map.insert("granny_lod_error".into(), json_f32(bone.lod_error));
+    }
 
     let raw = serde_json::to_string(&serde_json::Value::Object(map)).unwrap();
     Some(serde_json::value::RawValue::from_string(raw).unwrap())
+}
+
+/// Convert an f32 to a JSON value, preserving exact float representation.
+fn json_f32(v: f32) -> serde_json::Value {
+    serde_json::Number::from_f64(v as f64)
+        .map(serde_json::Value::Number)
+        .unwrap_or(serde_json::Value::Null)
 }

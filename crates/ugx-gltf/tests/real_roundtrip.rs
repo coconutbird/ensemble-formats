@@ -387,6 +387,61 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
                 }
             }
         }
+
+        // local_transform bit-perfect check
+        match (&og.local_transform, &rg.local_transform) {
+            (Some(olt), Some(rlt)) => {
+                if olt.flags != rlt.flags {
+                    fail!(
+                        "{label}: granny_bone {bi} local_transform flags: {} vs {}",
+                        olt.flags,
+                        rlt.flags
+                    );
+                }
+                for i in 0..3 {
+                    if olt.position[i] != rlt.position[i] {
+                        fail!(
+                            "{label}: granny_bone {bi} local_transform position[{i}]: {} vs {}",
+                            olt.position[i],
+                            rlt.position[i]
+                        );
+                    }
+                }
+                for i in 0..4 {
+                    if olt.orientation[i] != rlt.orientation[i] {
+                        fail!(
+                            "{label}: granny_bone {bi} local_transform orientation[{i}]: {} vs {}",
+                            olt.orientation[i],
+                            rlt.orientation[i]
+                        );
+                    }
+                }
+                for r in 0..3 {
+                    for c in 0..3 {
+                        if olt.scale_shear[r][c] != rlt.scale_shear[r][c] {
+                            fail!(
+                                "{label}: granny_bone {bi} local_transform ss[{r}][{c}]: {} vs {}",
+                                olt.scale_shear[r][c],
+                                rlt.scale_shear[r][c]
+                            );
+                        }
+                    }
+                }
+            }
+            (Some(_), None) => {
+                fail!("{label}: granny_bone {bi} local_transform lost through roundtrip");
+            }
+            _ => {}
+        }
+
+        // lod_error check
+        if og.lod_error != rg.lod_error {
+            fail!(
+                "{label}: granny_bone {bi} lod_error: {} vs {}",
+                og.lod_error,
+                rg.lod_error
+            );
+        }
     }
 
     // Granny mesh bone binding OBBs — verify non-zero when original has them,
