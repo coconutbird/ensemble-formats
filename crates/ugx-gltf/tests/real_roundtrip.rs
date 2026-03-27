@@ -2871,6 +2871,21 @@ fn diagnose_chunk_diff_all() {
                                     }
                                 }
                             }
+                            // For materials, dump first 48 bytes of both
+                            if cid == 0x704 {
+                                let dump = |label: &str, d: &[u8]| {
+                                    eprint!("    {label}: ");
+                                    for (i, b) in d.iter().take(48).enumerate() {
+                                        eprint!("{b:02X} ");
+                                        if i == 27 {
+                                            eprint!("| ");
+                                        }
+                                    }
+                                    eprintln!();
+                                };
+                                dump("ORIG", &o);
+                                dump("  RT", &r);
+                            }
                         }
                     }
                     (Some(_), None) => eprintln!("  {cname} (0x{cid:03X}): MISSING in roundtrip"),

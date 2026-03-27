@@ -53,6 +53,8 @@ pub use node::{Attribute, Node};
 
 pub mod raw;
 
+pub mod checksum;
+
 mod compact;
 mod compact_writer;
 mod util;

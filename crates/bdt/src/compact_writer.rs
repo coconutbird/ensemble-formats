@@ -262,13 +262,15 @@ impl CompactCtx {
         let mut buf = Vec::with_capacity(total_size);
 
         // BPackedHeader (28 bytes)
+        // Byte 0: signature, Byte 1: version (0x07), Byte 2: header checksum (filled below),
+        // Byte 3: num_user_sections (0)
         let sig = if self.big_endian { 0xE3u8 } else { 0x3Eu8 };
         buf.push(sig);
-        buf.push(0); // version
-        buf.push(0); // flags
+        buf.push(0x07); // version — must be 0x07 for engine compatibility
+        buf.push(0); // header checksum placeholder (computed after header is complete)
         buf.push(0); // num_user_sections
 
-        // CRC (placeholder — not validated by the engine for materials)
+        // CRC-32 placeholder (filled after data section is written)
         self.write_u32(&mut buf, 0);
         // data_size
         self.write_u32(&mut buf, data_size as u32);
@@ -302,6 +304,23 @@ impl CompactCtx {
 
         // ValueData section
         buf.extend_from_slice(&self.value_data);
+
+        // Compute and fill CRC-32 over data section (bytes 28..)
+        let data_crc = crate::checksum::crc32(&buf[HEADER_SIZE..]);
+        let crc_bytes = if self.big_endian {
+            data_crc.to_be_bytes()
+        } else {
+            data_crc.to_le_bytes()
+        };
+        buf[4..8].copy_from_slice(&crc_bytes);
+
+        // Compute and fill header checksum (CRC-16/CCITT over 28-byte header with byte 2 zeroed)
+        let saved_byte2 = buf[2];
+        buf[2] = 0;
+        let hdr_crc = crate::checksum::crc16_ccitt(&buf[..HEADER_SIZE]);
+        buf[2] = saved_byte2;
+        // Store low byte of CRC-16 result as the checksum byte
+        buf[2] = hdr_crc as u8;
 
         Ok(buf)
     }
