@@ -171,14 +171,31 @@ fn build_hogan_node(hogan: &crate::types::HoganMaterialData) -> bdt::Node {
         bdt::Variant::Bool(hogan.terrain_blending),
     ));
 
-    // Child nodes: VSCBData, PSCBData, textures
-    let mut vscb = bdt::Node::new("VSCBData");
-    vscb.text = bdt::Variant::UInt(hogan.vs_cb_data);
-    node.children.push(vscb);
+    // Child nodes: constant buffer data blobs + textures.
+    //
+    // CB data is stored as BDT "string" nodes containing raw binary.
+    // Only emit non-empty blobs to keep the output lean.
+    fn push_cb_node(parent: &mut bdt::Node, name: &str, data: &[u8]) {
+        if data.is_empty() {
+            // Write a UInt(0) placeholder like the engine expects for empty CB data.
+            let mut n = bdt::Node::new(name);
+            n.text = bdt::Variant::UInt(0);
+            parent.children.push(n);
+        } else {
+            let mut n = bdt::Node::new(name);
+            // Store raw bytes as a String variant. Non-UTF-8 bytes will be
+            // lossily converted — see HoganMaterialData docs for details.
+            n.text =
+                bdt::Variant::String(alloc::string::String::from_utf8_lossy(data).into_owned());
+            parent.children.push(n);
+        }
+    }
 
-    let mut pscb = bdt::Node::new("PSCBData");
-    pscb.text = bdt::Variant::UInt(hogan.ps_cb_data);
-    node.children.push(pscb);
+    push_cb_node(&mut node, "VSCBData", &hogan.vs_cb_data);
+    push_cb_node(&mut node, "PSCBData", &hogan.ps_cb_data);
+    push_cb_node(&mut node, "HSCBData", &hogan.hs_cb_data);
+    push_cb_node(&mut node, "DSCBData", &hogan.ds_cb_data);
+    push_cb_node(&mut node, "GSCBData", &hogan.gs_cb_data);
 
     let mut tex = bdt::Node::new("textures");
     tex.text = bdt::Variant::String(hogan.textures.clone());

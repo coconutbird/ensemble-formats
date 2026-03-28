@@ -24,6 +24,7 @@
 pub mod aabb_tree;
 pub mod accessory;
 pub mod bone;
+pub mod convert;
 pub mod geom;
 pub mod granny;
 pub mod material;

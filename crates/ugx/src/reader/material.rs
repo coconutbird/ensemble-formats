@@ -161,14 +161,20 @@ fn read_hogan_material(node: &bdt::Node) -> HoganMaterialData {
         .map(|a| variant_to_bool(&a.value))
         .unwrap_or(false);
 
-    let mut vs_cb_data = 0u32;
-    let mut ps_cb_data = 0u32;
+    let mut vs_cb_data = Vec::new();
+    let mut ps_cb_data = Vec::new();
+    let mut hs_cb_data = Vec::new();
+    let mut ds_cb_data = Vec::new();
+    let mut gs_cb_data = Vec::new();
     let mut textures = String::new();
 
     for child in &node.children {
         match child.name.as_str() {
-            "VSCBData" => vs_cb_data = variant_to_u32(&child.text),
-            "PSCBData" => ps_cb_data = variant_to_u32(&child.text),
+            "VSCBData" => vs_cb_data = variant_to_bytes(&child.text),
+            "PSCBData" => ps_cb_data = variant_to_bytes(&child.text),
+            "HSCBData" => hs_cb_data = variant_to_bytes(&child.text),
+            "DSCBData" => ds_cb_data = variant_to_bytes(&child.text),
+            "GSCBData" => gs_cb_data = variant_to_bytes(&child.text),
             "textures" => textures = child.text.to_string_value(),
             _ => {}
         }
@@ -183,6 +189,9 @@ fn read_hogan_material(node: &bdt::Node) -> HoganMaterialData {
         terrain_blending,
         vs_cb_data,
         ps_cb_data,
+        hs_cb_data,
+        ds_cb_data,
+        gs_cb_data,
         textures,
     }
 }
@@ -228,5 +237,24 @@ fn variant_to_bool(v: &bdt::Variant) -> bool {
         bdt::Variant::UInt(u) => *u != 0,
         bdt::Variant::Int(i) => *i != 0,
         _ => false,
+    }
+}
+
+/// Extract raw bytes from a BDT variant used for constant buffer data.
+///
+/// CB data is stored as a BDT "string" node containing raw binary. Because
+/// the BDT reader decodes strings via `from_utf8_lossy`, non-UTF-8 binary
+/// data may have been corrupted. A future `Bytes` variant would fix this.
+fn variant_to_bytes(v: &bdt::Variant) -> Vec<u8> {
+    match v {
+        bdt::Variant::String(s) | bdt::Variant::UString(s) => s.as_bytes().to_vec(),
+        bdt::Variant::UInt(u) => {
+            if *u == 0 {
+                Vec::new()
+            } else {
+                u.to_le_bytes().to_vec()
+            }
+        }
+        _ => Vec::new(),
     }
 }

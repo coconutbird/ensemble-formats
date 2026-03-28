@@ -1,0 +1,667 @@
+{
+  "hogan_standard": [
+    {
+      "count": 310,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000A83009A0",
+          "hash": "0x86AE70DF"
+        },
+        {
+          "bitmask": "00020000A85009A0",
+          "hash": "0x1F5E2608"
+        },
+        {
+          "bitmask": "000A0000A80009A0",
+          "hash": "0xAAE1DB40"
+        },
+        {
+          "bitmask": "001A0000A80009A0",
+          "hash": "0x447762FA"
+        }
+      ]
+    },
+    {
+      "count": 285,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000D83009A0",
+          "hash": "0x42822065"
+        },
+        {
+          "bitmask": "00020000D85009A0",
+          "hash": "0x8969151F"
+        },
+        {
+          "bitmask": "000A0000D80009A0",
+          "hash": "0xDF49BCAD"
+        },
+        {
+          "bitmask": "001A0000D80009A0",
+          "hash": "0x96C18B19"
+        }
+      ]
+    },
+    {
+      "count": 269,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000D8000984",
+          "hash": "0x451F4295"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 215,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000A8000984",
+          "hash": "0xF7BAF48A"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 98,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000583009A0",
+          "hash": "0xCB1F784C"
+        },
+        {
+          "bitmask": "00020000585009A0",
+          "hash": "0x2AEDEA09"
+        },
+        {
+          "bitmask": "000A0000580009A0",
+          "hash": "0xB8BDAF7E"
+        },
+        {
+          "bitmask": "001A0000580009A0",
+          "hash": "0xC5F08438"
+        }
+      ]
+    },
+    {
+      "count": 46,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000003009A0",
+          "hash": "0x3BCDD519"
+        },
+        {
+          "bitmask": "00020000005009A0",
+          "hash": "0x26589B69"
+        },
+        {
+          "bitmask": "000A0000000009A0",
+          "hash": "0x908D5F6E"
+        },
+        {
+          "bitmask": "001A0000000009A0",
+          "hash": "0x362FCB27"
+        }
+      ]
+    },
+    {
+      "count": 30,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000003009A0",
+          "hash": "0xE0EE7237"
+        },
+        {
+          "bitmask": "00000000005009A0",
+          "hash": "0xC98E08E5"
+        },
+        {
+          "bitmask": "00080000000009A0",
+          "hash": "0xE682B5DC"
+        },
+        {
+          "bitmask": "00180000000009A0",
+          "hash": "0x48C4BEEB"
+        }
+      ]
+    },
+    {
+      "count": 24,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000000009A1",
+          "hash": "0xC921C2AC"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 19,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0002000000000984",
+          "hash": "0xCB3A7590"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 15,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0000100000300960",
+          "hash": "0xE3613C40"
+        },
+        {
+          "bitmask": "0000100000500960",
+          "hash": "0x622660CF"
+        },
+        {
+          "bitmask": "0008100000000960",
+          "hash": "0xAA2E8DE7"
+        },
+        {
+          "bitmask": "0018100000000960",
+          "hash": "0x10926225"
+        }
+      ]
+    },
+    {
+      "count": 13,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Emissive_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000001003009A0",
+          "hash": "0x53FB51B4"
+        },
+        {
+          "bitmask": "00000001005009A0",
+          "hash": "0x86370E06"
+        },
+        {
+          "bitmask": "00080001000009A0",
+          "hash": "0x6A08D4EB"
+        },
+        {
+          "bitmask": "00180001000009A0",
+          "hash": "0xD54598F9"
+        }
+      ],
+      "note": "skinned"
+    },
+    {
+      "count": 13,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000D83009A0",
+          "hash": "0x9E7A33A2"
+        },
+        {
+          "bitmask": "00000000D85009A0",
+          "hash": "0x596605E8"
+        },
+        {
+          "bitmask": "00080000D80009A0",
+          "hash": "0xD1895760"
+        },
+        {
+          "bitmask": "00180000D80009A0",
+          "hash": "0x9004E0E0"
+        }
+      ]
+    },
+    {
+      "count": 13,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000583009A0",
+          "hash": "0x192FC530"
+        },
+        {
+          "bitmask": "00000000585009A0",
+          "hash": "0x6F0A0FFA"
+        },
+        {
+          "bitmask": "00080000580009A0",
+          "hash": "0x5D0A3EC1"
+        },
+        {
+          "bitmask": "00180000580009A0",
+          "hash": "0xCF9611F1"
+        }
+      ]
+    },
+    {
+      "count": 10,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000D8000984",
+          "hash": "0xD20DFD28"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 9,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000A83009A0",
+          "hash": "0x91416FB9"
+        },
+        {
+          "bitmask": "00000000A85009A0",
+          "hash": "0xBC431066"
+        },
+        {
+          "bitmask": "00080000A80009A0",
+          "hash": "0xB168B741"
+        },
+        {
+          "bitmask": "00180000A80009A0",
+          "hash": "0x94750ADE"
+        }
+      ]
+    },
+    {
+      "count": 8,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0000000000300960",
+          "hash": "0x59F3C212"
+        },
+        {
+          "bitmask": "0000000000500960",
+          "hash": "0x4B4630F5"
+        },
+        {
+          "bitmask": "0008000000000960",
+          "hash": "0x45DBB146"
+        },
+        {
+          "bitmask": "0018000000000960",
+          "hash": "0x452DBB83"
+        }
+      ]
+    },
+    {
+      "count": 4,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000183009A0",
+          "hash": "0x5578C15A"
+        },
+        {
+          "bitmask": "00020000185009A0",
+          "hash": "0xF92159D6"
+        },
+        {
+          "bitmask": "000A0000180009A0",
+          "hash": "0x4451375C"
+        },
+        {
+          "bitmask": "001A0000180009A0",
+          "hash": "0x10DFC2F1"
+        }
+      ]
+    },
+    {
+      "count": 3,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0000000000000984",
+          "hash": "0xF669CD3F"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 2,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000A8300960",
+          "hash": "0xF3DCCF8A"
+        },
+        {
+          "bitmask": "00000000A8500960",
+          "hash": "0x686B3580"
+        },
+        {
+          "bitmask": "00080000A8000960",
+          "hash": "0xD6142241"
+        },
+        {
+          "bitmask": "00180000A8000960",
+          "hash": "0x1CAD77D7"
+        }
+      ]
+    },
+    {
+      "count": 2,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000A8000944",
+          "hash": "0xEACC56F7"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 2,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000D8300CA0",
+          "hash": "0x67F0636C"
+        },
+        {
+          "bitmask": "00020000D8500CA0",
+          "hash": "0x94894AE9"
+        },
+        {
+          "bitmask": "000A0000D8000CA0",
+          "hash": "0x99EAEA50"
+        },
+        {
+          "bitmask": "001A0000D8000CA0",
+          "hash": "0xBCD64CDE"
+        }
+      ]
+    },
+    {
+      "count": 2,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00020000D8000C84",
+          "hash": "0x1142EB13"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 2,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0000000000000944",
+          "hash": "0xD5AC6D44"
+        }
+      ],
+      "note": "single-slot"
+    },
+    {
+      "count": 1,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Sand_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000A8000984",
+          "hash": "0xECA2D0A0"
+        }
+      ],
+      "note": "single-slot"
+    }
+  ],
+  "hogan_decal": [
+    {
+      "count": 33,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0000000000000017",
+          "hash": "0x28485613"
+        }
+      ]
+    },
+    {
+      "count": 8,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0000000000001017",
+          "hash": "0xA4D53CDC"
+        }
+      ]
+    },
+    {
+      "count": 8,
+      "textures": [
+        "Albedo_Map",
+        "BRDF_Parameter_Map",
+        "Normal_Map",
+        "Specular_Reflectance"
+      ],
+      "perms": [
+        {
+          "bitmask": "0000000000004017",
+          "hash": "0xE2DF3360"
+        }
+      ]
+    }
+  ],
+  "hogan_water": [
+    {
+      "count": 19,
+      "textures": [
+        "Foam_Map",
+        "Normal_Map",
+        "WaveMask_Map"
+      ],
+      "perms": [
+        {
+          "bitmask": "000000000203A015",
+          "hash": "0xC60ADB46"
+        }
+      ]
+    },
+    {
+      "count": 13,
+      "textures": [
+        "Flow_Map",
+        "Foam_Map",
+        "Normal_Map",
+        "Secondary_Normal_Map"
+      ],
+      "perms": [
+        {
+          "bitmask": "000000000081BCAB",
+          "hash": "0xE094DBDA"
+        }
+      ]
+    },
+    {
+      "count": 9,
+      "textures": [
+        "AlphaMask_Map",
+        "Foam_Map",
+        "Normal_Map",
+        "Secondary_Normal_Map"
+      ],
+      "perms": [
+        {
+          "bitmask": "00000000009FE495",
+          "hash": "0xADA18659"
+        }
+      ]
+    },
+    {
+      "count": 1,
+      "textures": [
+        "Flow_Map",
+        "Foam_Map",
+        "Normal_Map",
+        "Secondary_Normal_Map"
+      ],
+      "perms": [
+        {
+          "bitmask": "000000000081BCB3",
+          "hash": "0x9A72CC11"
+        }
+      ]
+    }
+  ]
+}

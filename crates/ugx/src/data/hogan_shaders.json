@@ -1,0 +1,3048 @@
+{
+  "hogan_decal": {
+    "0000000000000015": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000017": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000019": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000001015": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000001017": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000001019": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000004015": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000004017": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000004019": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "000000000000401B": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000005015": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000069015": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Shoreline_Map",
+      "Specular_Reflectance"
+    ]
+  },
+  "hogan_standard": {
+    "0000000000000944": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000948": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000950": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000988": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000990": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000000009A1": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000C50": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000000C90": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300900": [],
+    "0000000000300944": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300948": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300988": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000003009A1": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000003009E0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000300DA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000005009E0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000500D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000500DA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000B00960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000B009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000D00960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000000D009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000008000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000008000990": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000083009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000008300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000085009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000008500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000018000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000183009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000018300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000185009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000018500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000283009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000028300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000285009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000028500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000383009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000385009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000048000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000048300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000483009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000048300D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000048500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000485009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000048500D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000058000990": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000583009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000585009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000088000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000883009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000885009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000098000990": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000983009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000098300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000985009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000098500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000A8000944": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000A8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000A8300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000A83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000A8500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000A85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000B8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000B83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000B85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000C8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000C83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000C85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000D8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000D83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000D85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000E8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000E83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000E85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000F8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000F83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000000F85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100000988": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100000990": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100300904": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100300920": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100300944": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001003009E0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100500920": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001005009E0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000100500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001183009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001185009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000138000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001383009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001385009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001983009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000001985009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000300300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000003003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000300300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000300500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000003005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000300500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000005003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000005005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000800000990": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000008003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000008005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000900000990": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000900000D48": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000900300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000009003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000900300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000900500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000009005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000900500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000918300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000918300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000918500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000918500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000B003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000000B005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000011003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Emissive_ThresholdMap",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000011005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Emissive_ThresholdMap",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000003300300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Emissive_ThresholdMap",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000003300500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Emissive_ThresholdMap",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004000000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004000000C84": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004000300984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000040003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004000300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000040005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004000500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000040083009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000040085009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000040183009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000040185009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004100000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004100300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004100300984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004100500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004118000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041183009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041185009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004128000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041283009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041285009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041383009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000041385009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004300300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0000004300500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000049003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000049005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "000000C100000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "000000C100300984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "000000C1003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance",
+      "Transmission_Map"
+    ],
+    "000000C1005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance",
+      "Transmission_Map"
+    ],
+    "0000010000000948": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000000988": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000300988": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000100003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000100005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010000500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100000988": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000101003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100300DA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000101005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010100500DA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000103003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000103005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000105003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000105005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000010900000D48": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000109003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000109005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000013300300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Emissive_ThresholdMap",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000013300500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Emissive_ThresholdMap",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000141183009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000141185009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00000149003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000149005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000181003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance",
+      "Transmission_Map"
+    ],
+    "00000181005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance",
+      "Transmission_Map"
+    ],
+    "00000200003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000200005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000300003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000300005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000301003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000301005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000309003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000309005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000341003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000341005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00000381003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance",
+      "Transmission_Map"
+    ],
+    "00000381005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance",
+      "Transmission_Map"
+    ],
+    "00000601003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000601005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000709003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000709005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000A0002B009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000A0002D009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000B09003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00000B09005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000300962": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00001000003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000300D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000500962": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00001000005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000500D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000B00D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100000D00D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00001009003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100900300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00001009005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000100900500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00004000003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00004000005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000300D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000500D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000B00D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500000D00D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500008B00C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0000500008D00C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00008000003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00008000005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00008100003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00008100005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000000000944": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000000000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000000300984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000008000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000083009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000008300D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000085009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000008500D60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000183009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000185009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000583009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000585009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000088000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000883009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000885009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000A8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000A83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000A85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000C8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000C83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000C85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D8000984": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D8000C84": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D8300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D83009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D8300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D8500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D85009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020000D8500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00020009003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00020009005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000B003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002000B005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002100000300962": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002100000500962": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002110000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002110000300962": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002110000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0002110000500962": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0003004100B009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0003004100D009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040000003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000300C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000300CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040000005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000500C60": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000500CA0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000B009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000000D009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040000383009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "00040000385009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000100300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040001003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000100500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040001005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000300300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000300500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000500300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000500500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000900300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040009003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004000900500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040009005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004004000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0004004000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0004004008300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0004004008500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0004004100300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0004004100500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "0004010000300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040100003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004010000500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040100005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004010100300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040101003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004010100500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040101005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004010300300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004010300500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040301003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040301005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040309003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040309005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040341003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00040341005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Specular_Reflectance"
+    ],
+    "00040709003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040709005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040B09003009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "00040B09005009A0": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Specular_Reflectance"
+    ],
+    "0004104118300960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0004104118500960": [
+      "Albedo_Map",
+      "BRDF_Parameter_Map",
+      "DissolveMask",
+      "Emissive_Map",
+      "Normal_Map",
+      "Parallax_Map",
+      "Sand_Map",
+      "Specular_Reflectance"
+    ],
+    "0008000000000960": ["Albedo_Map"],
+    "00080000000009A0": [],
+    "00080000000009E0": ["Albedo_Map"],
+    "0008000000000C60": ["Albedo_Map"],
+    "0008000000000CA0": [],
+    "0008000000000D60": ["Albedo_Map"],
+    "0008000000000DA0": [],
+    "0008000000800960": ["Albedo_Map"],
+    "00080000008009A0": [],
+    "00080000080009A0": [],
+    "0008000008000CA0": [],
+    "00080000180009A0": [],
+    "0008000018000CA0": [],
+    "00080000280009A0": [],
+    "0008000028000CA0": [],
+    "00080000380009A0": [],
+    "0008000048000960": ["Albedo_Map"],
+    "00080000480009A0": [],
+    "0008000048000D60": ["Albedo_Map"],
+    "00080000580009A0": [],
+    "00080000880009A0": [],
+    "00080000980009A0": [],
+    "0008000098000CA0": [],
+    "00080000A8000960": ["Albedo_Map"],
+    "00080000A80009A0": [],
+    "00080000B80009A0": [],
+    "00080000C80009A0": [],
+    "00080000D80009A0": [],
+    "00080000E80009A0": [],
+    "00080000F80009A0": [],
+    "0008000100000920": [],
+    "0008000100000960": ["Albedo_Map"],
+    "00080001000009A0": [],
+    "00080001000009E0": ["Albedo_Map"],
+    "0008000100000C60": ["Albedo_Map"],
+    "0008000100000CA0": [],
+    "00080001180009A0": [],
+    "00080001380009A0": [],
+    "00080001980009A0": [],
+    "0008000300000960": ["Albedo_Map"],
+    "00080003000009A0": [],
+    "0008000300000CA0": [],
+    "00080005000009A0": [],
+    "00080008000009A0": [],
+    "0008000900000960": ["Albedo_Map"],
+    "00080009000009A0": [],
+    "0008000900000C60": ["Albedo_Map"],
+    "0008000918000C60": ["Albedo_Map"],
+    "0008000918000CA0": [],
+    "0008000B000009A0": [],
+    "00080011000009A0": [],
+    "0008003300000960": ["Albedo_Map"],
+    "00080040000009A0": [],
+    "0008004000000CA0": [],
+    "00080040080009A0": [],
+    "00080040180009A0": [],
+    "0008004100000960": ["Albedo_Map", "Parallax_Map"],
+    "00080041000009A0": [],
+    "00080041180009A0": [],
+    "00080041280009A0": [],
+    "00080041380009A0": [],
+    "0008004300000960": ["Albedo_Map", "Parallax_Map"],
+    "00080049000009A0": [],
+    "000800C1000009A0": [],
+    "0008010000000960": ["Albedo_Map"],
+    "00080100000009A0": [],
+    "0008010000000C60": ["Albedo_Map"],
+    "0008010000000CA0": [],
+    "0008010100000960": ["Albedo_Map"],
+    "00080101000009A0": [],
+    "0008010100000C60": ["Albedo_Map"],
+    "0008010100000CA0": [],
+    "0008010100000DA0": [],
+    "00080103000009A0": [],
+    "00080105000009A0": [],
+    "00080109000009A0": [],
+    "0008013300000960": ["Albedo_Map"],
+    "00080141180009A0": [],
+    "00080149000009A0": [],
+    "00080181000009A0": [],
+    "00080200000009A0": [],
+    "00080300000009A0": [],
+    "00080301000009A0": [],
+    "00080309000009A0": [],
+    "00080341000009A0": [],
+    "00080381000009A0": [],
+    "00080601000009A0": [],
+    "00080709000009A0": [],
+    "00080A00028009A0": [],
+    "00080B09000009A0": [],
+    "0008100000000960": ["Albedo_Map"],
+    "0008100000000962": ["Albedo_Map"],
+    "00081000000009A0": [],
+    "0008100000000C60": ["Albedo_Map"],
+    "0008100000000D60": ["Albedo_Map"],
+    "0008100000800D60": ["Albedo_Map"],
+    "00081009000009A0": [],
+    "0008100900000C60": ["Albedo_Map"],
+    "00084000000009A0": [],
+    "0008500000000960": ["Albedo_Map"],
+    "0008500000000C60": ["Albedo_Map"],
+    "0008500000000D60": ["Albedo_Map"],
+    "0008500000800D60": ["Albedo_Map"],
+    "0008500008800C60": ["Albedo_Map"],
+    "00088000000009A0": [],
+    "00088100000009A0": [],
+    "000A000000000960": ["Albedo_Map"],
+    "000A0000000009A0": [],
+    "000A0000080009A0": [],
+    "000A000008000D60": ["Albedo_Map"],
+    "000A0000180009A0": [],
+    "000A0000580009A0": [],
+    "000A0000880009A0": [],
+    "000A0000A80009A0": [],
+    "000A0000C80009A0": [],
+    "000A0000D8000960": ["Albedo_Map"],
+    "000A0000D80009A0": [],
+    "000A0000D8000CA0": [],
+    "000A0009000009A0": [],
+    "000A000B000009A0": [],
+    "000A100000000962": ["Albedo_Map"],
+    "000A110000000960": ["Albedo_Map"],
+    "000A110000000962": ["Albedo_Map"],
+    "000B0041008009A0": [],
+    "000C000000000960": ["Albedo_Map", "DissolveMask"],
+    "000C0000000009A0": ["DissolveMask"],
+    "000C000000000C60": ["Albedo_Map", "DissolveMask"],
+    "000C000000000CA0": ["DissolveMask"],
+    "000C0000008009A0": ["DissolveMask"],
+    "000C0000380009A0": ["DissolveMask"],
+    "000C000100000960": ["Albedo_Map", "DissolveMask"],
+    "000C0001000009A0": ["DissolveMask"],
+    "000C000300000960": ["Albedo_Map", "DissolveMask"],
+    "000C000500000960": ["Albedo_Map", "DissolveMask"],
+    "000C000900000960": ["Albedo_Map", "DissolveMask"],
+    "000C0009000009A0": ["DissolveMask"],
+    "000C004000000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "000C004008000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "000C004100000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "000C010000000960": ["Albedo_Map", "DissolveMask"],
+    "000C0100000009A0": ["DissolveMask"],
+    "000C010100000960": ["Albedo_Map", "DissolveMask"],
+    "000C0101000009A0": ["DissolveMask"],
+    "000C010300000960": ["Albedo_Map", "DissolveMask"],
+    "000C0301000009A0": ["DissolveMask"],
+    "000C0309000009A0": ["DissolveMask"],
+    "000C0341000009A0": ["DissolveMask", "Parallax_Map"],
+    "000C0709000009A0": ["DissolveMask"],
+    "000C0B09000009A0": ["DissolveMask"],
+    "000C104118000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "0018000000000960": ["Albedo_Map"],
+    "00180000000009A0": [],
+    "00180000000009E0": ["Albedo_Map"],
+    "0018000000000C60": ["Albedo_Map"],
+    "0018000000000CA0": [],
+    "0018000000000D60": ["Albedo_Map"],
+    "0018000000000DA0": [],
+    "0018000000800960": ["Albedo_Map"],
+    "00180000008009A0": [],
+    "00180000080009A0": [],
+    "0018000008000CA0": [],
+    "00180000180009A0": [],
+    "0018000018000CA0": [],
+    "00180000280009A0": [],
+    "0018000028000CA0": [],
+    "00180000380009A0": [],
+    "0018000048000960": ["Albedo_Map"],
+    "00180000480009A0": [],
+    "0018000048000D60": ["Albedo_Map"],
+    "00180000580009A0": [],
+    "00180000880009A0": [],
+    "00180000980009A0": [],
+    "0018000098000CA0": [],
+    "00180000A8000960": ["Albedo_Map"],
+    "00180000A80009A0": [],
+    "00180000B80009A0": [],
+    "00180000C80009A0": [],
+    "00180000D80009A0": [],
+    "00180000E80009A0": [],
+    "00180000F80009A0": [],
+    "0018000100000920": [],
+    "0018000100000960": ["Albedo_Map"],
+    "00180001000009A0": [],
+    "00180001000009E0": ["Albedo_Map"],
+    "0018000100000C60": ["Albedo_Map"],
+    "0018000100000CA0": [],
+    "00180001180009A0": [],
+    "00180001380009A0": [],
+    "00180001980009A0": [],
+    "0018000300000960": ["Albedo_Map"],
+    "00180003000009A0": [],
+    "0018000300000CA0": [],
+    "00180005000009A0": [],
+    "00180008000009A0": [],
+    "0018000900000960": ["Albedo_Map"],
+    "00180009000009A0": [],
+    "0018000900000C60": ["Albedo_Map"],
+    "0018000918000C60": ["Albedo_Map"],
+    "0018000918000CA0": [],
+    "0018000B000009A0": [],
+    "00180011000009A0": [],
+    "0018003300000960": ["Albedo_Map"],
+    "00180040000009A0": [],
+    "0018004000000CA0": [],
+    "00180040080009A0": [],
+    "00180040180009A0": [],
+    "0018004100000960": ["Albedo_Map", "Parallax_Map"],
+    "00180041000009A0": [],
+    "00180041180009A0": [],
+    "00180041280009A0": [],
+    "00180041380009A0": [],
+    "0018004300000960": ["Albedo_Map", "Parallax_Map"],
+    "00180049000009A0": [],
+    "001800C1000009A0": [],
+    "0018010000000960": ["Albedo_Map"],
+    "00180100000009A0": [],
+    "0018010000000C60": ["Albedo_Map"],
+    "0018010000000CA0": [],
+    "0018010100000960": ["Albedo_Map"],
+    "00180101000009A0": [],
+    "0018010100000C60": ["Albedo_Map"],
+    "0018010100000CA0": [],
+    "0018010100000DA0": [],
+    "00180103000009A0": [],
+    "00180105000009A0": [],
+    "00180109000009A0": [],
+    "0018013300000960": ["Albedo_Map"],
+    "00180141180009A0": [],
+    "00180149000009A0": [],
+    "00180181000009A0": [],
+    "00180200000009A0": [],
+    "00180300000009A0": [],
+    "00180301000009A0": [],
+    "00180309000009A0": [],
+    "00180341000009A0": [],
+    "00180381000009A0": [],
+    "00180601000009A0": [],
+    "00180709000009A0": [],
+    "00180A00028009A0": [],
+    "00180B09000009A0": [],
+    "0018100000000960": ["Albedo_Map"],
+    "0018100000000962": ["Albedo_Map"],
+    "00181000000009A0": [],
+    "0018100000000C60": ["Albedo_Map"],
+    "0018100000000D60": ["Albedo_Map"],
+    "0018100000800D60": ["Albedo_Map"],
+    "00181009000009A0": [],
+    "0018100900000C60": ["Albedo_Map"],
+    "00184000000009A0": [],
+    "0018500000000960": ["Albedo_Map"],
+    "0018500000000C60": ["Albedo_Map"],
+    "0018500000000D60": ["Albedo_Map"],
+    "0018500000800D60": ["Albedo_Map"],
+    "0018500008800C60": ["Albedo_Map"],
+    "00188000000009A0": [],
+    "00188100000009A0": [],
+    "001A000000000960": ["Albedo_Map"],
+    "001A0000000009A0": [],
+    "001A0000080009A0": [],
+    "001A000008000D60": ["Albedo_Map"],
+    "001A0000180009A0": [],
+    "001A0000580009A0": [],
+    "001A0000880009A0": [],
+    "001A0000A80009A0": [],
+    "001A0000C80009A0": [],
+    "001A0000D8000960": ["Albedo_Map"],
+    "001A0000D80009A0": [],
+    "001A0000D8000CA0": [],
+    "001A0009000009A0": [],
+    "001A000B000009A0": [],
+    "001A100000000962": ["Albedo_Map"],
+    "001A110000000960": ["Albedo_Map"],
+    "001A110000000962": ["Albedo_Map"],
+    "001B0041008009A0": [],
+    "001C000000000960": ["Albedo_Map", "DissolveMask"],
+    "001C0000000009A0": ["DissolveMask"],
+    "001C000000000C60": ["Albedo_Map", "DissolveMask"],
+    "001C000000000CA0": ["DissolveMask"],
+    "001C0000008009A0": ["DissolveMask"],
+    "001C0000380009A0": ["DissolveMask"],
+    "001C000100000960": ["Albedo_Map", "DissolveMask"],
+    "001C0001000009A0": ["DissolveMask"],
+    "001C000300000960": ["Albedo_Map", "DissolveMask"],
+    "001C000500000960": ["Albedo_Map", "DissolveMask"],
+    "001C000900000960": ["Albedo_Map", "DissolveMask"],
+    "001C0009000009A0": ["DissolveMask"],
+    "001C004000000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "001C004008000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "001C004100000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "001C010000000960": ["Albedo_Map", "DissolveMask"],
+    "001C0100000009A0": ["DissolveMask"],
+    "001C010100000960": ["Albedo_Map", "DissolveMask"],
+    "001C0101000009A0": ["DissolveMask"],
+    "001C010300000960": ["Albedo_Map", "DissolveMask"],
+    "001C0301000009A0": ["DissolveMask"],
+    "001C0309000009A0": ["DissolveMask"],
+    "001C0341000009A0": ["DissolveMask", "Parallax_Map"],
+    "001C0709000009A0": ["DissolveMask"],
+    "001C0B09000009A0": ["DissolveMask"],
+    "001C104118000960": ["Albedo_Map", "DissolveMask", "Parallax_Map"],
+    "0020000000000960": ["Albedo_Map"],
+    "00200000000009A0": [],
+    "0020000000000C60": ["Albedo_Map"],
+    "0020000000000CA0": [],
+    "0020000000300960": ["Albedo_Map"],
+    "00200000003009A0": [],
+    "00200000080009A0": [],
+    "00200000580009A0": [],
+    "00200000980009A0": [],
+    "00200001000009A0": [],
+    "00200008000009A0": [],
+    "00200009000009A0": [],
+    "0020000900000D60": ["Albedo_Map"],
+    "0020010000000960": ["Albedo_Map"],
+    "00200100000009A0": [],
+    "00200100003009A0": [],
+    "00200101000009A0": [],
+    "0020010900000D60": ["Albedo_Map"]
+  },
+  "hogan_water": {
+    "000000000003ACAB": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "00000000000BA495": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000017A4B5": [
+      "AlphaMask_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "0000000000800032": ["Normal_Map"],
+    "00000000008002AB": ["Normal_Map", "Secondary_Normal_Map"],
+    "00000000008002B3": ["Normal_Map", "Secondary_Normal_Map"],
+    "0000000000801CAB": ["Flow_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "0000000000803CAB": ["Flow_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000080A493": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000081A48B": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000081A493": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000081A4AB": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000081A4B3": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000081BAAB": [
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000081BCAB": [
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000081BCB3": [
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000083A2AB": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000083A4AB": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "00000000008BA48B": ["Foam_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "0000000000901AAB": [
+      "AlphaMask_Map",
+      "Flow_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000091A4AB": [
+      "AlphaMask_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000091A4B5": [
+      "AlphaMask_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000091BCAB": [
+      "AlphaMask_Map",
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000091BCB3": [
+      "AlphaMask_Map",
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000091BCB5": [
+      "AlphaMask_Map",
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "00000000009BA495": [
+      "AlphaMask_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "00000000009FE015": ["AlphaMask_Map", "Foam_Map", "Normal_Map"],
+    "00000000009FE495": [
+      "AlphaMask_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "0000000000B1BCAB": [
+      "AlphaMask_Map",
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "0000000000B3BCAB": [
+      "AlphaMask_Map",
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "0000000000B3BCB5": [
+      "AlphaMask_Map",
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "000000000181BCAB": [
+      "Flow_Map",
+      "Foam_Map",
+      "Normal_Map",
+      "Secondary_Normal_Map"
+    ],
+    "00000000019024AB": ["AlphaMask_Map", "Normal_Map", "Secondary_Normal_Map"],
+    "000000000203A015": ["Foam_Map", "Normal_Map", "WaveMask_Map"]
+  }
+}

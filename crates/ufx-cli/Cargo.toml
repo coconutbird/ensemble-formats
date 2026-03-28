@@ -1,0 +1,17 @@
+[package]
+name = "ufx-cli"
+description = "Command-line tool for UFX (compiled shader) files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ufx"
+path = "src/main.rs"
+
+[dependencies]
+ufx = { workspace = true }
+d3dasm = { workspace = true }
+clap = { workspace = true }

@@ -145,8 +145,12 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                     hogan.skinned, hogan.terrain_blending, hogan.shadow_requires_consts
                 );
                 println!(
-                    "      vs_cb_data={}, ps_cb_data={}",
-                    hogan.vs_cb_data, hogan.ps_cb_data
+                    "      vs_cb={} ps_cb={} hs_cb={} ds_cb={} gs_cb={} bytes",
+                    hogan.vs_cb_data.len(),
+                    hogan.ps_cb_data.len(),
+                    hogan.hs_cb_data.len(),
+                    hogan.ds_cb_data.len(),
+                    hogan.gs_cb_data.len(),
                 );
                 println!("      textures: {}", hogan.textures);
             }

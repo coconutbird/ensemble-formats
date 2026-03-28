@@ -113,10 +113,24 @@ pub struct HoganMaterialData {
     pub skinned: bool,
     /// Whether terrain blending is enabled.
     pub terrain_blending: bool,
-    /// Vertex shader constant buffer data (0 = none).
-    pub vs_cb_data: u32,
-    /// Pixel shader constant buffer data (0 = none).
-    pub ps_cb_data: u32,
+    /// Vertex shader constant buffer initialization data.
+    ///
+    /// Raw binary blob stored as a BDT "string" node. The engine allocates a
+    /// buffer, then `memcpy`s this data into the VS constant buffer before
+    /// rendering.  Empty means the shader uses its compiled-in defaults.
+    ///
+    /// **Note:** BDT currently decodes all "string" nodes via
+    /// `from_utf8_lossy`, so non-UTF-8 binary data may be corrupted on
+    /// roundtrip.  A future `Bytes` variant would fix this.
+    pub vs_cb_data: Vec<u8>,
+    /// Pixel shader constant buffer initialization data (see [`vs_cb_data`](Self::vs_cb_data)).
+    pub ps_cb_data: Vec<u8>,
+    /// Hull shader constant buffer initialization data (see [`vs_cb_data`](Self::vs_cb_data)).
+    pub hs_cb_data: Vec<u8>,
+    /// Domain shader constant buffer initialization data (see [`vs_cb_data`](Self::vs_cb_data)).
+    pub ds_cb_data: Vec<u8>,
+    /// Geometry shader constant buffer initialization data (see [`vs_cb_data`](Self::vs_cb_data)).
+    pub gs_cb_data: Vec<u8>,
     /// Texture path pattern (e.g. `"bespoke\\archetypes\\...\\model_[al]"`).
     pub textures: String,
 }

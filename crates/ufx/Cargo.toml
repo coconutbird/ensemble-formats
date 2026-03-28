@@ -1,0 +1,12 @@
+[package]
+name = "ufx"
+description = "Parser for the UFXS container format used by Halo Wars 2 compiled shaders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+d3dasm.workspace = true
+nostdio.workspace = true

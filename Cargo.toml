@@ -15,12 +15,14 @@ members = [
     "crates/era-cli",
     "crates/xmb-cli",
     "crates/ugx-cli",
-    "crates/nostdio",
+
     "crates/pkg",
     "crates/pkg-cli",
     "crates/bdt-serde",
     "crates/xmb-serde",
     "crates/test-utils",
+    "crates/ufx",
+    "crates/ufx-cli",
 ]
 
 [workspace.package]
@@ -36,7 +38,7 @@ bdt = { path = "crates/bdt" }
 bdt-serde = { path = "crates/bdt-serde" }
 ddx = { path = "crates/ddx" }
 ecf = { path = "crates/ecf" }
-nostdio = { path = "crates/nostdio" }
+nostdio = "0.1"
 era = { path = "crates/era" }
 uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
@@ -49,8 +51,11 @@ xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }
 ugx-cli = { path = "crates/ugx-cli" }
 pkg = { path = "crates/pkg" }
+ufx = { path = "crates/ufx" }
+ufx-cli = { path = "crates/ufx-cli" }
 
 # External dependencies
+d3dasm = { git = "https://github.com/coconutbird/d3dasm.git" }
 byteorder = "1.5"
 texture2ddecoder = "0.1"
 flate2 = "1.0"

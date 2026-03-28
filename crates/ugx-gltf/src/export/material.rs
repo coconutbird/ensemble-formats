@@ -9,7 +9,9 @@ use json::validation::Checked::Valid;
 use ugx::types::MaterialData;
 use ugx::{MapType, Material};
 
-use crate::extras::{HoganExtrasJson, MapEntryJson, MaterialExtrasJson, ShaderPermJson};
+use crate::extras::{
+    HoganExtrasJson, MapEntryJson, MaterialExtrasJson, ShaderPermJson, cb_bytes_to_params,
+};
 
 /// Build glTF material extras JSON for UGX-specific data.
 ///
@@ -76,8 +78,11 @@ pub(super) fn build_material_extras(mat: &Material) -> json::Extras {
                 shadow_requires_consts: hogan.shadow_requires_consts,
                 skinned: hogan.skinned,
                 terrain_blending: hogan.terrain_blending,
-                vs_cb_data: hogan.vs_cb_data,
-                ps_cb_data: hogan.ps_cb_data,
+                vs_params: cb_bytes_to_params(&hogan.vs_cb_data),
+                ps_params: cb_bytes_to_params(&hogan.ps_cb_data),
+                hs_params: cb_bytes_to_params(&hogan.hs_cb_data),
+                ds_params: cb_bytes_to_params(&hogan.ds_cb_data),
+                gs_params: cb_bytes_to_params(&hogan.gs_cb_data),
                 textures: hogan.textures.clone(),
             });
         }

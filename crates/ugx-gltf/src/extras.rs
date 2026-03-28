@@ -71,12 +71,53 @@ pub(crate) struct HoganExtrasJson {
     pub skinned: bool,
     #[serde(default)]
     pub terrain_blending: bool,
-    #[serde(default)]
-    pub vs_cb_data: u32,
-    #[serde(default)]
-    pub ps_cb_data: u32,
+    /// Vertex shader runtime parameters as ordered float4 arrays.
+    /// Each entry is one `rp_parameter_vs[N]` (16 bytes = 4 floats).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vs_params: Vec<[f32; 4]>,
+    /// Pixel shader runtime parameters as ordered float4 arrays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ps_params: Vec<[f32; 4]>,
+    /// Hull shader runtime parameters as ordered float4 arrays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hs_params: Vec<[f32; 4]>,
+    /// Domain shader runtime parameters as ordered float4 arrays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ds_params: Vec<[f32; 4]>,
+    /// Geometry shader runtime parameters as ordered float4 arrays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gs_params: Vec<[f32; 4]>,
     #[serde(default)]
     pub textures: String,
+}
+
+/// Decode raw CB bytes into float4 parameter arrays.
+///
+/// Each 16-byte chunk becomes one `[f32; 4]` entry.
+/// Trailing bytes that don't fill a complete float4 are ignored.
+pub(crate) fn cb_bytes_to_params(data: &[u8]) -> Vec<[f32; 4]> {
+    data.chunks_exact(16)
+        .map(|chunk| {
+            [
+                f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+                f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]),
+                f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]),
+                f32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]),
+            ]
+        })
+        .collect()
+}
+
+/// Encode float4 parameter arrays back into raw CB bytes.
+pub(crate) fn params_to_cb_bytes(params: &[[f32; 4]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(params.len() * 16);
+    for p in params {
+        out.extend_from_slice(&p[0].to_le_bytes());
+        out.extend_from_slice(&p[1].to_le_bytes());
+        out.extend_from_slice(&p[2].to_le_bytes());
+        out.extend_from_slice(&p[3].to_le_bytes());
+    }
+    out
 }
 
 /// Shader permutation entry.

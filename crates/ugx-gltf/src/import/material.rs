@@ -219,6 +219,7 @@ fn read_material_extras(
 
     // Hogan
     if let Some(h) = ext.ugx_hogan {
+        use crate::extras::params_to_cb_bytes;
         result.hogan = Some(HoganMaterialData {
             shader_permutations: h
                 .shader_permutations
@@ -233,8 +234,11 @@ fn read_material_extras(
             shadow_requires_consts: h.shadow_requires_consts,
             skinned: h.skinned,
             terrain_blending: h.terrain_blending,
-            vs_cb_data: h.vs_cb_data,
-            ps_cb_data: h.ps_cb_data,
+            vs_cb_data: params_to_cb_bytes(&h.vs_params),
+            ps_cb_data: params_to_cb_bytes(&h.ps_params),
+            hs_cb_data: params_to_cb_bytes(&h.hs_params),
+            ds_cb_data: params_to_cb_bytes(&h.ds_params),
+            gs_cb_data: params_to_cb_bytes(&h.gs_params),
             textures: h.textures,
         });
     }

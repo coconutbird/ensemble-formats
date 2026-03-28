@@ -40,8 +40,8 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
-
 root/
+d3dasm/
 
 # Environment
 .env
