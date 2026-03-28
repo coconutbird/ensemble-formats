@@ -70,6 +70,8 @@ pub(crate) fn read_accessor_f32(
     let element_size = components * component_size;
     let actual_stride = stride.unwrap_or(element_size);
 
+    let eof = || Error::UnsupportedFormat("Accessor reads past end of buffer".into());
+
     let mut result = Vec::with_capacity(count * components);
     for i in 0..count {
         let elem_offset = byte_offset + i * actual_stride;
@@ -80,21 +82,42 @@ pub(crate) fn read_accessor_f32(
                     gltf_json::accessor::GenericComponentType(ct),
                 ) => match ct {
                     gltf_json::accessor::ComponentType::F32 => {
-                        f32::from_le_bytes(buffer_bytes[offset..offset + 4].try_into().unwrap())
+                        let b: [u8; 4] = buffer_bytes
+                            .get(offset..offset + 4)
+                            .ok_or_else(eof)?
+                            .try_into()
+                            .map_err(|_| eof())?;
+                        f32::from_le_bytes(b)
                     }
-                    gltf_json::accessor::ComponentType::U8 => buffer_bytes[offset] as f32,
+                    gltf_json::accessor::ComponentType::U8 => {
+                        *buffer_bytes.get(offset).ok_or_else(eof)? as f32
+                    }
                     gltf_json::accessor::ComponentType::U16 => {
-                        u16::from_le_bytes(buffer_bytes[offset..offset + 2].try_into().unwrap())
-                            as f32
+                        let b: [u8; 2] = buffer_bytes
+                            .get(offset..offset + 2)
+                            .ok_or_else(eof)?
+                            .try_into()
+                            .map_err(|_| eof())?;
+                        u16::from_le_bytes(b) as f32
                     }
-                    gltf_json::accessor::ComponentType::I8 => buffer_bytes[offset] as i8 as f32,
+                    gltf_json::accessor::ComponentType::I8 => {
+                        *buffer_bytes.get(offset).ok_or_else(eof)? as i8 as f32
+                    }
                     gltf_json::accessor::ComponentType::I16 => {
-                        i16::from_le_bytes(buffer_bytes[offset..offset + 2].try_into().unwrap())
-                            as f32
+                        let b: [u8; 2] = buffer_bytes
+                            .get(offset..offset + 2)
+                            .ok_or_else(eof)?
+                            .try_into()
+                            .map_err(|_| eof())?;
+                        i16::from_le_bytes(b) as f32
                     }
                     gltf_json::accessor::ComponentType::U32 => {
-                        u32::from_le_bytes(buffer_bytes[offset..offset + 4].try_into().unwrap())
-                            as f32
+                        let b: [u8; 4] = buffer_bytes
+                            .get(offset..offset + 4)
+                            .ok_or_else(eof)?
+                            .try_into()
+                            .map_err(|_| eof())?;
+                        u32::from_le_bytes(b) as f32
                     }
                 },
                 _ => 0.0,
