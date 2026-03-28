@@ -1,10 +1,10 @@
 //! AABB tree chunk (0x705) parser.
 //!
 //! Reads the streamed AABB tree format loaded by `BAABBTree_load` (`0x1406b5090`)
-//! in xgameFinal.exe (DE). Node parsing verified against
+//! in xgameFinal.exe (HW1). Node parsing verified against
 //! `BAABBTreeNode_readFromStream` (`0x1406b4f90`).
 //!
-//! Some HW1 DE ERA archives contain big-endian AABB tree data.
+//! Some HW1 HW1 ERA archives contain big-endian AABB tree data.
 //! `BAABBTree_load` handles this via a stream endianness flag (`a1[3] & 0x80`).
 //! We detect endianness by checking whether the version field reads correctly
 //! as LE; if not, we try BE and read all fields in big-endian byte order.

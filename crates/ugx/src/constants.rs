@@ -41,7 +41,7 @@ pub(crate) const GEOM_HEADER_SIGNATURE_HW1: u32 = 0xC2340004;
 
 /// BCachedData header signature for Halo Wars 2 (version 6).
 ///
-/// Key differences from DE:
+/// Key differences from HW1:
 /// - Sections are 72 bytes (no UnivertPacker) instead of 152 bytes.
 /// - Valid accessories are stored as 4-byte indices instead of 24-byte structs.
 /// - AABB tree chunk (0x705) is absent from all HW2 UGX files.
@@ -51,7 +51,7 @@ pub(crate) const GEOM_HEADER_SIGNATURE_HW2: u32 = 0xC2340006;
 // Binary layout sizes (bytes)
 // ---------------------------------------------------------------------------
 
-/// Section stride for HW1/DE: 40B fixed + 16B bone_remap + 84B packer + 12B flags.
+/// Section stride for HW1: 40B fixed + 16B bone_remap + 84B packer + 12B flags.
 pub(crate) const SECTION_STRIDE_HW1: usize = 152;
 
 /// Section stride for HW2: 40B fixed + 8B flags + 8B unknown + 16B bone_remap.

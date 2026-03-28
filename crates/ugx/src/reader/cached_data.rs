@@ -1,7 +1,7 @@
 //! BCachedData (chunk 0x700) sub-parsers.
 //!
 //! Reads packed sections, bones, bone bounds, and univert packers from the
-//! cached data chunk using zerocopy overlays. Supports both DE (152-byte
+//! cached data chunk using zerocopy overlays. Supports both HW1 (152-byte
 //! sections) and HW2 (72-byte sections) formats.
 
 use alloc::string::String;
@@ -20,7 +20,7 @@ use nostdio::{ReadLe, SliceCursor, read_null_terminated_string};
 
 /// Read packed sections array from cached data.
 ///
-/// Section stride depends on version: 152 bytes (DE) or 72 bytes (HW2).
+/// Section stride depends on version: 152 bytes (HW1) or 72 bytes (HW2).
 pub(super) fn read_packed_sections(
     data: &[u8],
     pos: &mut usize,
@@ -52,7 +52,7 @@ pub(super) fn read_packed_sections(
 ///
 /// The first 40 bytes are shared between versions (`PackedSectionFixedRaw`).
 /// The trailing layout differs:
-/// - HW1/DE (112 bytes): bone_remap(16) + UnivertPacker(84) + flags(12)
+/// - HW1 (112 bytes): bone_remap(16) + UnivertPacker(84) + flags(12)
 /// - HW2 (32 bytes): flags(8) + unknown(8) + bone_remap(16)
 fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Result<Section> {
     let (fixed, _): (Ref<_, PackedSectionFixedRaw>, _) =
@@ -94,7 +94,7 @@ fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Res
     })
 }
 
-/// HW1/DE section tail: bone_remap(16) + UnivertPacker(84) + flags(12).
+/// HW1 section tail: bone_remap(16) + UnivertPacker(84) + flags(12).
 fn read_section_tail_hw1(
     data: &[u8],
     pos: &mut usize,

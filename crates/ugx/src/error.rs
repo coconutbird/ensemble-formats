@@ -20,7 +20,7 @@ pub enum Error {
 
     /// Invalid geometry header signature.
     #[error(
-        "Invalid geometry header signature: 0x{actual:08X} (expected DE 0xC2340004 or HW2 0xC2340006)"
+        "Invalid geometry header signature: 0x{actual:08X} (expected HW1 0xC2340004 or HW2 0xC2340006)"
     )]
     InvalidSignature { actual: u32 },
 

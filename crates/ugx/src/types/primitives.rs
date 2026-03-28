@@ -17,6 +17,7 @@ pub struct AABB {
 }
 
 impl AABB {
+    /// Read an AABB from 24 bytes of little-endian `f32` data (min xyz, max xyz).
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let mut cur = SliceCursor::new(&data[*pos..]);
         let min = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
@@ -36,6 +37,7 @@ pub struct Sphere {
 }
 
 impl Sphere {
+    /// Read a bounding sphere from 16 bytes of little-endian `f32` data (center xyz, radius).
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let mut cur = SliceCursor::new(&data[*pos..]);
         let center = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
@@ -55,6 +57,7 @@ pub struct Keyframe {
 }
 
 impl Keyframe {
+    /// Read a morph-target keyframe: 4-byte time (f32le) + 4-byte length (u32le) + vertex blob.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let mut cur = SliceCursor::new(&data[*pos..]);
         let time = cur.read_f32_le()?;

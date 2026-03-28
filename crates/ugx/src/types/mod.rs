@@ -18,7 +18,7 @@
 //! | `AabbTree`      | `BAABBTree` (xgeom/aabbTree.h)   |
 //! | `AabbTreeNode`  | `BAABBTreeNode`                  |
 //!
-//! Note: The DE (Definitive Edition) format differs from the original Xbox 360
+//! Note: The HW1 (Definitive Edition) format differs from the original Xbox 360
 //! source due to x64 pointer sizes and some additional fields.
 
 pub mod aabb_tree;

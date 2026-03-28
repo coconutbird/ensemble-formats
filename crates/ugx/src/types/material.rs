@@ -7,18 +7,31 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MapType {
+    /// Diffuse (albedo) color texture.
     Diffuse = 0,
+    /// Normal map (tangent-space).
     Normal = 1,
+    /// Gloss / specular power map.
     Gloss = 2,
+    /// Opacity / alpha mask.
     Opacity = 3,
+    /// UV transform / detail texture.
     XForm = 4,
+    /// Emissive (self-illumination) map.
     Emissive = 5,
+    /// Ambient occlusion map.
     AO = 6,
+    /// Environment / reflection map.
     Env = 7,
+    /// Environment mask (controls reflection intensity).
     EnvMask = 8,
+    /// Emissive UV transform map.
     EmXForm = 9,
+    /// Distortion / refraction map.
     Distortion = 10,
+    /// Highlight / rim-light map.
     Highlight = 11,
+    /// Modulation (blend) map.
     Modulate = 12,
 }
 
@@ -108,7 +121,7 @@ pub struct HoganMaterialData {
     pub textures: String,
 }
 
-/// Legacy material data — the HW1/DE fixed-function material system.
+/// Legacy material data — the HW1 fixed-function material system.
 ///
 /// Uses 13 explicit map slots (diffuse, normal, gloss, etc.) and
 /// properties from a `BNameValueMap` (specular, env reflectivity, etc.).
@@ -166,7 +179,7 @@ impl Default for LegacyMaterialData {
 /// and makes cross-version conversion a natural `match` arm.
 #[derive(Debug, Clone)]
 pub enum MaterialData {
-    /// HW1/DE fixed-function material (also used by HW2 legacy `@Ver=5`).
+    /// HW1 fixed-function material (also used by HW2 legacy `@Ver=5`).
     Legacy(alloc::boxed::Box<LegacyMaterialData>),
     /// HW2 Hogan shader-based material.
     Hogan(alloc::boxed::Box<HoganMaterialData>),

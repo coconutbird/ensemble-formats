@@ -9,7 +9,7 @@
 //!
 //! # Stream Format (chunk 0x705)
 //!
-//! Verified against `BAABBTreeNode_readFromStream` at `0x1406b4f90` in xgameFinal.exe (DE):
+//! Verified against `BAABBTreeNode_readFromStream` at `0x1406b4f90` in xgameFinal.exe (HW1):
 //! ```text
 //! u32: version (0x33440002)
 //! u32: node_count

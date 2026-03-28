@@ -1,7 +1,7 @@
 //! AABB tree chunk (0x705) writer.
 //!
 //! Serializes an `AabbTree` back to the streamed format expected by
-//! `BAABBTree_load` (`0x1406b5090` in xgameFinal.exe DE).
+//! `BAABBTree_load` (`0x1406b5090` in xgameFinal.exe).
 //!
 //! The engine's BStream reader always byte-swaps (flag `0x80` is never set),
 //! so all fields must be written in **big-endian** byte order.

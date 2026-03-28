@@ -86,7 +86,7 @@
 //! +0x28: BPackedArray<uint8> localToGlobalBoneRemap (16 bytes)
 //! +0x38: UnivertPacker baseVertPacker (84 bytes)
 //! +0x8C: int32 rigidOnly (bool as int)
-//! +0x90: int32 globalBones (DE-specific, not in 2008 source!)
+//! +0x90: int32 globalBones (HW1-specific, not in 2008 source!)
 //! +0x94: int32 padding
 //! ```
 //!

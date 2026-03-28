@@ -236,7 +236,7 @@ pub fn import_from_gltf(
             all_index_buffer.extend_from_slice(&indices);
             let num_tris = (indices.len() / 3) as i32;
 
-            // For HW1/DE, embed the UnivertPacker in the section.
+            // For HW1, embed the UnivertPacker in the section.
             // For HW2, vertex format is inferred from vert_size — no packer stored.
             let base_vert_packer = match options.version {
                 UgxVersion::Hw1 => Some(final_packer.clone()),

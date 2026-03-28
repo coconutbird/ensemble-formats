@@ -1,8 +1,8 @@
 //! Cached data chunk (0x700) builder.
 //!
-//! Supports both HW1/DE (v4) and HW2 (v6) formats:
+//! Supports both HW1 (v4) and HW2 (v6) formats:
 //!
-//! ## HW1/DE Layout (v4):
+//! ## HW1 Layout (v4):
 //! - Signature `0xC2340004`, 152-byte sections with embedded UnivertPacker,
 //!   valid accessories as i32 indices, includes AABB tree.
 //!
@@ -265,7 +265,7 @@ fn write_sections(
 
 /// Write the version-specific tail of a single section struct.
 ///
-/// HW1/DE (112 bytes after fixed): bone_remap(16) + UnivertPacker(84) + flags(12).
+/// HW1 (112 bytes after fixed): bone_remap(16) + UnivertPacker(84) + flags(12).
 /// HW2 (32 bytes after fixed): flags(16) + bone_remap(16).
 fn write_section_tail(
     cursor: &mut MutCursor<'_>,
@@ -372,7 +372,7 @@ fn write_bones(
 
 /// Write valid accessories as i32 indices into the accessories array.
 ///
-/// IDA analysis confirms both HW1/DE and HW2 use `BPackedArray_Simple__unpack`
+/// IDA analysis confirms both HW1 and HW2 use `BPackedArray_Simple__unpack`
 /// for validAccessories — they are always flat i32 index arrays.
 ///
 /// Returns `(offset, count, inner_fixups)` (fixups always empty).
@@ -553,7 +553,7 @@ fn write_accessory_indices(
     Ok(())
 }
 
-/// Write a packed UnivertPacker (84 bytes on-disk) for DE sections.
+/// Write a packed UnivertPacker (84 bytes on-disk) for HW1 sections.
 ///
 /// Layout: 2 string offset fields (u64 each, fixed up inline),
 /// then 12 u32 type fields (pos, basis, basis_scale, tangent, normal,

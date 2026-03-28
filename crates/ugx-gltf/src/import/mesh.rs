@@ -233,7 +233,7 @@ pub(super) fn detect_global_bones(vertices: &[UnpackedVertex], has_skin: bool) -
 
 /// Build a `UnivertPacker` for the target version.
 ///
-/// HW1/DE (v4) — `PNA0ST0` byte order, Float3 types:
+/// HW1 (v4) — `PNA0ST0` byte order, Float3 types:
 ///   Position(Float3, 12B) → Normal(Float3, 12B) → Tangent(Float3, 12B) →
 ///   Skin(UByte4+UByte4N, 8B) → UV(Float2, 8B)
 ///

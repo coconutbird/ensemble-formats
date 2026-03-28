@@ -16,8 +16,8 @@ pub struct QForm {
     pub translation: [f32; 3],
 }
 
-/// 4x4 transformation matrix (used in packed format).
-/// Row-major order: row[0] = [m00, m01, m02, m03], etc.
+/// 4×4 transformation matrix (used in packed format).
+/// Row-major order: row\[0\] = \[m00, m01, m02, m03\], etc.
 #[derive(Debug, Clone)]
 pub struct Matrix4x4 {
     /// Matrix rows.
@@ -231,6 +231,7 @@ impl Matrix4x4 {
 }
 
 impl Matrix4x4 {
+    /// Read a 4×4 row-major matrix from 64 bytes of little-endian `f32` data.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let mut cur = SliceCursor::new(&data[*pos..]);
         let mut rows = [[0.0f32; 4]; 4];
@@ -245,6 +246,7 @@ impl Matrix4x4 {
 }
 
 impl QForm {
+    /// Read a quaternion + translation from 28 bytes of little-endian `f32` data.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         let mut cur = SliceCursor::new(&data[*pos..]);
         let rotation = [

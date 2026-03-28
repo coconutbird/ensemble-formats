@@ -1,11 +1,11 @@
-//! UGX file writer — supports both HW1/DE (v4) and HW2 (v6) formats.
+//! UGX file writer — supports both HW1 (v4) and HW2 (v6) formats.
 //!
 //! Serializes a `UgxGeom` into UGX binary format (ECF container).
 //! Writes chunks 0x700 (cached data), 0x701 (index buffer), 0x702 (vertex buffer),
 //! 0x703 (granny bones), 0x704 (materials), and optionally 0x705 (AABB tree).
 //!
 //! Version differences:
-//! - HW1/DE (v4): Signature `0xC2340004`, 152-byte sections with UnivertPacker,
+//! - HW1 (v4): Signature `0xC2340004`, 152-byte sections with UnivertPacker,
 //!   i32 index valid accessories, includes AABB tree chunk (0x705).
 //! - HW2 (v6): Signature `0xC2340006`, 72-byte sections (no UnivertPacker),
 //!   i32 index valid accessories, no AABB tree chunk.
@@ -35,7 +35,7 @@ impl Writer {
 }
 
 impl UgxGeom {
-    /// Serialize this geometry to UGX HW1/DE (v4) binary format.
+    /// Serialize this geometry to UGX HW1 (v4) binary format.
     pub fn to_bytes_hw1(&self) -> Result<Vec<u8>> {
         write_ugx(self, UgxVersion::Hw1)
     }

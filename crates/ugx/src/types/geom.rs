@@ -68,7 +68,7 @@ pub struct UgxGeom {
 impl UgxGeom {
     /// Get unpacked vertices for a section.
     ///
-    /// For DE sections, uses the embedded `UnivertPacker`.
+    /// For HW1 sections, uses the embedded `UnivertPacker`.
     /// For HW2 sections (no packer), infers the vertex layout from `vert_size`.
     pub fn unpack_section_vertices(&self, section_idx: usize) -> Result<Vec<UnpackedVertex>> {
         let section = &self.sections[section_idx];
@@ -80,7 +80,7 @@ impl UgxGeom {
         let mut vertices = Vec::with_capacity(section.num_verts as usize);
 
         if let Some(ref packer) = section.base_vert_packer {
-            // DE path — use the embedded UnivertPacker
+            // HW1 path — use the embedded UnivertPacker
             for _ in 0..section.num_verts {
                 vertices.push(packer.unpack_vertex(vb_slice, &mut vb_pos)?);
             }
