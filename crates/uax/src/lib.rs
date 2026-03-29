@@ -1,14 +1,15 @@
-//! UAX (Animation) format parser for Halo Wars Definitive Edition.
+//! UAX (Animation) format parser for Halo Wars Definitive Edition / Halo Wars 2.
 //!
 //! UAX files contain animation data wrapped in an ECF container.
-//! The animation data uses RAD Game Tools' Granny format with pointer offsets
-//! that need rebasing to extract the actual animation metadata.
+//! The animation chunk data is a Granny `file_info` structure in x64 native
+//! layout — all internal pointers are 64-bit LE offsets from the chunk start.
 //!
 //! ## Format Structure
 //!
 //! - ECF container with file ID `0xAAC93747`
-//! - Single chunk with ID `0x0700` containing Granny file_info
-//! - Granny data uses little-endian pointer offsets from chunk start
+//! - Single chunk with ID `0x0700` containing Granny `file_info` directly
+//! - No separate Granny section header — chunk data IS `file_info`
+//! - x64 native pointer layout (same format for HW1 DE and HW2)
 //!
 //! ## Example (Read-Only)
 //!
@@ -18,8 +19,12 @@
 //! let data = std::fs::read("animation.uax").unwrap();
 //! let anim = Reader::read(&data).unwrap();
 //!
-//! println!("Duration: {} seconds", anim.duration());
-//! println!("Animation name: {:?}", anim.name());
+//! println!("Duration: {} seconds", anim.duration);
+//! println!("Animation name: {:?}", anim.name);
+//! println!("Track groups: {}", anim.track_groups.len());
+//! for tg in &anim.track_groups {
+//!     println!("  {} - {} transform tracks", tg.name.as_deref().unwrap_or("?"), tg.transform_tracks.len());
+//! }
 //! ```
 //!
 //! ## Example (Read/Write with UaxFile)
@@ -46,10 +51,9 @@ mod error;
 pub use error::{Error, Result};
 
 mod reader;
-pub use reader::{Reader, UaxAnimation};
+pub use reader::Reader;
 
 pub mod types;
-pub use types::{GRANNY_HEADER_SIZE, POINTER_REBASE_OFFSET};
 
 mod file;
 pub use file::UaxFile;

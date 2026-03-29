@@ -2,11 +2,12 @@
 //!
 //! This module provides a container that preserves the raw Granny data
 //! while exposing parsed animation metadata for inspection and modification.
+//! The chunk data IS `file_info` directly — no separate header.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::types::{self, GRANNY_HEADER_SIZE, animation, file_info};
+use crate::types::{animation, file_info, read_cstring, read_f32_le, read_i32_le, read_ptr};
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use ecf::{EcfChunkHeader, EcfHeader, Reader as EcfReader};
 
@@ -20,7 +21,7 @@ pub struct UaxFile {
     ecf_header: EcfHeader,
     /// Original chunk header (for round-trip fidelity).
     chunk_header: EcfChunkHeader,
-    /// Raw Granny chunk data (includes 32-byte header + file_info + all data).
+    /// Raw chunk data — this IS the `file_info` structure.
     chunk_data: Vec<u8>,
 }
 
@@ -29,30 +30,23 @@ impl UaxFile {
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let ecf = EcfReader::new(data)?;
 
-        // Validate file ID
-        let file_id = ecf.header().id;
-        if file_id != UAX_FILE_ID {
-            return Err(Error::InvalidFileId(file_id));
+        let hdr_id = ecf.header().id;
+        if hdr_id != UAX_FILE_ID {
+            return Err(Error::InvalidFileId(hdr_id));
         }
 
-        // Find the UAX chunk (0x0700) by ID
         let chunk_index = ecf
             .chunks()
             .iter()
             .position(|c| c.id == UAX_CHUNK_ID)
             .ok_or(Error::ChunkNotFound)?;
 
-        // Store original headers for round-trip
         let ecf_header = ecf.header().clone();
         let chunk_header = ecf.chunks()[chunk_index].clone();
-
         let chunk_data = ecf.chunk_data(chunk_index)?;
 
-        if chunk_data.len() <= GRANNY_HEADER_SIZE {
-            return Err(Error::ChunkTooSmall(
-                chunk_data.len(),
-                GRANNY_HEADER_SIZE + 1,
-            ));
+        if chunk_data.len() < file_info::MIN_SIZE {
+            return Err(Error::ChunkTooSmall(chunk_data.len(), file_info::MIN_SIZE));
         }
 
         Ok(Self {
@@ -64,24 +58,20 @@ impl UaxFile {
 
     /// Write the UAX file to bytes, preserving original ECF structure.
     pub fn to_bytes(&self) -> Vec<u8> {
-        // Write the original ECF header
         let mut out = Vec::new();
         out.extend_from_slice(&self.ecf_header.to_bytes());
 
-        // Write the original chunk header (with updated checksum if data changed)
         let mut chunk_header = self.chunk_header.clone();
         chunk_header.adler32 = ecf::adler32(&self.chunk_data);
         chunk_header.size = self.chunk_data.len() as u32;
         out.extend_from_slice(&chunk_header.to_bytes());
 
-        // Pad up to the chunk data offset
         let chunk_offset = chunk_header.offset as usize;
         if out.len() < chunk_offset {
             out.resize(chunk_offset, 0);
         }
         out.extend_from_slice(&self.chunk_data);
 
-        // Pad to original file size if needed
         let target_size = self.ecf_header.file_size as usize;
         if out.len() < target_size {
             out.resize(target_size, 0);
@@ -95,153 +85,70 @@ impl UaxFile {
         &self.chunk_data
     }
 
-    /// Get the file_info data (after 32-byte Granny header).
-    fn file_info_data(&self) -> &[u8] {
-        &self.chunk_data[GRANNY_HEADER_SIZE..]
-    }
-
-    /// Get the file_info data mutably.
-    fn file_info_data_mut(&mut self) -> &mut [u8] {
-        &mut self.chunk_data[GRANNY_HEADER_SIZE..]
-    }
-
     /// Get the animation count.
     pub fn animation_count(&self) -> Result<i32> {
-        self.read_i32_at(file_info::ANIMATION_COUNT)
+        read_i32_le(&self.chunk_data, file_info::ANIMATION_COUNT)
+            .ok_or(Error::UnexpectedEof)
     }
 
     /// Get the track group count from file_info.
     pub fn track_group_count(&self) -> Result<i32> {
-        self.read_i32_at(file_info::TRACK_GROUP_COUNT)
+        read_i32_le(&self.chunk_data, file_info::TRACK_GROUP_COUNT)
+            .ok_or(Error::UnexpectedEof)
     }
 
     /// Get animation name.
     pub fn animation_name(&self) -> Result<Option<String>> {
-        let anim_offset = self.animation_offset()?;
-        let data = self.file_info_data();
-
-        let name_off = anim_offset + animation::NAME_PTR;
-        if name_off + 8 > data.len() {
-            return Err(Error::InvalidPointerOffset(anim_offset as u64, data.len()));
-        }
-
-        let name_ptr = u64::from_le_bytes([
-            data[name_off],
-            data[name_off + 1],
-            data[name_off + 2],
-            data[name_off + 3],
-            data[name_off + 4],
-            data[name_off + 5],
-            data[name_off + 6],
-            data[name_off + 7],
-        ]);
-
-        if name_ptr == 0 || name_ptr as usize >= data.len() {
-            return Ok(None);
-        }
-
-        read_cstring(data, name_ptr).map(Some)
+        let anim_off = self.animation_struct_offset()?;
+        let fi = &self.chunk_data;
+        Ok(read_ptr(fi, anim_off + animation::NAME_PTR)
+            .and_then(|p| read_cstring(fi, p)))
     }
 
     /// Get animation duration in seconds.
     pub fn duration(&self) -> Result<f32> {
-        let anim_offset = self.animation_offset()?;
-        self.read_f32_at_offset(anim_offset + animation::DURATION)
+        let off = self.animation_struct_offset()?;
+        read_f32_le(&self.chunk_data, off + animation::DURATION)
+            .ok_or(Error::UnexpectedEof)
     }
 
     /// Set animation duration in seconds.
     pub fn set_duration(&mut self, duration: f32) -> Result<()> {
-        let anim_offset = self.animation_offset()?;
-        self.write_f32_at_offset(anim_offset + animation::DURATION, duration)
+        let off = self.animation_struct_offset()?;
+        let pos = off + animation::DURATION;
+        if pos + 4 > self.chunk_data.len() {
+            return Err(Error::UnexpectedEof);
+        }
+        self.chunk_data[pos..pos + 4].copy_from_slice(&duration.to_le_bytes());
+        Ok(())
     }
 
     /// Get animation time step between keyframes.
     pub fn time_step(&self) -> Result<f32> {
-        let anim_offset = self.animation_offset()?;
-        self.read_f32_at_offset(anim_offset + animation::TIME_STEP)
+        let off = self.animation_struct_offset()?;
+        read_f32_le(&self.chunk_data, off + animation::TIME_STEP)
+            .ok_or(Error::UnexpectedEof)
     }
 
     /// Get animation oversampling factor.
     pub fn oversampling(&self) -> Result<f32> {
-        let anim_offset = self.animation_offset()?;
-        self.read_f32_at_offset(anim_offset + animation::OVERSAMPLING)
+        let off = self.animation_struct_offset()?;
+        read_f32_le(&self.chunk_data, off + animation::OVERSAMPLING)
+            .ok_or(Error::UnexpectedEof)
     }
 
-    // Helper to get the animation offset in file_info data
-    fn animation_offset(&self) -> Result<usize> {
-        let data = self.file_info_data();
-        let off = file_info::ANIMATIONS_PTR;
-
-        if off + 4 > data.len() {
-            return Err(Error::UnexpectedEof);
-        }
-
-        // Read Animations pointer (32-bit, needs rebasing)
-        let stored =
-            u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]) as u64;
-        let offset = types::rebase_pointer(stored) as usize;
-
-        if offset == 0 || offset >= data.len() {
-            return Err(Error::NoAnimations);
-        }
-
-        Ok(offset)
+    /// Resolve the offset of the first animation struct within chunk_data.
+    ///
+    /// file_info has Animations** at +0x7C → ptr array → first animation struct.
+    fn animation_struct_offset(&self) -> Result<usize> {
+        let fi = &self.chunk_data;
+        // Animations** → array of pointers
+        let arr = read_ptr(fi, file_info::ANIMATIONS_PTR)
+            .ok_or(Error::NoAnimations)?;
+        // First animation pointer
+        read_ptr(fi, arr)
+            .ok_or(Error::NoAnimations)
     }
-
-    // Read i32 at offset in file_info data
-    fn read_i32_at(&self, offset: usize) -> Result<i32> {
-        let data = self.file_info_data();
-        if offset + 4 > data.len() {
-            return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
-        }
-        Ok(i32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]))
-    }
-
-    // Read f32 at offset in file_info data
-    fn read_f32_at_offset(&self, offset: usize) -> Result<f32> {
-        let data = self.file_info_data();
-        if offset + 4 > data.len() {
-            return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
-        }
-        Ok(f32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]))
-    }
-
-    // Write f32 at offset in file_info data
-    fn write_f32_at_offset(&mut self, offset: usize, value: f32) -> Result<()> {
-        let data = self.file_info_data_mut();
-        if offset + 4 > data.len() {
-            return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
-        }
-        let bytes = value.to_le_bytes();
-        data[offset..offset + 4].copy_from_slice(&bytes);
-        Ok(())
-    }
-}
-
-/// Read a null-terminated C string from data at the given offset.
-fn read_cstring(data: &[u8], offset: u64) -> Result<String> {
-    let offset = offset as usize;
-    if offset >= data.len() {
-        return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
-    }
-
-    let bytes = &data[offset..];
-    let end = bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(bytes.len().min(256));
-
-    String::from_utf8(bytes[..end].to_vec()).map_err(|_| Error::StringReadError(offset as u64))
 }
 
 #[cfg(test)]

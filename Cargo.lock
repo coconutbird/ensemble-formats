@@ -1357,8 +1357,19 @@ version = "0.1.0"
 dependencies = [
  "ecf",
  "era",
+ "nostdio",
+ "test-utils",
  "thiserror",
  "zerocopy",
+]
+
+[[package]]
+name = "uax-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "ecf",
+ "uax",
 ]
 
 [[package]]

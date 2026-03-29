@@ -1,245 +1,233 @@
 //! UAX reader implementation.
+//!
+//! Parses the ECF container and extracts the Granny `file_info` chunk,
+//! then traverses the x64 native pointer layout to build high-level
+//! [`Animation`] / [`TrackGroup`] / [`TransformTrack`] types.
 
-use alloc::string::String;
-use zerocopy::Ref;
+use alloc::vec::Vec;
 
-use crate::types::AnimationRaw;
+use crate::types::*;
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use ecf::Reader as EcfReader;
-
-/// Parsed UAX animation data.
-#[derive(Debug, Clone)]
-pub struct UaxAnimation {
-    /// Animation name from Granny data.
-    name: Option<String>,
-    /// Animation duration in seconds.
-    duration: f32,
-    /// Time step between keyframes.
-    time_step: f32,
-    /// Oversampling factor.
-    oversampling: f32,
-    /// Number of track groups.
-    track_group_count: i32,
-    /// Motion extraction mode flags from track group.
-    motion_extraction_flags: u32,
-}
-
-impl UaxAnimation {
-    /// Parse a UAX animation from a byte slice.
-    pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let ecf = EcfReader::new(data)?;
-
-        // Validate file ID
-        let file_id = ecf.header().id;
-        if file_id != UAX_FILE_ID {
-            return Err(Error::InvalidFileId(file_id));
-        }
-
-        // Find the UAX chunk (0x0700) by ID
-        let chunk_index = ecf
-            .chunks()
-            .iter()
-            .position(|c| c.id == UAX_CHUNK_ID)
-            .ok_or(Error::ChunkNotFound)?;
-
-        let chunk_data = ecf.chunk_data(chunk_index)?;
-
-        // The chunk data has a 32-byte Granny section header before file_info.
-        // Skip it to get to the actual granny_file_info structure.
-        const GRANNY_HEADER_SIZE: usize = 32;
-        if chunk_data.len() <= GRANNY_HEADER_SIZE {
-            return Err(Error::ChunkTooSmall(
-                chunk_data.len(),
-                GRANNY_HEADER_SIZE + 1,
-            ));
-        }
-        let file_info_data = &chunk_data[GRANNY_HEADER_SIZE..];
-
-        // Parse granny_file_info from chunk
-        Self::parse_granny_file_info(file_info_data)
-    }
-
-    /// Parse granny_file_info structure from chunk data.
-    ///
-    /// The UAX format uses a hybrid layout:
-    /// - file_info structure uses 32-bit pointers (Xbox 360 origin)
-    /// - Animation/TrackGroup structs use 64-bit pointers internally
-    /// - Stored pointers need rebasing: actual_offset = stored_ptr - 0x10
-    fn parse_granny_file_info(data: &[u8]) -> Result<Self> {
-        // Minimum size to read AnimationCount and Animations pointer
-        const MIN_SIZE: usize = 0x60;
-        if data.len() < MIN_SIZE {
-            return Err(Error::ChunkTooSmall(data.len(), MIN_SIZE));
-        }
-
-        // file_info uses 32-bit layout with pointer rebasing offset of 0x10
-        // AnimationCount is at chunk offset 0x58 (file_info + 0x4C)
-        // Animations pointer is at chunk offset 0x5C (file_info + 0x50)
-
-        let animation_count = read_i32_le(data, 0x58)?;
-
-        if animation_count < 1 {
-            return Err(Error::NoAnimations);
-        }
-
-        // Read Animations pointer (32-bit, needs rebasing)
-        let animations_stored = read_u32_le(data, 0x5C)? as u64;
-        let animations_offset = rebase_pointer(animations_stored);
-
-        if animations_offset == 0 || animations_offset as usize >= data.len() {
-            return Err(Error::NoAnimations);
-        }
-
-        // TrackGroupCount is at chunk offset 0x50 (file_info + 0x44)
-        // TrackGroups pointer is at chunk offset 0x54 (file_info + 0x48)
-        let file_track_group_count = read_i32_le(data, 0x50)?;
-
-        let track_groups_stored = read_u32_le(data, 0x54)? as u64;
-        let track_groups_offset = rebase_pointer(track_groups_stored);
-
-        // Get motion extraction flags from first track group if available
-        let motion_extraction_flags = if file_track_group_count > 0 && track_groups_offset != 0 {
-            read_track_group_flags(data, track_groups_offset)?
-        } else {
-            0
-        };
-
-        // Animations is animation* (direct pointer to animation struct array),
-        // NOT animation** (pointer to pointer array)
-        parse_animation(data, animations_offset, motion_extraction_flags)
-    }
-
-    /// Get the animation name.
-    pub fn name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
-
-    /// Get the animation duration in seconds.
-    pub fn duration(&self) -> f32 {
-        self.duration
-    }
-
-    /// Get the time step between keyframes.
-    pub fn time_step(&self) -> f32 {
-        self.time_step
-    }
-
-    /// Get the oversampling factor.
-    pub fn oversampling(&self) -> f32 {
-        self.oversampling
-    }
-
-    /// Get the number of track groups.
-    pub fn track_group_count(&self) -> i32 {
-        self.track_group_count
-    }
-
-    /// Get the motion extraction flags.
-    pub fn motion_extraction_flags(&self) -> u32 {
-        self.motion_extraction_flags
-    }
-}
-
-/// Read a null-terminated C string from data at the given offset.
-fn read_cstring(data: &[u8], offset: u64) -> Result<String> {
-    let offset = offset as usize;
-    if offset >= data.len() {
-        return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
-    }
-
-    let bytes = &data[offset..];
-    let end = bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(bytes.len().min(256));
-
-    String::from_utf8(bytes[..end].to_vec()).map_err(|_| Error::StringReadError(offset as u64))
-}
-
-/// Rebase a stored pointer to get actual offset in chunk data.
-/// Granny pointers are stored with +0x10 offset.
-fn rebase_pointer(stored: u64) -> u64 {
-    stored.saturating_sub(0x10)
-}
-
-/// Read a little-endian u32 at the given offset.
-fn read_u32_le(data: &[u8], offset: usize) -> Result<u32> {
-    if offset + 4 > data.len() {
-        return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
-    }
-    Ok(u32::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-    ]))
-}
-
-/// Read a little-endian i32 at the given offset.
-fn read_i32_le(data: &[u8], offset: usize) -> Result<i32> {
-    Ok(read_u32_le(data, offset)? as i32)
-}
-
-/// Read track group flags from the first track group.
-/// track_groups_offset points to track_group* (array of 32-bit pointers to track groups)
-fn read_track_group_flags(data: &[u8], track_groups_offset: u64) -> Result<u32> {
-    // Read first track_group pointer (32-bit, needs rebasing)
-    let tg_ptr_stored = read_u32_le(data, track_groups_offset as usize)? as u64;
-    let tg_offset = rebase_pointer(tg_ptr_stored);
-    if tg_offset == 0 || tg_offset as usize >= data.len() {
-        return Ok(0);
-    }
-
-    // track_group structure: Name (8), VectorTrackCount (4), VectorTracks (8), ...
-    // Flags is at offset 0x50 in x64 track_group
-    let flags_offset = tg_offset as usize + 0x50;
-    if flags_offset + 4 > data.len() {
-        return Ok(0);
-    }
-
-    read_u32_le(data, flags_offset)
-}
-
-/// Parse animation structure using zerocopy overlay.
-fn parse_animation(data: &[u8], offset: u64, motion_flags: u32) -> Result<UaxAnimation> {
-    let offset = offset as usize;
-    if offset >= data.len() {
-        return Err(Error::InvalidPointerOffset(offset as u64, data.len()));
-    }
-
-    let (raw, _): (Ref<_, AnimationRaw>, _) = Ref::from_prefix(&data[offset..])
-        .map_err(|_| Error::InvalidPointerOffset(offset as u64, data.len()))?;
-
-    let name_offset = u64::from_le_bytes(raw.name_ptr);
-    let duration = f32::from_le_bytes(raw.duration);
-    let time_step = f32::from_le_bytes(raw.time_step);
-    let oversampling = f32::from_le_bytes(raw.oversampling);
-    let track_group_count = i32::from_le_bytes(raw.track_group_count);
-
-    let name = if name_offset != 0 {
-        Some(read_cstring(data, name_offset)?)
-    } else {
-        None
-    };
-
-    Ok(UaxAnimation {
-        name,
-        duration,
-        time_step,
-        oversampling,
-        track_group_count,
-        motion_extraction_flags: motion_flags,
-    })
-}
 
 /// UAX file reader.
 pub struct Reader;
 
 impl Reader {
-    /// Read a UAX animation from a byte slice.
-    pub fn read(data: &[u8]) -> Result<UaxAnimation> {
-        UaxAnimation::from_bytes(data)
+    /// Read a UAX animation from raw file bytes.
+    ///
+    /// Returns the first animation in the file (UAX files always contain
+    /// exactly one animation).
+    pub fn read(data: &[u8]) -> Result<Animation> {
+        let ecf = EcfReader::new(data)?;
+
+        // Validate file ID
+        let hdr_id = ecf.header().id;
+        if hdr_id != UAX_FILE_ID {
+            return Err(Error::InvalidFileId(hdr_id));
+        }
+
+        // Find chunk 0x0700
+        let chunk_idx = ecf
+            .chunks()
+            .iter()
+            .position(|c| c.id == UAX_CHUNK_ID)
+            .ok_or(Error::ChunkNotFound)?;
+
+        let fi = ecf.chunk_data(chunk_idx)?;
+
+        // Chunk data IS file_info (no header to skip)
+        if fi.len() < file_info::MIN_SIZE {
+            return Err(Error::ChunkTooSmall(fi.len(), file_info::MIN_SIZE));
+        }
+
+        parse_file_info(&fi)
     }
+}
+
+// ============================================================================
+// Internal parsing
+// ============================================================================
+
+/// Parse the file_info structure and extract the first animation.
+fn parse_file_info(fi: &[u8]) -> Result<Animation> {
+    let anim_count = read_i32_le(fi, file_info::ANIMATION_COUNT).unwrap_or(0);
+    if anim_count < 1 {
+        return Err(Error::NoAnimations);
+    }
+
+    // Animations** — pointer to array of animation pointers
+    let anim_arr = read_ptr(fi, file_info::ANIMATIONS_PTR)
+        .ok_or(Error::NoAnimations)?;
+
+    // First animation pointer
+    let anim_off = read_ptr(fi, anim_arr)
+        .ok_or(Error::NoAnimations)?;
+
+    // Parse animation struct
+    let name = read_ptr(fi, anim_off + animation::NAME_PTR)
+        .and_then(|p| read_cstring(fi, p));
+    let duration = read_f32_le(fi, anim_off + animation::DURATION).unwrap_or(0.0);
+    let time_step = read_f32_le(fi, anim_off + animation::TIME_STEP).unwrap_or(0.0);
+    let oversampling = read_f32_le(fi, anim_off + animation::OVERSAMPLING).unwrap_or(0.0);
+
+    // Parse track groups from file_info level (the canonical list)
+    let tg_count = read_i32_le(fi, file_info::TRACK_GROUP_COUNT).unwrap_or(0);
+    let mut track_groups = Vec::new();
+
+    if tg_count > 0 {
+        if let Some(tg_arr) = read_ptr(fi, file_info::TRACK_GROUPS_PTR) {
+            for i in 0..tg_count as usize {
+                if let Some(tg_off) = read_ptr(fi, tg_arr + i * 8) {
+                    track_groups.push(parse_track_group(fi, tg_off));
+                }
+            }
+        }
+    }
+
+    Ok(Animation {
+        name,
+        duration,
+        time_step,
+        oversampling,
+        track_groups,
+    })
+}
+
+/// Parse a single track group at the given offset.
+fn parse_track_group(fi: &[u8], off: usize) -> TrackGroup {
+    let name = read_ptr(fi, off + track_group::NAME_PTR)
+        .and_then(|p| read_cstring(fi, p));
+
+    let xform_count = read_i32_le(fi, off + track_group::TRANSFORM_TRACK_COUNT).unwrap_or(0);
+    let xform_ptr = read_ptr(fi, off + track_group::TRANSFORM_TRACKS_PTR);
+
+    let mut transform_tracks = Vec::new();
+    if let Some(base) = xform_ptr {
+        for i in 0..xform_count as usize {
+            let tt_off = base + i * transform_track::SIZE;
+            transform_tracks.push(parse_transform_track(fi, tt_off));
+        }
+    }
+
+    // LOD errors (array of f32, one per transform track)
+    let lod_count = read_i32_le(fi, off + track_group::TRANSFORM_LOD_ERROR_COUNT).unwrap_or(0);
+    let lod_ptr = read_ptr(fi, off + track_group::TRANSFORM_LOD_ERRORS_PTR);
+    let mut transform_lod_errors = Vec::new();
+    if let Some(base) = lod_ptr {
+        for i in 0..lod_count as usize {
+            if let Some(v) = read_f32_le(fi, base + i * 4) {
+                transform_lod_errors.push(v);
+            }
+        }
+    }
+
+    let initial_placement = read_transform(fi, off + track_group::INITIAL_PLACEMENT);
+    let flags = read_u32_le(fi, off + track_group::FLAGS).unwrap_or(0);
+
+    TrackGroup {
+        name,
+        transform_tracks,
+        transform_lod_errors,
+        initial_placement,
+        flags,
+    }
+}
+
+/// Parse a single transform track at the given offset.
+fn parse_transform_track(fi: &[u8], off: usize) -> TransformTrack {
+    let name = read_ptr(fi, off + transform_track::NAME_PTR)
+        .and_then(|p| read_cstring(fi, p));
+    let flags = read_i32_le(fi, off + transform_track::FLAGS).unwrap_or(0);
+
+    let orientation = parse_curve(fi, off + transform_track::ORIENTATION_CURVE);
+    let position = parse_curve(fi, off + transform_track::POSITION_CURVE);
+    let scale_shear = parse_curve(fi, off + transform_track::SCALE_SHEAR_CURVE);
+
+    TransformTrack { name, flags, orientation, position, scale_shear }
+}
+
+/// Parse a granny_curve2 (variant: type_ptr + object_ptr) at offset.
+fn parse_curve(fi: &[u8], off: usize) -> CurveData {
+    let obj = read_ptr(fi, off + curve2::OBJECT_PTR);
+
+    match obj {
+        Some(obj_off) if obj_off + 2 <= fi.len() => {
+            let format = fi[obj_off];
+            let degree = fi[obj_off + 1];
+
+            // Extract payload — everything after the 2-byte header up to the
+            // next aligned structure or a reasonable max. We determine the size
+            // from the curve format. For now, capture a bounded raw slice.
+            let payload_start = obj_off + curve_data_header::SIZE;
+            let payload = extract_curve_payload(fi, format, payload_start);
+
+            CurveData { format, degree, payload }
+        }
+        _ => CurveData { format: 0, degree: 0, payload: Vec::new() },
+    }
+}
+
+/// Extract the raw payload bytes for a curve based on its format.
+///
+/// Granny curve formats have varying payload structures. We capture
+/// the raw bytes so the writer can reproduce them exactly.
+fn extract_curve_payload(fi: &[u8], format: u8, start: usize) -> Vec<u8> {
+    if start >= fi.len() {
+        return Vec::new();
+    }
+
+    // Payload size depends on format. Known formats:
+    //  0 = DaIdentity (no payload)
+    //  2 = DaIdentity (no payload — just header)
+    //  4 = DaConstant32f (N × f32, typically 3 or 4 floats)
+    //  6 = D3Constant32f (3 × f32 = 12 bytes)
+    //  8 = D4Constant32f (4 × f32 = 16 bytes)
+    // 10 = D4nK16uC15p (variable: knot count header + knots + controls)
+    // 11 = DaK32fC32f (variable: dimension + knot/control arrays)
+    //
+    // For formats with a known fixed size, we extract exactly that.
+    // For variable formats, we read the internal size fields.
+    let size = match format {
+        0 | 2 => 0, // Identity — no payload
+        4 => {
+            // DaConstant32f: padding(2) + one_over_knot_scale(4) + N×f32
+            // Read the dimension from context if needed. For safety, grab 16 bytes.
+            if start + 2 <= fi.len() {
+                let padding = u16::from_le_bytes([fi[start], fi[start + 1]]) as usize;
+                // padding field encodes control count or dimension
+                let ctrl_bytes = if padding > 0 && padding <= 16 { padding * 4 } else { 16 };
+                2 + 4 + ctrl_bytes // padding(2) + one_over_knot_scale(4) + controls
+            } else {
+                0
+            }
+        }
+        6 => 2 + 4 + 12,  // padding(2) + ooks(4) + 3×f32
+        8 => 2 + 4 + 16,  // padding(2) + ooks(4) + 4×f32
+        _ => {
+            // Variable-length formats: read knot_count and control_count
+            // Layout: padding(2) + knot_count(u16) + control_count(u16) + ...
+            if start + 6 <= fi.len() {
+                let _padding = u16::from_le_bytes([fi[start], fi[start + 1]]);
+                let knot_count = u16::from_le_bytes([fi[start + 2], fi[start + 3]]) as usize;
+                let control_count = u16::from_le_bytes([fi[start + 4], fi[start + 5]]) as usize;
+
+                // Determine knot/control element sizes from format
+                let (knot_elem, ctrl_elem) = match format {
+                    10 => (2, 2), // D4nK16uC15p: u16 knots, u16 controls
+                    11 => (4, 4), // DaK32fC32f: f32 knots, f32 controls
+                    _ => (4, 4),  // Conservative default
+                };
+
+                6 + knot_count * knot_elem + control_count * ctrl_elem
+            } else {
+                0
+            }
+        }
+    };
+
+    let end = (start + size).min(fi.len());
+    fi[start..end].to_vec()
 }
 
 #[cfg(test)]
@@ -268,11 +256,24 @@ mod tests {
             let anim = Reader::read(&data)
                 .unwrap_or_else(|e| panic!("Failed to parse {}: {:?}", test_path, e));
 
-            // Verify parsed data
-            assert!(anim.duration() > 0.0, "Duration should be positive");
+            assert!(anim.duration > 0.0, "Duration should be positive");
             println!("Parsed {}:", test_path.rsplit('/').next().unwrap());
-            println!("  Name: {:?}", anim.name());
-            println!("  Duration: {:.3}s", anim.duration());
+            println!("  Name: {:?}", anim.name);
+            println!("  Duration: {:.3}s", anim.duration);
+            println!("  Track groups: {}", anim.track_groups.len());
+            for tg in &anim.track_groups {
+                println!("    '{}' - {} xform tracks, flags=0x{:X}",
+                    tg.name.as_deref().unwrap_or("?"),
+                    tg.transform_tracks.len(),
+                    tg.flags);
+                for tt in &tg.transform_tracks {
+                    println!("      '{}' O:fmt={}/deg={} P:fmt={}/deg={} S:fmt={}/deg={}",
+                        tt.name.as_deref().unwrap_or("?"),
+                        tt.orientation.format, tt.orientation.degree,
+                        tt.position.format, tt.position.degree,
+                        tt.scale_shear.format, tt.scale_shear.degree);
+                }
+            }
             parsed += 1;
         }
 

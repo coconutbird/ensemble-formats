@@ -21,6 +21,7 @@ members = [
     "crates/bdt-serde",
     "crates/xmb-serde",
     "crates/test-utils",
+    "crates/uax-cli",
     "crates/ufx",
     "crates/ufx-cli",
 ]

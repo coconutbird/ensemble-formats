@@ -97,9 +97,12 @@ impl Writer {
                 data.extend_from_slice(&(current_attrs_offset as u64).to_le_bytes());
                 current_attrs_offset += node.attributes.len() * 8;
             } else {
-                data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+                // Empty BPackedArray sentinel: count=0, ptr=0xFFFFFFFF (32-bit).
+                // The game's XMX reader checks the u64 pointer against 0x00000000FFFFFFFF
+                // to identify empty arrays, then verifies count==0.
                 data.extend_from_slice(&0u32.to_le_bytes());
-                data.extend_from_slice(&0u64.to_le_bytes());
+                data.extend_from_slice(&0u32.to_le_bytes());
+                data.extend_from_slice(&0x00000000FFFFFFFFu64.to_le_bytes());
             }
 
             if !node.children.is_empty() {
@@ -108,9 +111,10 @@ impl Writer {
                 data.extend_from_slice(&(current_children_offset as u64).to_le_bytes());
                 current_children_offset += node.children.len() * 4;
             } else {
-                data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes());
+                // Empty BPackedArray sentinel: count=0, ptr=0xFFFFFFFF (32-bit).
                 data.extend_from_slice(&0u32.to_le_bytes());
-                data.extend_from_slice(&0xFFFFFFFFFFFFFFFFu64.to_le_bytes());
+                data.extend_from_slice(&0u32.to_le_bytes());
+                data.extend_from_slice(&0x00000000FFFFFFFFu64.to_le_bytes());
             }
 
             debug_assert_eq!(

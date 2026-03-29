@@ -1,0 +1,17 @@
+[package]
+name = "uax-cli"
+description = "Command-line tool for UAX animation files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "uax"
+path = "src/main.rs"
+
+[dependencies]
+uax = { workspace = true }
+ecf = { workspace = true }
+clap = { workspace = true }
