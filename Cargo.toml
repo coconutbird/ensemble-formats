@@ -55,7 +55,9 @@ ufx = { path = "crates/ufx" }
 ufx-cli = { path = "crates/ufx-cli" }
 
 # External dependencies
-d3dasm = { git = "https://github.com/coconutbird/d3dasm.git" }
+cfglib = { git = "https://github.com/coconutbird/cfglib.git" }
+cfglib-dxbc = { git = "https://github.com/coconutbird/cfglib.git" }
+d3dasm = { version = "0.1" }
 byteorder = "1.5"
 texture2ddecoder = "0.1"
 flate2 = "1.0"
@@ -72,3 +74,7 @@ rayon = "1.10"
 image = "0.25"
 zerocopy = { version = "0.8", features = ["derive"] }
 dotenvy = "0.15"
+
+
+[patch.crates-io]
+dxbc = { git = "https://github.com/coconutbird/d3dasm.git" }

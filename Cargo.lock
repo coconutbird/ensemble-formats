@@ -271,6 +271,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cfglib"
+version = "0.1.0"
+source = "git+https://github.com/coconutbird/cfglib.git#e11c047cb4684e7109b18273217382ea58f1e06c"
+dependencies = [
+ "smallvec",
+]
+
+[[package]]
+name = "cfglib-dxbc"
+version = "0.1.0"
+source = "git+https://github.com/coconutbird/cfglib.git#e11c047cb4684e7109b18273217382ea58f1e06c"
+dependencies = [
+ "cfglib",
+ "dxbc",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -393,7 +410,8 @@ dependencies = [
 [[package]]
 name = "d3dasm"
 version = "0.1.0"
-source = "git+https://github.com/coconutbird/d3dasm.git#f4e7d660c91a0b3961901da8f14bb5e4015c26a1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83f8e63a97446e8ebcb1f5aeb3a5f79573b8db12b7b4eadc3d30db9d1cc6bd01"
 dependencies = [
  "dxbc",
 ]
@@ -429,7 +447,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "dxbc"
 version = "0.1.0"
-source = "git+https://github.com/coconutbird/d3dasm.git#f4e7d660c91a0b3961901da8f14bb5e4015c26a1"
+source = "git+https://github.com/coconutbird/d3dasm.git#fc4ecd52182961e17a5ff184dcf44235e773fb4e"
 dependencies = [
  "memchr",
  "nostdio",
@@ -1347,6 +1365,8 @@ dependencies = [
 name = "ufx"
 version = "0.1.0"
 dependencies = [
+ "cfglib",
+ "cfglib-dxbc",
  "d3dasm",
  "nostdio",
 ]
@@ -1355,6 +1375,8 @@ dependencies = [
 name = "ufx-cli"
 version = "0.1.0"
 dependencies = [
+ "cfglib",
+ "cfglib-dxbc",
  "clap",
  "d3dasm",
  "ufx",
@@ -1590,18 +1612,18 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.47"
+version = "0.8.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efbb2a062be311f2ba113ce66f697a4dc589f85e78a4aea276200804cea0ed87"
+checksum = "eed437bf9d6692032087e337407a86f04cd8d6a16a37199ed57949d415bd68e9"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.47"
+version = "0.8.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e8bc7269b54418e7aeeef514aa68f8690b8c0489a06b0136e5f57c4c5ccab89"
+checksum = "70e3cd084b1788766f53af483dd21f93881ff30d7320490ec3ef7526d203bad4"
 dependencies = [
  "proc-macro2",
  "quote",
