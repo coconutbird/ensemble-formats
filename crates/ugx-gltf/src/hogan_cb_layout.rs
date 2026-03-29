@@ -7,6 +7,8 @@
 //! This module predicts the exact CB layout (parameter names and offsets)
 //! from those flags, enabling named key-value storage in glTF extras.
 
+use ugx::types::HoganFlag;
+
 /// A named parameter in the predicted constant buffer layout.
 #[derive(Debug, Clone)]
 pub(crate) struct CbLayoutEntry {
@@ -53,11 +55,6 @@ pub(crate) fn is_hogan(permutation_name: &str) -> bool {
 fn is_hogan_standard(permutation_name: &str) -> bool {
     let lower = permutation_name.to_ascii_lowercase();
     lower.starts_with("hogan_standard_")
-}
-
-#[inline]
-fn has(flags: u64, bit: u32) -> bool {
-    flags & (1u64 << bit) != 0
 }
 
 /// Helper to build a layout sequentially.
@@ -137,12 +134,14 @@ pub(crate) fn predicted_layout_from_flags(flags: u64) -> CbLayout {
 fn predict_cb7(flags: u64) -> (Vec<CbLayoutEntry>, u32) {
     let mut b = LayoutBuilder::new();
 
-    if has(flags, 23) {
+    use HoganFlag::*;
+
+    if HeightBlend.test(flags) {
         b.push("height_blend_range", 4);
         b.push("color_gradient", 4);
     }
 
-    if has(flags, 41) || has(flags, 44) {
+    if VertexAnimA.test(flags) || VertexAnimB.test(flags) {
         b.push("vertex_anim", 4);
     }
 
@@ -174,28 +173,32 @@ fn predict_cb8(flags: u64) -> (Vec<CbLayoutEntry>, u32) {
     b.push("uv_scale_t0_t1", 2);
     b.push("uv_scale_t2_t3", 2);
 
+    use HoganFlag::*;
+
     // Normal intensity (absent in simplified/reduced texturing modes).
-    if !has(flags, 46) && !has(flags, 53) {
+    if !SimplifiedTexturing.test(flags) && !ReducedTexturing.test(flags) {
         b.push("normal_intensity", 1);
     }
 
     // Extra texture layer UV scale.
-    if has(flags, 27) || has(flags, 32) {
+    if ExtraTextureLayer.test(flags) || Emissive.test(flags) {
         b.push("uv_scale_t4", 1);
     }
 
     // Emissive intensity.
-    if has(flags, 32) || (has(flags, 27) && (has(flags, 29) || has(flags, 30))) {
+    if Emissive.test(flags)
+        || (ExtraTextureLayer.test(flags) && (EmissiveSubA.test(flags) || EmissiveSubB.test(flags)))
+    {
         b.push("emissive_intensity", 1);
     }
 
-    // Per-channel UV scale (bit 38).
-    if has(flags, 38) {
+    // Per-channel UV scale.
+    if PerChannelUv.test(flags) {
         b.push("uv_scale_t5", 1);
     }
 
-    // Scroll animation params (bit 35 requires bit 32).
-    if has(flags, 35) && has(flags, 32) {
+    // Scroll animation params (requires Emissive).
+    if ScrollAnim.test(flags) && Emissive.test(flags) {
         b.push("scroll_period", 1);
         b.push("scroll_phase", 1);
         b.push("fresnel_power", 1);
@@ -203,17 +206,17 @@ fn predict_cb8(flags: u64) -> (Vec<CbLayoutEntry>, u32) {
 
     // --- Group B: Material overrides (starts at register boundary) ---
 
-    let has_group_b = has(flags, 28) || has(flags, 49);
+    let has_group_b = RoughnessChannel.test(flags) || MaterialOverride.test(flags);
     if has_group_b {
         b.align_to_register();
 
-        // Bit 28: roughness channel value (packed before bit 49 params).
-        if has(flags, 28) {
+        // Roughness channel value (packed before material override params).
+        if RoughnessChannel.test(flags) {
             b.push("roughness_channel_value", 1);
         }
 
-        // Bit 49: full material override block.
-        if has(flags, 49) {
+        // Full material override block.
+        if MaterialOverride.test(flags) {
             b.push("detail_blend", 1);
             b.push("roughness_override", 1);
             b.push("override_strength", 1);

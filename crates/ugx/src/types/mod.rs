@@ -43,8 +43,10 @@ pub use granny::{GrannyMemberType, GrannyTypeMember, GrannyVariant};
 pub use material::{
     HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData, ShaderPermutation,
 };
+// Re-export HoganFlag from the `ufx` crate where it's defined.
 pub use primitives::{AABB, Keyframe, Sphere};
 pub use section::Section;
+pub use ufx::HoganFlag;
 pub use version::UgxVersion;
 
 // Re-export math types for convenient access.

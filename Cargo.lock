@@ -1391,6 +1391,7 @@ dependencies = [
  "half",
  "nostdio",
  "thiserror",
+ "ufx",
  "zerocopy",
 ]
 

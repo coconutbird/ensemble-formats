@@ -43,6 +43,53 @@ use d3dasm::Shader;
 use d3dasm::dxbc;
 use nostdio::{ReadLe, Seek, SeekFrom, SliceCursor};
 
+/// Hogan ubershader feature flag bit positions.
+///
+/// The 64-bit hex value in permutation names (e.g. `HOGAN_STANDARD_00080000A8000960`)
+/// encodes which features are active.  Each variant here is the **bit position**
+/// (0-based) in that 64-bit mask.  Use [`HoganFlag::test`] to check a flag.
+///
+/// These bits control which texture samplers are bound, which constant-buffer
+/// registers are populated, and which code paths the ubershader takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum HoganFlag {
+    /// Height-blend terrain: adds `height_blend_range` + `color_gradient` to CB7.
+    HeightBlend = 23,
+    /// Extra texture layer (T4 UV scale); also enables emissive with bits 29/30.
+    ExtraTextureLayer = 27,
+    /// Roughness channel value override in CB8.
+    RoughnessChannel = 28,
+    /// Emissive sub-feature A (combined with [`ExtraTextureLayer`](Self::ExtraTextureLayer)).
+    EmissiveSubA = 29,
+    /// Emissive sub-feature B (combined with [`ExtraTextureLayer`](Self::ExtraTextureLayer)).
+    EmissiveSubB = 30,
+    /// Emissive map / emissive intensity + T4 UV scale.
+    Emissive = 32,
+    /// Scroll animation (requires [`Emissive`](Self::Emissive)).
+    ScrollAnim = 35,
+    /// Per-channel UV scale (T5).
+    PerChannelUv = 38,
+    /// Vertex animation variant A (CB7).
+    VertexAnimA = 41,
+    /// Vertex animation variant B (CB7).
+    VertexAnimB = 44,
+    /// Simplified texturing — suppresses `normal_intensity` in CB8.
+    SimplifiedTexturing = 46,
+    /// Full material override block (detail blend, roughness, spec color).
+    MaterialOverride = 49,
+    /// Reduced texturing — suppresses `normal_intensity` in CB8.
+    ReducedTexturing = 53,
+}
+
+impl HoganFlag {
+    /// Test whether this flag bit is set in a 64-bit feature mask.
+    #[inline]
+    pub fn test(self, flags: u64) -> bool {
+        flags & (1u64 << (self as u32)) != 0
+    }
+}
+
 const UFXS_MAGIC: &[u8; 4] = b"UFXS";
 
 /// Minimum header size to read all fixed fields.

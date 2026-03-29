@@ -9,7 +9,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{
-    HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData, ShaderPermutation,
+    HoganFlag, HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData,
+    ShaderPermutation,
 };
 
 /// Default UFX version for Hogan materials.
@@ -141,6 +142,187 @@ fn needed_hogan_textures(legacy: &LegacyMaterialData) -> Vec<&'static str> {
     needed
 }
 
+// ---------------------------------------------------------------------------
+// CB layout prediction from permutation bitflags
+// ---------------------------------------------------------------------------
+// Mirrors the logic in `ugx-gltf/src/hogan_cb_layout.rs::predict_cb8` so that
+// the `ugx` crate (which is `no_std`) can build CB blobs without depending on
+// `ugx-gltf`.
+
+/// Extract the 64-bit feature flags from a Hogan permutation name.
+///
+/// Accepts names like `"HOGAN_STANDARD_00020000A83009A0"`.
+fn parse_perm_flags(name: &str) -> Option<u64> {
+    let hex_part = name.rsplit('_').next()?;
+    u64::from_str_radix(hex_part, 16).ok()
+}
+
+/// CB layout entry: name, float-offset, component count.
+#[allow(dead_code)]
+struct CbEntry {
+    name: &'static str,
+    offset: u32,
+    components: u8,
+}
+
+/// Sequential layout builder (mirrors `hogan_cb_layout::LayoutBuilder`).
+struct CbBuilder {
+    entries: Vec<CbEntry>,
+    pos: u32,
+}
+
+impl CbBuilder {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            pos: 0,
+        }
+    }
+
+    fn push(&mut self, name: &'static str, components: u8) {
+        self.entries.push(CbEntry {
+            name,
+            offset: self.pos,
+            components,
+        });
+        self.pos += components as u32;
+    }
+
+    /// Advance to next register boundary (multiple of 4 floats).
+    fn align_to_register(&mut self) {
+        self.pos = (self.pos + 3) & !3;
+    }
+
+    /// Total float4 registers consumed.
+    fn register_count(&self) -> u32 {
+        self.pos.div_ceil(4)
+    }
+}
+
+/// Predict the pixel-shader (CB8) layout from 64-bit flags.
+///
+/// This must match the layout produced by `hogan_cb_layout.rs::predict_cb8`
+/// exactly, so that round-trip through glTF named parameters is lossless.
+fn predict_ps_layout(flags: u64) -> CbBuilder {
+    let mut b = CbBuilder::new();
+
+    use HoganFlag::*;
+
+    // --- Group A: Core texturing (sequential packing) ---
+    b.push("uv_scale_t0_t1", 2);
+    b.push("uv_scale_t2_t3", 2);
+
+    if !SimplifiedTexturing.test(flags) && !ReducedTexturing.test(flags) {
+        b.push("normal_intensity", 1);
+    }
+
+    if ExtraTextureLayer.test(flags) || Emissive.test(flags) {
+        b.push("uv_scale_t4", 1);
+    }
+
+    if Emissive.test(flags)
+        || (ExtraTextureLayer.test(flags) && (EmissiveSubA.test(flags) || EmissiveSubB.test(flags)))
+    {
+        b.push("emissive_intensity", 1);
+    }
+
+    if PerChannelUv.test(flags) {
+        b.push("uv_scale_t5", 1);
+    }
+
+    if ScrollAnim.test(flags) && Emissive.test(flags) {
+        b.push("scroll_period", 1);
+        b.push("scroll_phase", 1);
+        b.push("fresnel_power", 1);
+    }
+
+    // --- Group B: Material overrides (starts at register boundary) ---
+    let has_group_b = RoughnessChannel.test(flags) || MaterialOverride.test(flags);
+    if has_group_b {
+        b.align_to_register();
+
+        if RoughnessChannel.test(flags) {
+            b.push("roughness_channel_value", 1);
+        }
+
+        if MaterialOverride.test(flags) {
+            b.push("detail_blend", 1);
+            b.push("roughness_override", 1);
+            b.push("override_strength", 1);
+            b.align_to_register();
+            b.push("spec_override_color", 3);
+            b.push("override_bias", 1);
+        }
+    }
+
+    b
+}
+
+/// Build the raw PS constant buffer bytes from predicted layout + Legacy props.
+///
+/// Maps Legacy material properties to Hogan CB parameters:
+/// - `uv_scale_*`: `1.0` (native texture resolution)
+/// - `normal_intensity`: `1.0` (full normal map effect)
+/// - `emissive_intensity`: `1.0` when emissive map present, else `0.0`
+/// - `roughness_channel_value` / `roughness_override`:
+///   derived from `spec_power` as `1.0 - clamp(spec_power / 100, 0, 1)`
+/// - `spec_override_color`: from Legacy `spec_color`
+/// - `override_strength` / `override_bias` / `detail_blend`: `0.0` (disabled)
+/// - `scroll_period`: `1.0`, `scroll_phase`: `0.0`, `fresnel_power`: `4.0`
+fn build_ps_cb_data(flags: u64, legacy: &LegacyMaterialData) -> Vec<u8> {
+    let layout = predict_ps_layout(flags);
+    let regs = layout.register_count();
+    if regs == 0 {
+        return Vec::new();
+    }
+
+    let total_floats = regs as usize * 4;
+    let mut floats = vec![0.0f32; total_floats];
+
+    let has_emissive = legacy.maps[MapType::Emissive as usize]
+        .iter()
+        .any(|m| !m.name.is_empty());
+    let roughness = 1.0 - (legacy.spec_power / 100.0).clamp(0.0, 1.0);
+
+    for entry in &layout.entries {
+        let off = entry.offset as usize;
+        match entry.name {
+            "uv_scale_t0_t1" => {
+                floats[off] = 1.0;
+                floats[off + 1] = 1.0;
+            }
+            "uv_scale_t2_t3" => {
+                floats[off] = 1.0;
+                floats[off + 1] = 1.0;
+            }
+            "normal_intensity" => floats[off] = 1.0,
+            "uv_scale_t4" => floats[off] = 1.0,
+            "uv_scale_t5" => floats[off] = 1.0,
+            "emissive_intensity" => floats[off] = if has_emissive { 1.0 } else { 0.0 },
+            "scroll_period" => floats[off] = 1.0,
+            "scroll_phase" => floats[off] = 0.0,
+            "fresnel_power" => floats[off] = legacy.env_fresnel_power,
+            "roughness_channel_value" | "roughness_override" => floats[off] = roughness,
+            "detail_blend" => floats[off] = 0.0,
+            "override_strength" => floats[off] = 0.0,
+            "override_bias" => floats[off] = 0.0,
+            "spec_override_color" => {
+                floats[off] = legacy.spec_color[0];
+                floats[off + 1] = legacy.spec_color[1];
+                floats[off + 2] = legacy.spec_color[2];
+            }
+            _ => {}
+        }
+    }
+
+    // Serialize as LE f32 bytes.
+    let mut out = Vec::with_capacity(total_floats * 4);
+    for &f in &floats {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
 /// Convert a Legacy (HW1) material to Hogan (HW2) format.
 ///
 /// Mapping rules:
@@ -153,24 +335,34 @@ fn needed_hogan_textures(legacy: &LegacyMaterialData) -> Vec<&'static str> {
 ///
 /// # Constant Buffer Data
 ///
-/// All five CB data blobs (`vs_cb_data` … `gs_cb_data`) default to empty.
-/// In real HW2 assets these contain raw binary that the engine `memcpy`s
-/// into the GPU constant buffer before rendering.  Empty blobs cause the
-/// shader to use its compiled-in defaults, which is correct for converted
-/// materials.
+/// The pixel shader CB data (`ps_cb_data`) is populated with sensible defaults
+/// derived from the Legacy material properties and the selected permutation's
+/// bitflags.  The layout is predicted from the first permutation's 64-bit flags
+/// using the same algorithm as `hogan_cb_layout.rs`, ensuring that the glTF
+/// exporter can decode the blob back into named parameters.
+///
+/// Vertex/hull/domain/geometry CB blobs remain empty (the common permutations
+/// selected by this converter don't require VS CB parameters).
 pub fn legacy_to_hogan(legacy: &LegacyMaterialData, skinned: bool) -> HoganMaterialData {
     let textures = build_hogan_textures(legacy);
     let needed = needed_hogan_textures(legacy);
     let perm_idx = select_standard_perm_set(&needed);
     let perm_set = HOGAN_STANDARD_PERM_SETS[perm_idx];
 
-    let shader_permutations = perm_set
+    let shader_permutations: Vec<ShaderPermutation> = perm_set
         .iter()
         .map(|(name, hash)| ShaderPermutation {
             name: String::from(*name),
             hash: *hash,
         })
         .collect();
+
+    // Build PS CB data from the first permutation's flags + legacy properties.
+    let ps_cb_data = shader_permutations
+        .first()
+        .and_then(|p| parse_perm_flags(&p.name))
+        .map(|flags| build_ps_cb_data(flags, legacy))
+        .unwrap_or_default();
 
     HoganMaterialData {
         shader_permutations,
@@ -180,7 +372,7 @@ pub fn legacy_to_hogan(legacy: &LegacyMaterialData, skinned: bool) -> HoganMater
         skinned,
         terrain_blending: false,
         vs_cb_data: Vec::new(),
-        ps_cb_data: Vec::new(),
+        ps_cb_data,
         hs_cb_data: Vec::new(),
         ds_cb_data: Vec::new(),
         gs_cb_data: Vec::new(),
@@ -469,6 +661,13 @@ mod tests {
         assert_eq!(hogan.shader_permutations.len(), 4);
         // Should produce HW2-style [al] texture pattern
         assert_eq!(hogan.textures, "art\\textures\\grass_[al]");
+        // PS CB data should now be populated (not empty)
+        assert!(
+            !hogan.ps_cb_data.is_empty(),
+            "ps_cb_data should be populated from legacy properties"
+        );
+        // VS CB data stays empty (no height-blend or vertex-anim in standard perms)
+        assert!(hogan.vs_cb_data.is_empty());
     }
 
     #[test]
@@ -761,5 +960,154 @@ mod tests {
         assert!(!hogan_static.skinned);
         let hogan_skinned = legacy_to_hogan(&legacy, true);
         assert!(hogan_skinned.skinned);
+    }
+
+    // --- CB data population tests ---
+
+    /// Helper: decode the first N floats from LE CB bytes.
+    fn cb_floats(data: &[u8]) -> Vec<f32> {
+        data.chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect()
+    }
+
+    #[test]
+    fn test_parse_perm_flags() {
+        assert_eq!(
+            parse_perm_flags("HOGAN_STANDARD_00020000A83009A0"),
+            Some(0x00020000A83009A0)
+        );
+        assert_eq!(
+            parse_perm_flags("HOGAN_STANDARD_00000000003009A0"),
+            Some(0x00000000003009A0)
+        );
+        assert!(parse_perm_flags("").is_none());
+    }
+
+    #[test]
+    fn test_ps_cb_data_uv_scales_default() {
+        // A basic permutation with no special features should still have
+        // UV scales and normal_intensity.
+        let flags = 0x00000000003009A0u64; // base PBR, bits: 5,7,8,11,12,13,20,21
+        let legacy = LegacyMaterialData::default();
+        let data = build_ps_cb_data(flags, &legacy);
+        let floats = cb_floats(&data);
+
+        // First 4 floats: uv_scale_t0_t1 (1,1) + uv_scale_t2_t3 (1,1)
+        assert_eq!(floats[0], 1.0, "uv_scale_t0_t1.x");
+        assert_eq!(floats[1], 1.0, "uv_scale_t0_t1.y");
+        assert_eq!(floats[2], 1.0, "uv_scale_t2_t3.x");
+        assert_eq!(floats[3], 1.0, "uv_scale_t2_t3.y");
+        // Next: normal_intensity = 1.0
+        assert_eq!(floats[4], 1.0, "normal_intensity");
+    }
+
+    #[test]
+    fn test_ps_cb_data_roughness_from_spec_power() {
+        // A permutation with bit 28 (roughness channel).
+        // Bit 28 = 0x10000000, combine with base bits (5,7,8,11)
+        let flags = 0x10000000u64 | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
+        let legacy = LegacyMaterialData {
+            spec_power: 50.0, // → roughness = 1.0 - 0.5 = 0.5
+            ..LegacyMaterialData::default()
+        };
+
+        let data = build_ps_cb_data(flags, &legacy);
+        let floats = cb_floats(&data);
+
+        // Find roughness_channel_value — it's in Group B after align.
+        // Group A: uv_scale_t0_t1(2) + uv_scale_t2_t3(2) + normal_intensity(1) = 5 floats
+        // Aligned to register: pos 8 (next multiple of 4 after 5)
+        assert!(
+            (floats[8] - 0.5).abs() < 0.001,
+            "roughness should be 0.5, got {}",
+            floats[8]
+        );
+    }
+
+    #[test]
+    fn test_ps_cb_data_spec_color_from_legacy() {
+        // Permutation with bit 49 (material overrides) — includes spec_override_color.
+        let flags = (1u64 << 49) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
+        let legacy = LegacyMaterialData {
+            spec_color: [0.8, 0.6, 0.4],
+            ..LegacyMaterialData::default()
+        };
+
+        let data = build_ps_cb_data(flags, &legacy);
+        let floats = cb_floats(&data);
+
+        // Group A: 5 floats (t0_t1=2, t2_t3=2, normal=1), aligned to 8
+        // Group B: detail_blend(1), roughness_override(1), override_strength(1), aligned to 12
+        //          spec_override_color(3) at offset 12, override_bias(1) at 15
+        assert!(
+            (floats[12] - 0.8).abs() < 0.001,
+            "spec_color.r = {}, expected 0.8",
+            floats[12]
+        );
+        assert!(
+            (floats[13] - 0.6).abs() < 0.001,
+            "spec_color.g = {}, expected 0.6",
+            floats[13]
+        );
+        assert!(
+            (floats[14] - 0.4).abs() < 0.001,
+            "spec_color.b = {}, expected 0.4",
+            floats[14]
+        );
+    }
+
+    #[test]
+    fn test_ps_cb_data_emissive_present() {
+        // Permutation with bit 32 (emissive+t4), plus base bits.
+        let flags =
+            (1u64 << 32) | (1 << 20) | (1 << 21) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
+        let mut legacy = LegacyMaterialData::default();
+        legacy.maps[MapType::Emissive as usize] = vec![Map {
+            name: String::from("unit_em.ddx"),
+            channel: 0,
+            flags: 7,
+        }];
+
+        let data = build_ps_cb_data(flags, &legacy);
+        let floats = cb_floats(&data);
+
+        // Layout: uv_scale_t0_t1(2), uv_scale_t2_t3(2), normal_intensity(1),
+        //         uv_scale_t4(1), emissive_intensity(1)
+        assert_eq!(floats[5], 1.0, "uv_scale_t4");
+        assert_eq!(
+            floats[6], 1.0,
+            "emissive_intensity should be 1.0 when emissive map present"
+        );
+    }
+
+    #[test]
+    fn test_ps_cb_data_no_emissive_map_zero_intensity() {
+        // Same flags as above but no emissive map → emissive_intensity = 0.0
+        let flags =
+            (1u64 << 32) | (1 << 20) | (1 << 21) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
+        let legacy = LegacyMaterialData::default();
+
+        let data = build_ps_cb_data(flags, &legacy);
+        let floats = cb_floats(&data);
+
+        assert_eq!(
+            floats[6], 0.0,
+            "emissive_intensity should be 0.0 without emissive map"
+        );
+    }
+
+    #[test]
+    fn test_ps_cb_data_register_aligned_size() {
+        // CB data size should always be a multiple of 16 bytes (one float4 register).
+        let flags = 0x00020000A83009A0u64;
+        let legacy = LegacyMaterialData::default();
+        let data = build_ps_cb_data(flags, &legacy);
+        assert_eq!(
+            data.len() % 16,
+            0,
+            "CB data size {} is not register-aligned",
+            data.len()
+        );
     }
 }
