@@ -10,6 +10,20 @@ pub enum Error {
     #[error("invalid ECF magic: expected 0x{expected:08X}, found 0x{found:08X}")]
     InvalidMagic { expected: u32, found: u32 },
 
+    /// Header adler32 checksum mismatch.
+    #[error("ECF header checksum mismatch: expected 0x{expected:08X}, computed 0x{computed:08X}")]
+    HeaderChecksumMismatch { expected: u32, computed: u32 },
+
+    /// Chunk data adler32 checksum mismatch.
+    #[error(
+        "ECF chunk {index} checksum mismatch: expected 0x{expected:08X}, computed 0x{computed:08X}"
+    )]
+    ChunkChecksumMismatch {
+        index: usize,
+        expected: u32,
+        computed: u32,
+    },
+
     /// Chunk index out of bounds.
     #[error("chunk not found: 0x{0:016X}")]
     ChunkNotFound(u64),

@@ -16,7 +16,7 @@
 
 use alloc::vec::Vec;
 
-use crate::{EcfChunkHeader, EcfHeader, Error, Result, decompress, resource_flags};
+use crate::{EcfChunkHeader, EcfHeader, Error, Result, adler32, decompress, resource_flags};
 
 /// Zero-copy ECF reader backed by a byte slice.
 pub struct Reader<'a> {
@@ -26,20 +26,54 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    /// Parse an ECF container from a byte slice.
+    /// Parse an ECF container from a byte slice, validating checksums.
     pub fn new(data: &'a [u8]) -> Result<Self> {
         let header = EcfHeader::from_bytes(data)?;
+
+        // Validate header adler32 (bytes 12..header_size, matching HW2 ECF::validateHeader)
+        let hdr_end = (header.header_size as usize).min(data.len());
+        if hdr_end > 12 {
+            let computed = adler32(&data[12..hdr_end]);
+            if computed != header.adler32 {
+                return Err(Error::HeaderChecksumMismatch {
+                    expected: header.adler32,
+                    computed,
+                });
+            }
+        }
 
         // Chunk headers start right after the (possibly extended) ECF header
         let mut offset = header.header_size as usize;
         let chunk_stride = EcfChunkHeader::SIZE + header.chunk_extra_data_size as usize;
 
         let mut chunks = Vec::with_capacity(header.num_chunks as usize);
-        for _ in 0..header.num_chunks {
+        for i in 0..header.num_chunks {
             if offset + EcfChunkHeader::SIZE > data.len() {
                 return Err(Error::UnexpectedEof);
             }
-            chunks.push(EcfChunkHeader::from_bytes(&data[offset..])?);
+
+            let chunk = EcfChunkHeader::from_bytes(&data[offset..])?;
+
+            // Validate per-chunk adler32 (matching HW2 ECF::validateChunks)
+            if chunk.size > 0 {
+                let cstart = chunk.offset as usize;
+                let cend = cstart + chunk.size as usize;
+
+                if cend > data.len() {
+                    return Err(Error::UnexpectedEof);
+                }
+
+                let computed = adler32(&data[cstart..cend]);
+                if computed != chunk.adler32 {
+                    return Err(Error::ChunkChecksumMismatch {
+                        index: i as usize,
+                        expected: chunk.adler32,
+                        computed,
+                    });
+                }
+            }
+
+            chunks.push(chunk);
             offset += chunk_stride;
         }
 
@@ -76,6 +110,7 @@ impl<'a> Reader<'a> {
         if end > self.data.len() {
             return Err(Error::UnexpectedEof);
         }
+
         Ok(&self.data[start..end])
     }
 
