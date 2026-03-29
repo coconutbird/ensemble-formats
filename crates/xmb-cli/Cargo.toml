@@ -13,4 +13,5 @@ path = "src/main.rs"
 
 [dependencies]
 xmb.workspace = true
+ecf.workspace = true
 clap.workspace = true

@@ -139,23 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Some(Commands::Info { input }) => {
             let data = std::fs::read(&input)?;
-            let doc = Reader::read(&data)?;
-
-            println!("File: {}", input.display());
-            println!("Format: {:?}", doc.format());
-
-            if let Some(root) = doc.root() {
-                println!("Root element: <{}>", root.name);
-                println!("Attributes: {}", root.attributes.len());
-                println!("Children: {}", root.children.len());
-
-                fn count_nodes(node: &Node) -> usize {
-                    1 + node.children.iter().map(count_nodes).sum::<usize>()
-                }
-                println!("Total nodes: {}", count_nodes(root));
-            } else {
-                println!("(empty document)");
-            }
+            print_info(&input, &data)?;
         }
 
         None => {
@@ -167,6 +151,131 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("  .xmb files -> .xml");
             std::process::exit(1);
         }
+    }
+
+    Ok(())
+}
+
+/// Print detailed info about an XMB file: ECF header, chunk metadata,
+/// BDeflateStream compression details, and BDT format.
+fn print_info(path: &Path, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    println!("File: {}", path.display());
+    println!("Size: {} bytes", data.len());
+    println!();
+
+    // --- ECF layer ---
+    let ecf = ecf::Reader::new(data)?;
+    let hdr = ecf.header();
+    println!("=== ECF Header ===");
+    println!("  magic:       0x{:08X}", hdr.magic);
+    println!("  header_size: {} bytes", hdr.header_size);
+    println!("  file_size:   {} bytes", hdr.file_size);
+    println!("  adler32:     0x{:08X}", hdr.adler32);
+    println!("  num_chunks:  {}", hdr.num_chunks);
+    println!("  flags:       0x{:04X}", hdr.flags);
+    println!("  id:          0x{:08X}", hdr.id);
+    println!("  chunk_extra: {} bytes", hdr.chunk_extra_data_size);
+    println!();
+
+    for (i, ch) in ecf.chunks().iter().enumerate() {
+        println!("=== Chunk {} ===", i);
+        println!("  id:             0x{:016X}", ch.id);
+        println!("  offset:         {}", ch.offset);
+        println!("  size:           {} bytes", ch.size);
+        println!("  adler32:        0x{:08X}", ch.adler32);
+        println!("  flags:          0x{:02X}", ch.flags);
+        println!(
+            "  alignment:      {} (log2={})",
+            ch.alignment(),
+            ch.alignment_log2
+        );
+        println!("  resource_flags: 0x{:04X}", ch.resource_flags);
+
+        let is_compressed = (ch.resource_flags & ecf::resource_flags::IS_DEFLATE_STREAM) != 0;
+        println!("  compressed:     {}", is_compressed);
+
+        if is_compressed {
+            let raw = ecf.raw_chunk_data(i)?;
+            if raw.len() >= ecf::deflate_stream::HEADER_SIZE {
+                let sig = u32::from_le_bytes(raw[0..4].try_into().unwrap());
+                let big_endian = sig == ecf::deflate_stream::SIGNATURE_INVERTED;
+                let endian_label = if big_endian {
+                    "big-endian"
+                } else {
+                    "little-endian"
+                };
+
+                let read_u64 = |off: usize| -> u64 {
+                    let b: [u8; 8] = raw[off..off + 8].try_into().unwrap();
+                    if big_endian {
+                        u64::from_be_bytes(b)
+                    } else {
+                        u64::from_le_bytes(b)
+                    }
+                };
+                let read_u32 = |off: usize| -> u32 {
+                    let b: [u8; 4] = raw[off..off + 4].try_into().unwrap();
+                    if big_endian {
+                        u32::from_be_bytes(b)
+                    } else {
+                        u32::from_le_bytes(b)
+                    }
+                };
+
+                let src_bytes = read_u64(12);
+                let dst_bytes = read_u64(20);
+                let src_adler = read_u32(28);
+                let dst_adler = read_u32(32);
+
+                println!();
+                println!("  --- BDeflateStream ---");
+                println!("  signature:      0x{:08X} ({})", sig, endian_label);
+                println!("  src_bytes:      {} (decompressed)", src_bytes);
+                println!("  dst_bytes:      {} (compressed)", dst_bytes);
+                println!("  src_adler32:    0x{:08X}", src_adler);
+                println!("  dst_adler32:    0x{:08X}", dst_adler);
+                if src_bytes > 0 {
+                    let ratio = dst_bytes as f64 / src_bytes as f64 * 100.0;
+                    println!("  ratio:          {:.1}%", ratio);
+                }
+            }
+        }
+
+        // Decompress and inspect XMB/BDT payload
+        match ecf.chunk_data(i) {
+            Ok(decompressed) => {
+                println!();
+                println!("  --- Decompressed payload ---");
+                println!("  size: {} bytes", decompressed.len());
+                if decompressed.len() >= 4 {
+                    let sig = u32::from_le_bytes(decompressed[0..4].try_into().unwrap());
+                    println!("  xmb_signature:  0x{:08X} (LE)", sig);
+                    let sig_be = u32::from_be_bytes(decompressed[0..4].try_into().unwrap());
+                    if sig == xmb::SIGNATURE {
+                        println!("  format:         PC (little-endian BDT, 48-byte nodes)");
+                    } else if sig_be == xmb::SIGNATURE {
+                        println!("  format:         Xbox 360 (big-endian BDT, 28-byte nodes)");
+                    }
+                }
+                // Parse as XMB document for node summary
+                if let Ok(doc) = Reader::read(data) {
+                    println!("  bdt_format:     {:?}", doc.format());
+                    if let Some(root) = doc.root() {
+                        fn count_nodes(node: &Node) -> usize {
+                            1 + node.children.iter().map(count_nodes).sum::<usize>()
+                        }
+                        println!("  root_element:   <{}>", root.name);
+                        println!("  root_attrs:     {}", root.attributes.len());
+                        println!("  root_children:  {}", root.children.len());
+                        println!("  total_nodes:    {}", count_nodes(root));
+                    }
+                }
+            }
+            Err(e) => {
+                println!("  decompress error: {}", e);
+            }
+        }
+        println!();
     }
 
     Ok(())

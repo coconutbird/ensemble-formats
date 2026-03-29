@@ -40,12 +40,10 @@ impl Writer {
 
         let mut ecf = ecf::Writer::new(ECF_FILE_ID);
         if compress {
-            match format {
-                Format::PC => ecf.add_chunk_compressed(PACKED_DATA_CHUNK_ID, packed_data)?,
-                Format::Xbox360 => {
-                    ecf.add_chunk_compressed_be(PACKED_DATA_CHUNK_ID, packed_data)?
-                }
-            }
+            // BDeflateStream wrapper is always big-endian on disk; the inner
+            // BDT payload endianness is determined by `format` (already baked
+            // into `packed_data`).
+            ecf.add_chunk_compressed(PACKED_DATA_CHUNK_ID, packed_data)?;
         } else {
             ecf.add_chunk(PACKED_DATA_CHUNK_ID, packed_data);
         }

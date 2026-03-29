@@ -26,10 +26,16 @@ use miniz_oxide::inflate::decompress_to_vec;
 use crate::checksum::adler32;
 use crate::{Error, Result};
 
-/// BDeflateStream signature for little-endian format (PC).
+/// BDeflateStream signature value (as a native u32).
+///
+/// Both HW1 and HW2 use a big-endian stream reader that byte-swaps values
+/// from disk, so the on-disk bytes are always `CC 34 EE AD` (BE encoding).
+/// After the reader swaps, the in-memory value equals `0xADEE34CC` on the
+/// Xbox 360 or `0xCC34EEAD` on PC — but the disk representation is always BE.
 pub const SIGNATURE: u32 = 0xCC34EEAD;
 
-/// BDeflateStream inverted signature for big-endian format (Xbox 360).
+/// BDeflateStream signature as it appears on disk (big-endian byte order).
+/// Reading these 4 bytes as a little-endian u32 gives `0xADEE34CC`.
 pub const SIGNATURE_INVERTED: u32 = 0xADEE34CC;
 
 /// BDeflateStream header size in bytes.

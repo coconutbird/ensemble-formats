@@ -82,25 +82,25 @@ impl Writer {
         self.chunks.push((chunk, data));
     }
 
-    /// Add a BDeflateStream-compressed chunk (little-endian / PC).
+    /// Add a BDeflateStream-compressed chunk.
+    ///
+    /// BDeflateStream headers are **always big-endian** on disk — both HW1
+    /// and HW2 use a big-endian stream reader that byte-swaps u32/u64 fields
+    /// unconditionally. The payload inside (e.g. BDT data) keeps whatever
+    /// endianness the caller wrote it in.
     pub fn add_chunk_compressed(&mut self, id: u64, data: Vec<u8>) -> Result<()> {
-        self.add_chunk_compressed_with_options(id, data, false, self.default_alignment_log2)
+        self.add_chunk_compressed_with_alignment(id, data, self.default_alignment_log2)
     }
 
-    /// Add a BDeflateStream-compressed chunk (big-endian / Xbox 360).
-    pub fn add_chunk_compressed_be(&mut self, id: u64, data: Vec<u8>) -> Result<()> {
-        self.add_chunk_compressed_with_options(id, data, true, self.default_alignment_log2)
-    }
-
-    /// Add a compressed chunk with explicit endianness and alignment.
-    pub fn add_chunk_compressed_with_options(
+    /// Add a compressed chunk with specific alignment.
+    pub fn add_chunk_compressed_with_alignment(
         &mut self,
         id: u64,
         data: Vec<u8>,
-        big_endian: bool,
         alignment_log2: u8,
     ) -> Result<()> {
-        let wrapped = compress(&data, big_endian)?;
+        // BDeflateStream is always big-endian on disk.
+        let wrapped = compress(&data, true)?;
         let chunk = EcfChunkHeader {
             id,
             offset: 0,
