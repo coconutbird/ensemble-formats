@@ -292,8 +292,8 @@ fn write_section_tail(
         UgxVersion::Hw2 => {
             cursor.write_i32_le(if section.rigid_only { 1 } else { 0 })?;
             cursor.write_i32_le(if section.global_bones { 1 } else { 0 })?;
-            cursor.write_i32_le(0)?; // unknown
-            cursor.write_i32_le(0)?; // unknown2
+            cursor.write_i32_le(crate::constants::HW2_SECTION_RESERVED1)?;
+            cursor.write_i32_le(crate::constants::HW2_SECTION_RESERVED2)?;
 
             write_bone_remap_header(cursor, section, section_idx, bone_remap_fixups)?;
         }
@@ -347,13 +347,10 @@ fn write_bones(
             }
         }
 
-        // When parent_index is -1, the engine writes the full 8 bytes as
-        // 0xFFFFFFFF_FFFFFFFF (i.e. the padding mirrors the sentinel).
-        let padding = if bone.parent_index == -1 {
-            [0xFF; 4]
-        } else {
-            [0; 4]
-        };
+        // Padding after parent_index is always zero.
+        // (The engine's BPackedArray rebase only checks the name_offset
+        // sentinel at +0, not the parent_index padding at +76.)
+        let padding = [0u8; 4];
         let packed = crate::types::raw::PackedBoneRaw {
             name_offset: 0u64.to_le_bytes(), // placeholder
             model_to_bone: mtb,

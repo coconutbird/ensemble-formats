@@ -27,8 +27,8 @@ use crate::vertex::packer::UnivertPacker;
 /// - +0x00: same 40 bytes of fixed fields as HW1
 /// - +0x28: i32 flags (rigid_only / global_bones)
 /// - +0x2C: i32 flags2
-/// - +0x30: i32 unknown
-/// - +0x34: i32 unknown2
+/// - +0x30: i32 reserved (`HW2_SECTION_RESERVED1` = `f32::MAX` / `0x7F7FFFFF`)
+/// - +0x34: i32 reserved (`HW2_SECTION_RESERVED2` = `0`)
 /// - +0x38: BoneRemap packed array (16 bytes)
 /// - No UnivertPacker (vertex format determined externally).
 #[derive(Debug, Clone)]

@@ -111,7 +111,7 @@ fn read_section_tail_hw1(
     Ok((bone_remap, Some(packer), rigid_only, global_bones))
 }
 
-/// HW2 section tail: flags(8) + unknown(8) + bone_remap(16).
+/// HW2 section tail: flags(8) + reserved(8) + bone_remap(16).
 fn read_section_tail_hw2(
     data: &[u8],
     pos: &mut usize,
@@ -119,8 +119,25 @@ fn read_section_tail_hw2(
     let mut cur = SliceCursor::new(&data[*pos..]);
     let rigid_only = cur.read_i32_le()? != 0;
     let global_bones = cur.read_i32_le()? != 0;
-    let _unknown1 = cur.read_i32_le()?;
-    let _unknown2 = cur.read_i32_le()?;
+    // +0x30, +0x34: reserved fields (always HW2_SECTION_RESERVED1/2).
+    // The engine never reads these at runtime — they are constant defaults
+    // written by the export pipeline. Error if they differ from expected.
+    let reserved1 = cur.read_i32_le()?;
+    if reserved1 != crate::constants::HW2_SECTION_RESERVED1 {
+        return Err(Error::UnexpectedReservedValue {
+            context: "HW2 section +0x30",
+            expected: crate::constants::HW2_SECTION_RESERVED1 as u32,
+            actual: reserved1 as u32,
+        });
+    }
+    let reserved2 = cur.read_i32_le()?;
+    if reserved2 != crate::constants::HW2_SECTION_RESERVED2 {
+        return Err(Error::UnexpectedReservedValue {
+            context: "HW2 section +0x34",
+            expected: crate::constants::HW2_SECTION_RESERVED2 as u32,
+            actual: reserved2 as u32,
+        });
+    }
     *pos += cur.position();
 
     let bone_remap = read_bone_remap(data, pos)?;

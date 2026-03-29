@@ -1,5 +1,5 @@
 use super::*;
-use std::{eprint, eprintln};
+use std::{eprint, eprintln, format};
 
 /// Helper: read a test file, skipping if not present on disk.
 fn read_test_file(path: &str) -> Option<Vec<u8>> {
@@ -286,6 +286,122 @@ fn inspect_hw2_ugx() {
             }
             Err(e) => {
                 eprintln!("FAILED: {:?}", e);
+            }
+        }
+    }
+}
+
+#[test]
+fn binary_diff_hw2_roundtrip() {
+    let paths = [
+        "/Users/dev/gamedepot/wstore/DUMP/data/maps/rostermode/evenflow_desert/evenflow_desert_water_01/mesh_water.ugx",
+        "/Users/dev/gamedepot/wstore/DUMP/data/maps/rostermode/evenflow_desert/evenflow_desert_water_01/childmesh_child_asset003.ugx",
+    ];
+
+    for path in paths {
+        let original = match read_test_file(path) {
+            Some(d) => d,
+            None => {
+                eprintln!("Skipping {}", path);
+                continue;
+            }
+        };
+
+        let geom = UgxGeom::from_bytes(&original).unwrap();
+        let round_tripped = geom.to_bytes().unwrap();
+
+        let fname = path.rsplit('/').next().unwrap();
+        eprintln!("\n=== {} ===", fname);
+        eprintln!("Original:      {} bytes", original.len());
+        eprintln!("Round-tripped: {} bytes", round_tripped.len());
+
+        if original == round_tripped {
+            eprintln!("BYTE-EXACT MATCH!");
+            continue;
+        }
+
+        // Compare chunk-by-chunk via ECF
+        let orig_ecf = ecf::Reader::new(&original).unwrap();
+        let rt_ecf = ecf::Reader::new(&round_tripped).unwrap();
+
+        eprintln!(
+            "Original ECF:  {} chunks, ID=0x{:08X}",
+            orig_ecf.chunks().len(),
+            orig_ecf.header().id
+        );
+        eprintln!(
+            "RoundTrip ECF: {} chunks, ID=0x{:08X}",
+            rt_ecf.chunks().len(),
+            rt_ecf.header().id
+        );
+
+        // Compare chunk ordering
+        eprintln!("\nChunk order:");
+        eprintln!(
+            "  Original:    {:?}",
+            orig_ecf
+                .chunks()
+                .iter()
+                .map(|c| format!("0x{:03X}", c.id))
+                .collect::<Vec<_>>()
+        );
+        eprintln!(
+            "  RoundTrip:   {:?}",
+            rt_ecf
+                .chunks()
+                .iter()
+                .map(|c| format!("0x{:03X}", c.id))
+                .collect::<Vec<_>>()
+        );
+
+        for chunk in orig_ecf.chunks() {
+            let orig_data = orig_ecf.chunk_data_by_id(chunk.id).unwrap();
+            match rt_ecf.chunk_data_by_id(chunk.id) {
+                Ok(rt_data) => {
+                    if orig_data == rt_data {
+                        eprintln!(
+                            "Chunk 0x{:03X}: MATCH ({} bytes)",
+                            chunk.id,
+                            orig_data.len()
+                        );
+                    } else {
+                        eprintln!(
+                            "Chunk 0x{:03X}: DIFFERENT (orig={}, rt={})",
+                            chunk.id,
+                            orig_data.len(),
+                            rt_data.len()
+                        );
+                        let chunk_min = orig_data.len().min(rt_data.len());
+                        let mut chunk_diffs = 0;
+                        for i in 0..chunk_min {
+                            if orig_data[i] != rt_data[i] {
+                                chunk_diffs += 1;
+                                if chunk_diffs <= 20 {
+                                    eprintln!(
+                                        "  diff at chunk+0x{:04X}: orig=0x{:02X} vs rt=0x{:02X}",
+                                        i, orig_data[i], rt_data[i]
+                                    );
+                                }
+                            }
+                        }
+                        if orig_data.len() != rt_data.len() {
+                            eprintln!("  SIZE DIFF: orig={} rt={}", orig_data.len(), rt_data.len());
+                        }
+                        eprintln!("  Total chunk byte diffs: {}", chunk_diffs);
+                    }
+                }
+                Err(_) => {
+                    eprintln!("Chunk 0x{:03X}: MISSING in round-trip", chunk.id);
+                }
+            }
+        }
+
+        for chunk in rt_ecf.chunks() {
+            if orig_ecf.chunk_data_by_id(chunk.id).is_err() {
+                eprintln!(
+                    "Chunk 0x{:03X}: EXTRA in round-trip ({} bytes)",
+                    chunk.id, chunk.size
+                );
             }
         }
     }

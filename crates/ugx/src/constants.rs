@@ -54,8 +54,21 @@ pub(crate) const GEOM_HEADER_SIGNATURE_HW2: u32 = 0xC2340006;
 /// Section stride for HW1: 40B fixed + 16B bone_remap + 84B packer + 12B flags.
 pub(crate) const SECTION_STRIDE_HW1: usize = 152;
 
-/// Section stride for HW2: 40B fixed + 8B flags + 8B unknown + 16B bone_remap.
+/// Section stride for HW2: 40B fixed + 8B flags + 8B reserved + 16B bone_remap.
 pub(crate) const SECTION_STRIDE_HW2: usize = 72;
+
+/// HW2 section reserved field 1 (offset +0x30 within each 72-byte section).
+///
+/// Always `0x7F7FFFFF` (`f32::MAX`) in every shipped HW2 UGX file.
+/// The engine never reads this field at runtime — it is written by the
+/// export pipeline with a constant default and preserved here for
+/// binary-exact round-tripping.
+pub(crate) const HW2_SECTION_RESERVED1: i32 = 0x7F7FFFFFu32 as i32;
+
+/// HW2 section reserved field 2 (offset +0x34 within each 72-byte section).
+///
+/// Always `0x00000000` in every shipped HW2 UGX file.
+pub(crate) const HW2_SECTION_RESERVED2: i32 = 0;
 
 /// On-disk size of a serialised `UnivertPacker` (2 × u64 string offsets + 12 × u32 type fields).
 #[allow(dead_code)]

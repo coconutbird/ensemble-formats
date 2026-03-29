@@ -52,6 +52,16 @@ pub enum Error {
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
 
+    /// Unexpected value in a reserved field.
+    #[error(
+        "Unexpected reserved field value in {context}: expected 0x{expected:08X}, got 0x{actual:08X}"
+    )]
+    UnexpectedReservedValue {
+        context: &'static str,
+        expected: u32,
+        actual: u32,
+    },
+
     /// Invalid Granny chunk — present but FromFileName is not "gr2ugx".
     #[error("Invalid Granny chunk: FromFileName is \"{actual}\", expected \"gr2ugx\"")]
     InvalidGrannyChunk { actual: String },
