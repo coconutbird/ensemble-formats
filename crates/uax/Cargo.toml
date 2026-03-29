@@ -9,8 +9,10 @@ authors.workspace = true
 
 [dependencies]
 ecf = { workspace = true }
+nostdio = { workspace = true }
 thiserror = { workspace = true }
 zerocopy.workspace = true
 
 [dev-dependencies]
 era = { workspace = true }
+test-utils = { path = "../test-utils" }

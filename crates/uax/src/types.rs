@@ -190,7 +190,6 @@ pub mod transform {
     pub const SIZE: usize = 0x44;
 }
 
-
 // ============================================================================
 // High-level parsed types
 // ============================================================================
@@ -199,7 +198,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 /// A fully parsed UAX animation with all track data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Animation {
     /// Animation name (e.g. path from Maya).
     pub name: Option<String>,
@@ -214,7 +213,7 @@ pub struct Animation {
 }
 
 /// A group of animation tracks, usually one per animated skeleton.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrackGroup {
     /// Track group name (e.g. "GrannyRootBone_Warthog01").
     pub name: Option<String>,
@@ -229,7 +228,7 @@ pub struct TrackGroup {
 }
 
 /// A single bone's animation transform track.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransformTrack {
     /// Bone name.
     pub name: Option<String>,
@@ -243,20 +242,142 @@ pub struct TransformTrack {
     pub scale_shear: CurveData,
 }
 
-/// Raw curve data from Granny, preserving format and degree.
-#[derive(Debug, Clone)]
+/// Parsed curve data from Granny, preserving format, degree, and typed payload.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CurveData {
-    /// Granny curve format ID (e.g. 2=DaIdentity, 4=DaConstant32f,
-    /// 8=D3Constant32f, 10=D4nK16uC15p, 11=DaK32fC32f, etc.).
+    /// Granny curve format ID.
     pub format: u8,
     /// Curve degree (0=constant, 1=linear, 2=quadratic B-spline, etc.).
     pub degree: u8,
-    /// Raw curve payload bytes (everything after the 2-byte header).
-    pub payload: Vec<u8>,
+    /// Fully parsed curve payload.
+    pub payload: CurvePayload,
+}
+
+/// Typed curve payload variants corresponding to Granny curve formats.
+///
+/// Each variant stores the decoded fields for its curve type. The format
+/// ID → type name mapping (verified from embedded type trees in game files):
+///
+/// | fmt | Granny Type     | Description                          |
+/// |-----|-----------------|--------------------------------------|
+/// |   1 | DaK32fC32f      | f32 knots + f32 controls             |
+/// |   2 | DaIdentity      | Identity transform (no animation)    |
+/// |   3 | DaConstant32f   | N×f32 constant (dimension-agnostic)  |
+/// |   4 | D3Constant32f   | 3×f32 constant (vec3)                |
+/// |   5 | D4Constant32f   | 4×f32 constant (quaternion)          |
+/// |   8 | D4nK16uC15u     | Quantized 4D normalized curve        |
+/// |   9 | D4nK8uC7u       | Quantized 4D normalized curve (8-bit)|
+/// |  10 | D3K16uC16u      | Quantized 3D curve (16-bit)          |
+/// |  11 | D3K8uC8u        | Quantized 3D curve (8-bit)           |
+/// |  18 | D3I1K8uC8u      | Quantized 3D identity-interleaved    |
+#[derive(Debug, Clone, PartialEq)]
+pub enum CurvePayload {
+    /// Format 2: DaIdentity — no animation data, just dimension.
+    Identity {
+        /// Number of output dimensions (3=position, 4=quaternion, 9=scale/shear).
+        dimension: u16,
+    },
+
+    /// Format 3: DaConstant32f — dimension-agnostic constant.
+    /// Controls are stored in a ref_arr (variable length f32 array).
+    DaConstant32f {
+        /// Padding field.
+        padding: u16,
+        /// Constant control values (N×f32, length = dimension).
+        controls: Vec<f32>,
+    },
+
+    /// Format 4: D3Constant32f — 3D constant (e.g. position).
+    D3Constant32f {
+        /// Padding field.
+        padding: u16,
+        /// 3 constant f32 control values [x, y, z].
+        controls: [f32; 3],
+    },
+
+    /// Format 5: D4Constant32f — 4D constant (e.g. quaternion).
+    D4Constant32f {
+        /// Padding field.
+        padding: u16,
+        /// 4 constant f32 control values [x, y, z, w].
+        controls: [f32; 4],
+    },
+
+    /// Format 1: DaK32fC32f — f32 knots and f32 controls.
+    DaK32fC32f {
+        /// Padding field.
+        padding: u16,
+        /// Knot values (f32 array from ref_arr).
+        knots: Vec<f32>,
+        /// Control point values (f32 array from ref_arr).
+        controls: Vec<f32>,
+    },
+
+    /// Format 8: D4nK16uC15u — quantized 4D normalized curve (u16 knots/controls).
+    D4nK16uC15u {
+        /// Scale/offset table entries (packed u16).
+        scale_offset_table_entries: u16,
+        /// 1.0 / knot scale (maps u16 knots to time).
+        one_over_knot_scale: f32,
+        /// Interleaved knots and controls as raw bytes.
+        knots_controls: Vec<u8>,
+    },
+
+    /// Format 9: D4nK8uC7u — quantized 4D normalized curve (u8 knots/controls).
+    D4nK8uC7u {
+        /// Scale/offset table entries (packed u16).
+        scale_offset_table_entries: u16,
+        /// 1.0 / knot scale (maps u8 knots to time).
+        one_over_knot_scale: f32,
+        /// Interleaved knots and controls as raw bytes.
+        knots_controls: Vec<u8>,
+    },
+
+    /// Format 10: D3K16uC16u — quantized 3D curve with 16-bit knots/controls.
+    D3K16uC16u {
+        /// Truncated 1/knot_scale (u16 encoding of the scale).
+        one_over_knot_scale_trunc: u16,
+        /// Per-axis control scale factors [x, y, z].
+        control_scales: [f32; 3],
+        /// Per-axis control offsets [x, y, z].
+        control_offsets: [f32; 3],
+        /// Interleaved knots and controls as raw bytes.
+        knots_controls: Vec<u8>,
+    },
+
+    /// Format 11: D3K8uC8u — quantized 3D curve with 8-bit knots/controls.
+    D3K8uC8u {
+        /// Truncated 1/knot_scale (u16 encoding of the scale).
+        one_over_knot_scale_trunc: u16,
+        /// Per-axis control scale factors [x, y, z].
+        control_scales: [f32; 3],
+        /// Per-axis control offsets [x, y, z].
+        control_offsets: [f32; 3],
+        /// Interleaved knots and controls as raw bytes.
+        knots_controls: Vec<u8>,
+    },
+
+    /// Format 18: D3I1K8uC8u — quantized 3D identity-interleaved curve (8-bit).
+    D3I1K8uC8u {
+        /// Truncated 1/knot_scale (u16 encoding of the scale).
+        one_over_knot_scale_trunc: u16,
+        /// Per-axis control scale factors [x, y, z].
+        control_scales: [f32; 3],
+        /// Per-axis control offsets [x, y, z].
+        control_offsets: [f32; 3],
+        /// Interleaved knots and controls as raw bytes.
+        knots_controls: Vec<u8>,
+    },
+
+    /// Unknown or unsupported curve format — raw bytes preserved.
+    Unknown {
+        /// Raw payload bytes after the 2-byte header.
+        raw: Vec<u8>,
+    },
 }
 
 /// A Granny transform (placement / rest pose).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Transform {
     /// Flags indicating which components are valid.
     pub flags: u32,
@@ -290,6 +411,13 @@ pub fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
         .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
+/// Read a little-endian u16 at the given offset.
+#[inline]
+pub fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
+    data.get(offset..offset + 2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+}
+
 /// Read a little-endian u32 at the given offset.
 #[inline]
 pub fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
@@ -316,7 +444,10 @@ pub fn read_cstring(data: &[u8], offset: usize) -> Option<String> {
         return None;
     }
     let bytes = &data[offset..];
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len().min(512));
+    let end = bytes
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(bytes.len().min(512));
     String::from_utf8(bytes[..end].to_vec()).ok()
 }
 
@@ -348,7 +479,13 @@ pub fn read_transform(data: &[u8], offset: usize) -> Transform {
     ];
     let mut scale_shear = [0.0f32; 9];
     for i in 0..9 {
-        scale_shear[i] = read_f32_le(data, offset + transform::SCALE_SHEAR + i * 4).unwrap_or(if i % 4 == 0 { 1.0 } else { 0.0 });
+        scale_shear[i] = read_f32_le(data, offset + transform::SCALE_SHEAR + i * 4)
+            .unwrap_or(if i % 4 == 0 { 1.0 } else { 0.0 });
     }
-    Transform { flags, position, orientation, scale_shear }
+    Transform {
+        flags,
+        position,
+        orientation,
+        scale_shear,
+    }
 }

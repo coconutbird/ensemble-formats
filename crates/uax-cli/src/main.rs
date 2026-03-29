@@ -2,9 +2,13 @@
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use uax::types::{CurveData, CurvePayload};
 
 #[derive(Parser)]
-#[command(name = "uax", about = "Inspect UAX animation files (Halo Wars DE / HW2)")]
+#[command(
+    name = "uax",
+    about = "Inspect UAX animation files (Halo Wars DE / HW2)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -52,7 +56,10 @@ fn print_info(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     println!("=== {name} ===");
-    println!("  name:         {:?}", anim.name.as_deref().unwrap_or("(none)"));
+    println!(
+        "  name:         {:?}",
+        anim.name.as_deref().unwrap_or("(none)")
+    );
     println!("  duration:     {:.4}s", anim.duration);
     println!("  time_step:    {:.6}", anim.time_step);
     println!("  oversampling: {:.1}", anim.oversampling);
@@ -107,8 +114,13 @@ fn print_dump(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let p = &tg.initial_placement;
         println!(
             "  initial_placement: pos=[{:.3},{:.3},{:.3}] ori=[{:.3},{:.3},{:.3},{:.3}]",
-            p.position[0], p.position[1], p.position[2],
-            p.orientation[0], p.orientation[1], p.orientation[2], p.orientation[3],
+            p.position[0],
+            p.position[1],
+            p.position[2],
+            p.orientation[0],
+            p.orientation[1],
+            p.orientation[2],
+            p.orientation[3],
         );
         if !tg.transform_lod_errors.is_empty() {
             println!("  lod_errors: {} entries", tg.transform_lod_errors.len());
@@ -117,16 +129,123 @@ fn print_dump(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         for (ti, tt) in tg.transform_tracks.iter().enumerate() {
             let bone = tt.name.as_deref().unwrap_or("?");
-            println!(
-                "    [{:3}] '{}' flags={} O(fmt={},deg={},{}B) P(fmt={},deg={},{}B) S(fmt={},deg={},{}B)",
-                ti, bone, tt.flags,
-                tt.orientation.format, tt.orientation.degree, tt.orientation.payload.len(),
-                tt.position.format, tt.position.degree, tt.position.payload.len(),
-                tt.scale_shear.format, tt.scale_shear.degree, tt.scale_shear.payload.len(),
-            );
+            println!("    [{:3}] '{}' flags={}", ti, bone, tt.flags,);
+            print_curve_detail("      O", &tt.orientation);
+            print_curve_detail("      P", &tt.position);
+            print_curve_detail("      S", &tt.scale_shear);
         }
         println!();
     }
 
     Ok(())
+}
+
+fn print_curve_detail(prefix: &str, cd: &CurveData) {
+    match &cd.payload {
+        CurvePayload::Identity { dimension } => {
+            println!("{prefix}: Identity(dim={dimension})");
+        }
+        CurvePayload::DaConstant32f { controls, .. } => {
+            println!(
+                "{prefix}: DaConstant32f(deg={}, vals={:?})",
+                cd.degree, controls
+            );
+        }
+        CurvePayload::D3Constant32f { controls, .. } => {
+            println!(
+                "{prefix}: D3Constant32f(deg={}, [{:.4},{:.4},{:.4}])",
+                cd.degree, controls[0], controls[1], controls[2]
+            );
+        }
+        CurvePayload::D4Constant32f { controls, .. } => {
+            println!(
+                "{prefix}: D4Constant32f(deg={}, [{:.4},{:.4},{:.4},{:.4}])",
+                cd.degree, controls[0], controls[1], controls[2], controls[3]
+            );
+        }
+        CurvePayload::DaK32fC32f {
+            knots, controls, ..
+        } => {
+            println!(
+                "{prefix}: DaK32fC32f(deg={}, knots={}, ctrls={})",
+                cd.degree,
+                knots.len(),
+                controls.len()
+            );
+        }
+        CurvePayload::D4nK16uC15u {
+            one_over_knot_scale,
+            knots_controls,
+            ..
+        } => {
+            println!(
+                "{prefix}: D4nK16uC15u(deg={}, ooks={:.4}, kc={}B)",
+                cd.degree,
+                one_over_knot_scale,
+                knots_controls.len()
+            );
+        }
+        CurvePayload::D4nK8uC7u {
+            one_over_knot_scale,
+            knots_controls,
+            ..
+        } => {
+            println!(
+                "{prefix}: D4nK8uC7u(deg={}, ooks={:.4}, kc={}B)",
+                cd.degree,
+                one_over_knot_scale,
+                knots_controls.len()
+            );
+        }
+        CurvePayload::D3K16uC16u {
+            control_scales,
+            control_offsets,
+            knots_controls,
+            ..
+        } => {
+            println!(
+                "{prefix}: D3K16uC16u(deg={}, kc={}B, scales={:?}, offsets={:?})",
+                cd.degree,
+                knots_controls.len(),
+                control_scales,
+                control_offsets
+            );
+        }
+        CurvePayload::D3K8uC8u {
+            control_scales,
+            control_offsets,
+            knots_controls,
+            ..
+        } => {
+            println!(
+                "{prefix}: D3K8uC8u(deg={}, kc={}B, scales={:?}, offsets={:?})",
+                cd.degree,
+                knots_controls.len(),
+                control_scales,
+                control_offsets
+            );
+        }
+        CurvePayload::D3I1K8uC8u {
+            control_scales,
+            control_offsets,
+            knots_controls,
+            ..
+        } => {
+            println!(
+                "{prefix}: D3I1K8uC8u(deg={}, kc={}B, scales={:?}, offsets={:?})",
+                cd.degree,
+                knots_controls.len(),
+                control_scales,
+                control_offsets
+            );
+        }
+        CurvePayload::Unknown { raw } => {
+            println!(
+                "{prefix}: Unknown(fmt={}, deg={}, {}B)",
+                cd.format,
+                cd.degree,
+                raw.len()
+            );
+        }
+    }
 }

@@ -87,29 +87,25 @@ impl UaxFile {
 
     /// Get the animation count.
     pub fn animation_count(&self) -> Result<i32> {
-        read_i32_le(&self.chunk_data, file_info::ANIMATION_COUNT)
-            .ok_or(Error::UnexpectedEof)
+        read_i32_le(&self.chunk_data, file_info::ANIMATION_COUNT).ok_or(Error::UnexpectedEof)
     }
 
     /// Get the track group count from file_info.
     pub fn track_group_count(&self) -> Result<i32> {
-        read_i32_le(&self.chunk_data, file_info::TRACK_GROUP_COUNT)
-            .ok_or(Error::UnexpectedEof)
+        read_i32_le(&self.chunk_data, file_info::TRACK_GROUP_COUNT).ok_or(Error::UnexpectedEof)
     }
 
     /// Get animation name.
     pub fn animation_name(&self) -> Result<Option<String>> {
         let anim_off = self.animation_struct_offset()?;
         let fi = &self.chunk_data;
-        Ok(read_ptr(fi, anim_off + animation::NAME_PTR)
-            .and_then(|p| read_cstring(fi, p)))
+        Ok(read_ptr(fi, anim_off + animation::NAME_PTR).and_then(|p| read_cstring(fi, p)))
     }
 
     /// Get animation duration in seconds.
     pub fn duration(&self) -> Result<f32> {
         let off = self.animation_struct_offset()?;
-        read_f32_le(&self.chunk_data, off + animation::DURATION)
-            .ok_or(Error::UnexpectedEof)
+        read_f32_le(&self.chunk_data, off + animation::DURATION).ok_or(Error::UnexpectedEof)
     }
 
     /// Set animation duration in seconds.
@@ -126,15 +122,13 @@ impl UaxFile {
     /// Get animation time step between keyframes.
     pub fn time_step(&self) -> Result<f32> {
         let off = self.animation_struct_offset()?;
-        read_f32_le(&self.chunk_data, off + animation::TIME_STEP)
-            .ok_or(Error::UnexpectedEof)
+        read_f32_le(&self.chunk_data, off + animation::TIME_STEP).ok_or(Error::UnexpectedEof)
     }
 
     /// Get animation oversampling factor.
     pub fn oversampling(&self) -> Result<f32> {
         let off = self.animation_struct_offset()?;
-        read_f32_le(&self.chunk_data, off + animation::OVERSAMPLING)
-            .ok_or(Error::UnexpectedEof)
+        read_f32_le(&self.chunk_data, off + animation::OVERSAMPLING).ok_or(Error::UnexpectedEof)
     }
 
     /// Resolve the offset of the first animation struct within chunk_data.
@@ -143,141 +137,180 @@ impl UaxFile {
     fn animation_struct_offset(&self) -> Result<usize> {
         let fi = &self.chunk_data;
         // Animations** → array of pointers
-        let arr = read_ptr(fi, file_info::ANIMATIONS_PTR)
-            .ok_or(Error::NoAnimations)?;
+        let arr = read_ptr(fi, file_info::ANIMATIONS_PTR).ok_or(Error::NoAnimations)?;
         // First animation pointer
-        read_ptr(fi, arr)
-            .ok_or(Error::NoAnimations)
+        read_ptr(fi, arr).ok_or(Error::NoAnimations)
     }
 }
 
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use std::{eprintln, println};
+    use std::eprintln;
+
+    use test_utils::prelude::*;
 
     use super::*;
 
+    /// Max files per source to keep tests fast.
+    const MAX_FILES: usize = 50;
+
+    // -----------------------------------------------------------------------
+    // HW1 — extract .uax from ERA archives, roundtrip bytes
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_uax_file_roundtrip() {
-        let test_path = "../../temp_uax/art/campaign/npc/forge_01/shotgun_attack_01.uax";
-        if !std::path::Path::new(test_path).exists() {
-            eprintln!("Skipping test - UAX file not found");
+    fn test_hw1_era_roundtrip() {
+        let game_dir = match load_game_dir("HW1_GAME_DIR") {
+            Some(d) => d,
+            None => return,
+        };
+
+        let era_paths = find_files_flat(&game_dir, "era");
+        if era_paths.is_empty() {
+            eprintln!("No .era files — skipping");
             return;
         }
 
-        let original_data = std::fs::read(test_path).expect("Failed to read UAX file");
+        let mut tested = 0usize;
+        let mut errors = std::vec::Vec::new();
 
-        // Parse the file
-        let uax = UaxFile::from_bytes(&original_data).expect("Failed to parse UAX");
-
-        // Check we can read animation properties
-        assert!(uax.animation_count().unwrap() >= 1);
-        let duration = uax.duration().unwrap();
-        assert!(duration > 0.0);
-        println!("Animation name: {:?}", uax.animation_name().unwrap());
-        println!("Duration: {}", duration);
-        println!("TimeStep: {}", uax.time_step().unwrap());
-        println!("Oversampling: {}", uax.oversampling().unwrap());
-
-        // Write back to bytes
-        let written_data = uax.to_bytes();
-
-        // Compare - they should be identical
-        assert_eq!(
-            original_data.len(),
-            written_data.len(),
-            "File sizes differ: original={}, written={}",
-            original_data.len(),
-            written_data.len()
-        );
-
-        // Find first difference if any
-        let mut diff_count = 0;
-        for (i, (a, b)) in original_data.iter().zip(written_data.iter()).enumerate() {
-            if a != b {
-                if diff_count < 5 {
-                    println!(
-                        "Byte diff at offset 0x{:04X}: original=0x{:02X}, written=0x{:02X}",
-                        i, a, b
-                    );
+        for era_path in &era_paths {
+            let mut archive = match open_era(era_path) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+            let entries = find_entries_in_era(&archive, ".uax");
+            for (idx, filename) in &entries {
+                if tested >= MAX_FILES {
+                    break;
                 }
-                diff_count += 1;
+                let Ok(data) = archive.read_entry(*idx) else {
+                    continue;
+                };
+                match UaxFile::from_bytes(&data) {
+                    Ok(uax) => {
+                        let written = uax.to_bytes();
+                        if data != written {
+                            errors.push(std::format!(
+                                "{filename}: byte mismatch (orig={}, written={})",
+                                data.len(),
+                                written.len()
+                            ));
+                        }
+                        tested += 1;
+                    }
+                    Err(e) => errors.push(std::format!("{filename}: {e:?}")),
+                }
+            }
+            if tested >= MAX_FILES {
+                break;
             }
         }
-        if diff_count > 0 {
-            panic!("Found {} byte differences!", diff_count);
-        }
 
-        println!(
-            "Round-trip test passed! All {} bytes identical.",
-            original_data.len()
+        eprintln!("HW1 ERA roundtrip: {tested} files tested");
+        assert!(tested > 0, "No HW1 UAX files found");
+        assert!(
+            errors.is_empty(),
+            "Roundtrip failures:\n{}",
+            errors.join("\n")
         );
     }
 
+    // -----------------------------------------------------------------------
+    // HW2 — read loose .uax files, roundtrip bytes
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_uax_file_roundtrip_all() {
-        let test_dir = "../../temp_uax/art/campaign/npc/forge_01";
-        if !std::path::Path::new(test_dir).exists() {
-            eprintln!("Skipping test - UAX directory not found");
+    fn test_hw2_loose_roundtrip() {
+        let game_dir = match load_game_dir("HW2_GAME_DIR") {
+            Some(d) => d,
+            None => return,
+        };
+
+        let uax_files = find_files_by_ext(&game_dir, "uax");
+        if uax_files.is_empty() {
+            eprintln!("No .uax files — skipping");
             return;
         }
 
-        let mut tested = 0;
-        for entry in std::fs::read_dir(test_dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension().map(|e| e == "uax").unwrap_or(false) {
-                let original_data = std::fs::read(&path).expect("Failed to read UAX file");
-                let uax = UaxFile::from_bytes(&original_data).expect("Failed to parse UAX");
-                let written_data = uax.to_bytes();
+        let mut tested = 0usize;
+        let mut errors = std::vec::Vec::new();
 
-                assert_eq!(
-                    original_data,
-                    written_data,
-                    "Round-trip failed for {:?}",
-                    path.file_name()
-                );
-                tested += 1;
-                println!(
-                    "✓ {:?} - {} bytes",
-                    path.file_name().unwrap(),
-                    original_data.len()
-                );
+        for path in uax_files.iter().take(MAX_FILES) {
+            let Ok(data) = std::fs::read(path) else {
+                continue;
+            };
+            match UaxFile::from_bytes(&data) {
+                Ok(uax) => {
+                    let written = uax.to_bytes();
+                    if data != written {
+                        errors.push(std::format!(
+                            "{}: byte mismatch (orig={}, written={})",
+                            path.display(),
+                            data.len(),
+                            written.len()
+                        ));
+                    }
+                    tested += 1;
+                }
+                Err(e) => errors.push(std::format!("{}: {e:?}", path.display())),
             }
         }
-        println!("\nAll {} UAX files round-trip perfectly!", tested);
+
+        eprintln!("HW2 loose roundtrip: {tested} files tested");
+        assert!(tested > 0, "No HW2 UAX files tested");
+        assert!(
+            errors.is_empty(),
+            "Roundtrip failures:\n{}",
+            errors.join("\n")
+        );
     }
 
+    // -----------------------------------------------------------------------
+    // Modify duration — uses first available file from either source
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_uax_modify_duration() {
-        let test_path = "../../temp_uax/art/campaign/npc/forge_01/shotgun_attack_01.uax";
-        if !std::path::Path::new(test_path).exists() {
-            eprintln!("Skipping test - UAX file not found");
-            return;
+    fn test_modify_duration() {
+        // Try HW2 loose files first, then HW1 ERA
+        let data = if let Some(dir) = load_game_dir("HW2_GAME_DIR") {
+            let files = find_files_by_ext(&dir, "uax");
+            files.first().and_then(|p| std::fs::read(p).ok())
+        } else {
+            None
         }
+        .or_else(|| {
+            let dir = load_game_dir("HW1_GAME_DIR")?;
+            let eras = find_files_flat(&dir, "era");
+            for era_path in &eras {
+                let mut archive = open_era(era_path).ok()?;
+                let entries = find_entries_in_era(&archive, ".uax");
+                for (idx, _) in &entries {
+                    if let Ok(d) = archive.read_entry(*idx) {
+                        return Some(d);
+                    }
+                }
+            }
+            None
+        });
 
-        let original_data = std::fs::read(test_path).expect("Failed to read UAX file");
+        let Some(data) = data else {
+            eprintln!("No UAX files available — skipping");
+            return;
+        };
 
-        // Parse the file
-        let mut uax = UaxFile::from_bytes(&original_data).expect("Failed to parse UAX");
+        let mut uax = UaxFile::from_bytes(&data).expect("Failed to parse UAX");
 
-        // Modify duration
         let original_duration = uax.duration().unwrap();
         let new_duration = original_duration * 2.0;
         uax.set_duration(new_duration).unwrap();
-
-        // Verify the change
         assert!((uax.duration().unwrap() - new_duration).abs() < 0.001);
 
-        // Write and re-read
         let written = uax.to_bytes();
         let reloaded = UaxFile::from_bytes(&written).expect("Failed to re-read UAX");
-
         assert!((reloaded.duration().unwrap() - new_duration).abs() < 0.001);
 
-        println!("Modify duration test passed!");
-        println!("  Original: {}", original_duration);
-        println!("  Modified: {}", reloaded.duration().unwrap());
+        eprintln!("Modify duration: {original_duration:.4} → {new_duration:.4} ✓");
     }
 }
