@@ -10,8 +10,10 @@ use ugx::types::MaterialData;
 use ugx::{MapType, Material};
 
 use crate::extras::{
-    HoganExtrasJson, MapEntryJson, MaterialExtrasJson, ShaderPermJson, cb_bytes_to_params,
+    HoganExtrasJson, MapEntryJson, MaterialExtrasJson, ShaderPermJson, cb_bytes_to_named,
+    cb_bytes_to_params,
 };
+use crate::hogan_cb_layout;
 
 /// Build glTF material extras JSON for UGX-specific data.
 ///
@@ -64,6 +66,36 @@ pub(super) fn build_material_extras(mat: &Material) -> json::Extras {
             }
         }
         MaterialData::Hogan(hogan) => {
+            // Try to predict named CB params from the first permutation's flags.
+            let layout = hogan
+                .shader_permutations
+                .first()
+                .and_then(|p| hogan_cb_layout::predicted_layout(&p.name));
+
+            let (shader_flags, vs_cb, ps_cb) = if let Some(ref layout) = layout {
+                let flags_hex = hogan
+                    .shader_permutations
+                    .first()
+                    .and_then(|p| hogan_cb_layout::parse_flags(&p.name))
+                    .map(hogan_cb_layout::flags_to_hex);
+
+                let vs = cb_bytes_to_named(&hogan.vs_cb_data, &layout.cb7);
+                let ps = cb_bytes_to_named(&hogan.ps_cb_data, &layout.cb8);
+                (flags_hex, Some(vs), Some(ps))
+            } else {
+                (None, None, None)
+            };
+
+            // When named params are available, omit the legacy raw arrays.
+            let (vs_params, ps_params) = if vs_cb.is_some() {
+                (Vec::new(), Vec::new())
+            } else {
+                (
+                    cb_bytes_to_params(&hogan.vs_cb_data),
+                    cb_bytes_to_params(&hogan.ps_cb_data),
+                )
+            };
+
             ext.ugx_hogan = Some(HoganExtrasJson {
                 shader_permutations: hogan
                     .shader_permutations
@@ -78,8 +110,11 @@ pub(super) fn build_material_extras(mat: &Material) -> json::Extras {
                 shadow_requires_consts: hogan.shadow_requires_consts,
                 skinned: hogan.skinned,
                 terrain_blending: hogan.terrain_blending,
-                vs_params: cb_bytes_to_params(&hogan.vs_cb_data),
-                ps_params: cb_bytes_to_params(&hogan.ps_cb_data),
+                shader_flags,
+                vs_cb,
+                ps_cb,
+                vs_params,
+                ps_params,
                 hs_params: cb_bytes_to_params(&hogan.hs_cb_data),
                 ds_params: cb_bytes_to_params(&hogan.ds_cb_data),
                 gs_params: cb_bytes_to_params(&hogan.gs_cb_data),

@@ -835,6 +835,120 @@ fn test_hw2_loose_roundtrip() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Named CB param round-trip: verify that Hogan materials get named KV params
+// in glTF extras and that the raw CB bytes survive the round-trip exactly.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_hogan_named_cb_roundtrip() {
+    let game_dir = match load_game_dir("HW2_GAME_DIR") {
+        Some(d) => d,
+        None => return,
+    };
+
+    let ugx_files = find_files_by_ext(&game_dir, "ugx");
+    assert!(!ugx_files.is_empty(), "No UGX under {}", game_dir.display());
+
+    let mut tested = 0usize;
+    let mut named_count = 0usize;
+    let mut cb_exact = 0usize;
+    let mut cb_mismatch = 0usize;
+
+    for path in ugx_files.iter().take(100) {
+        let fname = path.file_name().unwrap_or_default().to_string_lossy();
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let original = match ugx::Reader::read(&data) {
+            Ok(g) => g,
+            Err(_) => continue,
+        };
+
+        // Only care about Hogan materials
+        let has_hogan = original
+            .materials
+            .iter()
+            .any(|m| matches!(&m.data, ugx::MaterialData::Hogan(_)));
+        if !has_hogan {
+            continue;
+        }
+        tested += 1;
+
+        // Export
+        let export_opts = GltfExportOptions {
+            embed_buffers: false,
+            include_materials: true,
+            include_skeleton: true,
+        };
+        let export = export_to_gltf(&original, &export_opts).unwrap();
+
+        // Check that the glTF JSON contains named CB params
+        let json_str = &export.json;
+        if json_str.contains("\"shader_flags\"") && json_str.contains("\"ps_cb\"") {
+            named_count += 1;
+        }
+
+        // Import back
+        let import_opts = GltfImportOptions {
+            version: ugx::UgxVersion::Hw2,
+            include_skeleton: true,
+            include_materials: true,
+        };
+        let imported =
+            import_from_gltf(&export.json, export.buffer.as_deref(), &import_opts).unwrap();
+
+        // Compare CB bytes for each Hogan material
+        for (mi, (orig_mat, rt_mat)) in original
+            .materials
+            .iter()
+            .zip(imported.materials.iter())
+            .enumerate()
+        {
+            if let (ugx::MaterialData::Hogan(orig_h), ugx::MaterialData::Hogan(rt_h)) =
+                (&orig_mat.data, &rt_mat.data)
+            {
+                if orig_h.ps_cb_data == rt_h.ps_cb_data && orig_h.vs_cb_data == rt_h.vs_cb_data {
+                    cb_exact += 1;
+                } else {
+                    cb_mismatch += 1;
+                    eprintln!(
+                        "  CB MISMATCH: {fname} mat[{mi}] ps: {}→{} vs: {}→{}",
+                        orig_h.ps_cb_data.len(),
+                        rt_h.ps_cb_data.len(),
+                        orig_h.vs_cb_data.len(),
+                        rt_h.vs_cb_data.len(),
+                    );
+                    // Show hex diff for first mismatch
+                    if orig_h.ps_cb_data != rt_h.ps_cb_data {
+                        let max = orig_h.ps_cb_data.len().max(rt_h.ps_cb_data.len());
+                        for i in 0..max.min(64) {
+                            let a = orig_h.ps_cb_data.get(i).copied().unwrap_or(0);
+                            let b = rt_h.ps_cb_data.get(i).copied().unwrap_or(0);
+                            if a != b {
+                                eprintln!("    ps_cb @{i}: 0x{a:02x} → 0x{b:02x}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "\nHogan CB roundtrip: {tested} files, {named_count} had named params, \
+         {cb_exact} exact CB matches, {cb_mismatch} mismatches"
+    );
+
+    assert!(tested > 0, "No Hogan materials found in HW2 files");
+    assert!(named_count > 0, "No files got named CB params");
+    assert_eq!(
+        cb_mismatch, 0,
+        "{cb_mismatch} materials had CB byte mismatches after named-param roundtrip"
+    );
+}
+
 /// Diagnostic: survey pack orders across all real game files.
 /// Run with: cargo test -p ugx-gltf --test real_roundtrip survey_pack_orders -- --ignored --nocapture
 #[test]

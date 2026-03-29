@@ -5,6 +5,7 @@
 //! `serde_json::Map::insert` / `obj.get(...)` calls in export and import.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Top-level material extras stored in glTF.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -71,11 +72,29 @@ pub(crate) struct HoganExtrasJson {
     pub skinned: bool,
     #[serde(default)]
     pub terrain_blending: bool,
-    /// Vertex shader runtime parameters as ordered float4 arrays.
-    /// Each entry is one `rp_parameter_vs[N]` (16 bytes = 4 floats).
+
+    /// Shader bitflags hex string (e.g. `"00080000a8000960"`).
+    ///
+    /// Determines which CB parameters are allocated and their packing order.
+    /// Used to reconstruct the raw constant buffer layout on re-import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shader_flags: Option<String>,
+
+    /// Named vertex shader CB parameters (new format, preferred).
+    ///
+    /// Keys are parameter names derived from the shader flags, values are
+    /// floats or float arrays (scalars stored as numbers, multi-component as arrays).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vs_cb: Option<BTreeMap<String, serde_json::Value>>,
+
+    /// Named pixel shader CB parameters (new format, preferred).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ps_cb: Option<BTreeMap<String, serde_json::Value>>,
+
+    /// Vertex shader runtime parameters as ordered float4 arrays (legacy fallback).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vs_params: Vec<[f32; 4]>,
-    /// Pixel shader runtime parameters as ordered float4 arrays.
+    /// Pixel shader runtime parameters as ordered float4 arrays (legacy fallback).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ps_params: Vec<[f32; 4]>,
     /// Hull shader runtime parameters as ordered float4 arrays.
@@ -118,6 +137,146 @@ pub(crate) fn params_to_cb_bytes(params: &[[f32; 4]]) -> Vec<u8> {
         out.extend_from_slice(&p[3].to_le_bytes());
     }
     out
+}
+
+/// Convert raw CB bytes into a named parameter map using a predicted layout.
+///
+/// When the layout has entries, reads floats at each entry's predicted offset
+/// and stores them as named JSON values.
+///
+/// When the layout is **empty** (unknown shader family), falls back to
+/// positional naming: each float becomes `f0`, `f1`, `f2`, etc.
+/// This ensures every Hogan family round-trips through glTF extras.
+pub(crate) fn cb_bytes_to_named(
+    data: &[u8],
+    layout: &[crate::hogan_cb_layout::CbLayoutEntry],
+) -> BTreeMap<String, serde_json::Value> {
+    let floats = cb_bytes_to_floats(data);
+    let mut map = BTreeMap::new();
+
+    if layout.is_empty() {
+        // Positional fallback: name each float by index.
+        for (i, &v) in floats.iter().enumerate() {
+            map.insert(format!("f{i}"), serde_json::Value::from(v));
+        }
+    } else {
+        for entry in layout {
+            let start = entry.offset as usize;
+            let n = entry.components as usize;
+            let vals: Vec<f32> = (0..n)
+                .map(|i| floats.get(start + i).copied().unwrap_or(0.0))
+                .collect();
+            let value = if n == 1 {
+                serde_json::Value::from(vals[0])
+            } else {
+                serde_json::Value::Array(vals.iter().map(|&f| serde_json::Value::from(f)).collect())
+            };
+            map.insert(entry.name.to_string(), value);
+        }
+    }
+    map
+}
+
+/// Reconstruct raw CB bytes from a named parameter map and predicted layout.
+///
+/// When the layout has entries, allocates a float array based on register
+/// count and fills named values at their predicted offsets.
+///
+/// When the layout is **empty** (positional fallback), reconstructs from
+/// `f0`, `f1`, `f2`… keys in sorted order.
+pub(crate) fn named_to_cb_bytes(
+    map: &BTreeMap<String, serde_json::Value>,
+    layout: &[crate::hogan_cb_layout::CbLayoutEntry],
+    register_count: u32,
+) -> Vec<u8> {
+    if layout.is_empty() {
+        // Positional fallback: collect f0, f1, f2… in numeric order.
+        return positional_map_to_bytes(map);
+    }
+
+    let total_floats = register_count as usize * 4;
+    let mut floats = vec![0.0f32; total_floats];
+
+    for entry in layout {
+        let start = entry.offset as usize;
+        if let Some(value) = map.get(entry.name) {
+            let values = json_value_to_floats(value, entry.components);
+            for (i, &v) in values.iter().enumerate() {
+                if start + i < floats.len() {
+                    floats[start + i] = v;
+                }
+            }
+        }
+    }
+
+    // If every float is zero the original blob was likely empty — preserve that.
+    if floats.iter().all(|&f| f == 0.0) {
+        return Vec::new();
+    }
+
+    floats_to_cb_bytes(&floats)
+}
+
+/// Reconstruct raw CB bytes from positional `f0`, `f1`, … keys.
+///
+/// Returns an empty vec if the map has no positional keys.
+fn positional_map_to_bytes(map: &BTreeMap<String, serde_json::Value>) -> Vec<u8> {
+    // Find the highest index to determine array size.
+    let max_idx = map
+        .keys()
+        .filter_map(|k| k.strip_prefix('f').and_then(|s| s.parse::<usize>().ok()))
+        .max();
+
+    let Some(max_idx) = max_idx else {
+        return Vec::new();
+    };
+
+    let mut floats = vec![0.0f32; max_idx + 1];
+    for (key, value) in map {
+        if let Some(idx) = key.strip_prefix('f').and_then(|s| s.parse::<usize>().ok())
+            && idx < floats.len()
+        {
+            floats[idx] = json_value_to_floats(value, 1)[0];
+        }
+    }
+
+    // If every float is zero, the original blob was likely empty.
+    if floats.iter().all(|&f| f == 0.0) {
+        return Vec::new();
+    }
+
+    floats_to_cb_bytes(&floats)
+}
+
+/// Decode raw CB bytes into a flat float slice.
+fn cb_bytes_to_floats(data: &[u8]) -> Vec<f32> {
+    data.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Encode a flat float slice into raw CB bytes.
+fn floats_to_cb_bytes(floats: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(floats.len() * 4);
+    for &f in floats {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
+/// Extract floats from a JSON value (number or array of numbers).
+fn json_value_to_floats(value: &serde_json::Value, expected: u8) -> Vec<f32> {
+    match value {
+        serde_json::Value::Number(n) => {
+            vec![n.as_f64().unwrap_or(0.0) as f32]
+        }
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .take(expected as usize)
+            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+            .collect(),
+        _ => vec![0.0; expected as usize],
+    }
 }
 
 /// Shader permutation entry.

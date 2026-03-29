@@ -5,10 +5,26 @@
 //! which parameters are packed into the constant buffers.  This module maps
 //! individual bits to the shader features they enable.
 //!
-//! # Always-on bits
+//! # Bit classification (derived from 679 `hogan_standard` variants)
 //!
-//! Bits 8 and 11 are set in every `hogan_standard` variant and represent the
-//! base "standard material" configuration.
+//! ## Always-on
+//! - **Bit 11**: Baseline flag, set in every variant.
+//!
+//! ## UV addressing mode (mutually exclusive)
+//! - **Bit 5**: Standard paired UV (91%).
+//! - **Bits 2, 3, 4**: Alternative UV modes (exclusive with 5).
+//!
+//! ## Compilation-only flags (change bytecode hash, not CB layout)
+//! - **Bits 0, 1, 6, 7, 8, 10**: Texture sampling / compilation options.
+//! - **Bits 33, 36, 37, 42, 43**: Sub-mode modifiers (emissive/vertex-anim).
+//!
+//! ## Lighting model
+//! - **Bit 20**: Base lighting toggle.
+//! - **Bit 21**: Lighting model A (with 20, exclusive with 22).
+//! - **Bit 22**: Lighting model B (with 20, exclusive with 21).
+//!
+//! ## CB parameter features
+//! See [`decode_features`] and [`predicted_semantics`] for the full mapping.
 //!
 //! # Usage
 //!
@@ -243,7 +259,160 @@ pub fn decode_features(flags: HoganFlags) -> Vec<Feature> {
         });
     }
 
-    // --- UV mode bits (change packing, not new params) ---
+    // --- Emissive / texture sub-modes (require bit 32) ---
+
+    if flags.has(33) && flags.has(32) {
+        out.push(Feature {
+            name: String::from("emissive_submode"),
+            bit: 33,
+            cb_slot: 8,
+            description: String::from(
+                "Emissive sub-mode: changes instruction ordering (no new params)",
+            ),
+            requires_bits: alloc::vec![32],
+        });
+    }
+
+    if flags.has(34) && flags.has(32) {
+        out.push(Feature {
+            name: String::from("special_instance"),
+            bit: 34,
+            cb_slot: 8,
+            description: String::from(
+                "SpecialInstanceSC: adds LayerEffectData/ReflectionPlane/EmissiveTintSlot cbuffer, swaps UV channel order",
+            ),
+            requires_bits: alloc::vec![32],
+        });
+    }
+
+    if flags.has(39) && flags.has(32) {
+        out.push(Feature {
+            name: String::from("extra_texcoord"),
+            bit: 39,
+            cb_slot: 7,
+            description: String::from(
+                "Extra TEXCOORD interpolant: adds TEXCOORD5 VS output and PS input",
+            ),
+            requires_bits: alloc::vec![32],
+        });
+    }
+
+    // --- Skinning and color ---
+
+    if flags.has(40) {
+        out.push(Feature {
+            name: String::from("skinning"),
+            bit: 40,
+            cb_slot: 7,
+            description: String::from("Skinning: adds BLENDINDICES and BLENDWEIGHT vertex inputs"),
+            requires_bits: Vec::new(),
+        });
+    }
+
+    if flags.has(52) {
+        out.push(Feature {
+            name: String::from("constant_colour"),
+            bit: 52,
+            cb_slot: 12,
+            description: String::from("Constant colour: adds ConstantColourXSC cbuffer (slot 12)"),
+            requires_bits: alloc::vec![51],
+        });
+    }
+
+    // --- Texture reduction / modification ---
+
+    if flags.has(46) {
+        out.push(Feature {
+            name: String::from("simplified_texturing"),
+            bit: 46,
+            cb_slot: 8,
+            description: String::from(
+                "Simplified texturing: removes normal_intensity and InstanceSC from PS, reorders UV naming",
+            ),
+            requires_bits: Vec::new(),
+        });
+    }
+
+    if flags.has(48) {
+        out.push(Feature {
+            name: String::from("opacity_blend"),
+            bit: 48,
+            cb_slot: 8,
+            description: String::from(
+                "Opacity blend: adds opacity_blend parameter (requires 23+32+38+49)",
+            ),
+            requires_bits: alloc::vec![23, 32, 38, 49],
+        });
+    }
+
+    if flags.has(53) {
+        out.push(Feature {
+            name: String::from("reduced_texturing"),
+            bit: 53,
+            cb_slot: 8,
+            description: String::from(
+                "Reduced texturing: removes normal/BRDF/specular texture maps, much smaller PS",
+            ),
+            requires_bits: Vec::new(),
+        });
+    }
+
+    // --- Lighting model ---
+
+    if flags.has(20) {
+        let model = if flags.has(21) {
+            "A (bit 21)"
+        } else if flags.has(22) {
+            "B (bit 22)"
+        } else {
+            "base"
+        };
+        out.push(Feature {
+            name: String::from("lighting"),
+            bit: 20,
+            cb_slot: 8,
+            description: alloc::format!(
+                "Lighting enabled: model {model} — adds InstanceSC with TeamTint/EmissiveTint"
+            ),
+            requires_bits: Vec::new(),
+        });
+    }
+
+    // --- UV addressing mode ---
+
+    if flags.has(5) {
+        out.push(Feature {
+            name: String::from("uv_paired"),
+            bit: 5,
+            cb_slot: 8,
+            description: String::from("UV mode: standard paired channels (t0_t1, t2_t3)"),
+            requires_bits: Vec::new(),
+        });
+    } else if flags.has(2) {
+        out.push(Feature {
+            name: String::from("uv_mode_a"),
+            bit: 2,
+            cb_slot: 8,
+            description: String::from("UV mode A: alternative addressing (exclusive with bit 5)"),
+            requires_bits: Vec::new(),
+        });
+    } else if flags.has(3) {
+        out.push(Feature {
+            name: String::from("uv_mode_b"),
+            bit: 3,
+            cb_slot: 8,
+            description: String::from("UV mode B: alternative addressing (exclusive with bit 5)"),
+            requires_bits: Vec::new(),
+        });
+    } else if flags.has(4) {
+        out.push(Feature {
+            name: String::from("uv_mode_c"),
+            bit: 4,
+            cb_slot: 8,
+            description: String::from("UV mode C: alternative addressing (exclusive with bit 5)"),
+            requires_bits: Vec::new(),
+        });
+    }
 
     if flags.has(6) {
         out.push(Feature {
@@ -344,11 +513,18 @@ pub fn predicted_semantics(flags: HoganFlags) -> Vec<&'static str> {
         sems.push("vertex_anim");
     }
 
+    // Bit 25: rare combined feature (always with 23+41+43), adds override_strength
+    if flags.has(25) && !sems.contains(&"override_strength") {
+        sems.push("override_strength");
+    }
+
     // Bit 49: material overrides
     if flags.has(49) {
         sems.push("detail_blend_factor");
         sems.push("spec_override_color");
-        sems.push("override_strength");
+        if !sems.contains(&"override_strength") {
+            sems.push("override_strength");
+        }
         if !sems.contains(&"roughness_override_value") {
             sems.push("roughness_override_value");
         }
@@ -357,6 +533,13 @@ pub fn predicted_semantics(flags: HoganFlags) -> Vec<&'static str> {
     // Bits 50, 51: overlay texture (adds uv_scale_t4 variant)
     if (flags.has(50) || flags.has(51)) && !sems.contains(&"uv_scale_t4") {
         sems.push("uv_scale_t4");
+    }
+
+    // Opacity blend: bit 48 (with 23+32+49) OR bits 20+32+35+49
+    if (flags.has(48) && flags.has(23) && flags.has(32) && flags.has(49))
+        || (flags.has(20) && flags.has(32) && flags.has(35) && flags.has(49))
+    {
+        sems.push("opacity_blend");
     }
 
     sems

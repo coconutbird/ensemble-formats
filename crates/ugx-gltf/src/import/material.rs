@@ -219,7 +219,28 @@ fn read_material_extras(
 
     // Hogan
     if let Some(h) = ext.ugx_hogan {
-        use crate::extras::params_to_cb_bytes;
+        use crate::extras::{named_to_cb_bytes, params_to_cb_bytes};
+        use crate::hogan_cb_layout;
+
+        // Try to reconstruct CB data from named params + flags layout.
+        // Fall back to legacy float4 arrays if named params aren't available.
+        let layout = h
+            .shader_permutations
+            .first()
+            .and_then(|p| hogan_cb_layout::predicted_layout(&p.name));
+
+        let vs_cb_data = if let (Some(vs_map), Some(layout)) = (&h.vs_cb, &layout) {
+            named_to_cb_bytes(vs_map, &layout.cb7, layout.cb7_registers)
+        } else {
+            params_to_cb_bytes(&h.vs_params)
+        };
+
+        let ps_cb_data = if let (Some(ps_map), Some(layout)) = (&h.ps_cb, &layout) {
+            named_to_cb_bytes(ps_map, &layout.cb8, layout.cb8_registers)
+        } else {
+            params_to_cb_bytes(&h.ps_params)
+        };
+
         result.hogan = Some(HoganMaterialData {
             shader_permutations: h
                 .shader_permutations
@@ -234,8 +255,8 @@ fn read_material_extras(
             shadow_requires_consts: h.shadow_requires_consts,
             skinned: h.skinned,
             terrain_blending: h.terrain_blending,
-            vs_cb_data: params_to_cb_bytes(&h.vs_params),
-            ps_cb_data: params_to_cb_bytes(&h.ps_params),
+            vs_cb_data,
+            ps_cb_data,
             hs_cb_data: params_to_cb_bytes(&h.hs_params),
             ds_cb_data: params_to_cb_bytes(&h.ds_params),
             gs_cb_data: params_to_cb_bytes(&h.gs_params),
