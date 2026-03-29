@@ -55,10 +55,16 @@ pub(crate) fn unpack_hw2_vertex(
         return Ok(v);
     }
 
-    // -- Normal + Tangent: 4 bytes each (Dec3N) --
+    // -- Normal: 4 bytes (Dec3N) --
     let n = VertexElementType::Dec3N.unpack(data, pos)?;
     v.normal = [n[0], n[1], n[2]];
 
+    if vert_size <= 16 {
+        *pos = start + vert_size;
+        return Ok(v);
+    }
+
+    // -- Tangent: 4 bytes (Dec3N) --
     let t = VertexElementType::Dec3N.unpack(data, pos)?;
     v.tangent = [t[0], t[1], t[2], t[3]];
 

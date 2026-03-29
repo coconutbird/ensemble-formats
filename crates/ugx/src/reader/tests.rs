@@ -406,3 +406,89 @@ fn binary_diff_hw2_roundtrip() {
         }
     }
 }
+
+#[test]
+fn diag_material_chunk_diff() {
+    let path = "/Users/dev/gamedepot/wstore/DUMP/data/maps/rostermode/evenflow_desert/evenflow_desert_water_01/mesh_water.ugx";
+    let original = match read_test_file(path) {
+        Some(d) => d,
+        None => {
+            eprintln!("Skipping material diag");
+            return;
+        }
+    };
+
+    let orig_ecf = ecf::Reader::new(&original).unwrap();
+    let orig_mat = orig_ecf.chunk_data_by_id(0x704).unwrap();
+    eprintln!("=== Original 0x704: {} bytes ===", orig_mat.len());
+    // Dump first 80 bytes
+    for row in 0..(80.min(orig_mat.len()) / 16 + 1) {
+        let s = row * 16;
+        let e = (s + 16).min(orig_mat.len());
+        if s >= orig_mat.len() {
+            break;
+        }
+        let hex: std::string::String = orig_mat[s..e]
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!("  {s:04X}: {hex}");
+    }
+
+    // Parse the original material data with BDT reader and dump the tree
+    match bdt::Reader::read(&orig_mat, bdt::Endian::Little) {
+        Ok(Some(root)) => {
+            eprintln!("\n=== Original BDT tree ===");
+            dump_bdt(&root, 0);
+        }
+        Ok(None) => eprintln!("Original BDT: empty"),
+        Err(e) => eprintln!("Original BDT error: {e:?}"),
+    }
+
+    // Now round-trip
+    let geom = UgxGeom::from_bytes(&original).unwrap();
+    let round_tripped = geom.to_bytes().unwrap();
+    let rt_ecf = ecf::Reader::new(&round_tripped).unwrap();
+    let rt_mat = rt_ecf.chunk_data_by_id(0x704).unwrap();
+    eprintln!("\n=== Round-tripped 0x704: {} bytes ===", rt_mat.len());
+    for row in 0..(80.min(rt_mat.len()) / 16 + 1) {
+        let s = row * 16;
+        let e = (s + 16).min(rt_mat.len());
+        if s >= rt_mat.len() {
+            break;
+        }
+        let hex: std::string::String = rt_mat[s..e]
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!("  {s:04X}: {hex}");
+    }
+
+    match bdt::Reader::read(&rt_mat, bdt::Endian::Little) {
+        Ok(Some(root)) => {
+            eprintln!("\n=== Round-tripped BDT tree ===");
+            dump_bdt(&root, 0);
+        }
+        Ok(None) => eprintln!("RT BDT: empty"),
+        Err(e) => eprintln!("RT BDT error: {e:?}"),
+    }
+}
+
+fn dump_bdt(node: &bdt::Node, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let text = match &node.text {
+        bdt::Variant::Null => std::string::String::new(),
+        v => format!(" text={v:?}"),
+    };
+    let attrs: std::string::String = node
+        .attributes
+        .iter()
+        .map(|a| format!(" @{}={:?}", a.name, a.value))
+        .collect();
+    eprintln!("{indent}<{}{}{}>", node.name, attrs, text);
+    for child in &node.children {
+        dump_bdt(child, depth + 1);
+    }
+}

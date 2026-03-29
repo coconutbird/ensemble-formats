@@ -180,16 +180,20 @@ fn compute_bone_obb(
     }
 }
 
-/// Detect whether a set of vertices forms a "global_bones" section.
+/// Detect whether a set of vertices forms a rigid or global_bones section.
 ///
-/// A global_bones section is one where *all* vertices are bound to a single
-/// common bone with weight ≈ 1.0 (the pattern produced when the exporter
-/// converts zero-weight vertices to explicit single-bone weighting).
+/// When all vertices are bound to a single common bone with weight ≈ 1.0,
+/// this is the pattern produced by the exporter when it synthesizes skin data
+/// for originally rigid sections. In that case we return `rigid_only=true`
+/// and `global_bones=false` to match the original UGX section flags.
 ///
-/// Returns `(is_global_bones, rigid_bone_index, max_bones_per_vertex)`.
-pub(super) fn detect_global_bones(vertices: &[UnpackedVertex], has_skin: bool) -> (bool, i32, i32) {
+/// Returns `(is_global_bones, is_rigid_only, rigid_bone_index, max_bones_per_vertex)`.
+pub(super) fn detect_global_bones(
+    vertices: &[UnpackedVertex],
+    has_skin: bool,
+) -> (bool, bool, i32, i32) {
     if !has_skin {
-        return (false, i32::MAX, 1);
+        return (false, false, i32::MAX, 1);
     }
 
     let mut all_single_bone = true;
@@ -225,9 +229,13 @@ pub(super) fn detect_global_bones(vertices: &[UnpackedVertex], has_skin: bool) -
     let max_bones = max_influences.max(1);
 
     if let Some(bone) = common_bone.filter(|_| all_single_bone) {
-        (true, (bone as i32) - 1, 1)
+        // All vertices bound to a single bone — this is a rigid section.
+        // The original format uses rigid_only=true, global_bones=false for
+        // this case (the vertex buffer has no skin element, and the section
+        // is bound to rigid_bone_index).
+        (false, true, (bone as i32) - 1, 1)
     } else {
-        (false, i32::MAX, max_bones)
+        (false, false, i32::MAX, max_bones)
     }
 }
 

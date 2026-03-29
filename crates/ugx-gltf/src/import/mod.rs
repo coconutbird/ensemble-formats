@@ -14,6 +14,8 @@ mod mesh;
 mod primitive;
 mod skeleton;
 
+use ugx::types::MaterialData;
+use ugx::types::convert::convert_geom_materials;
 use ugx::{Error, Result, Section, UgxGeom, UgxVersion, UnpackedVertex};
 
 use crate::extras::{MeshExtrasJson, SceneExtrasJson};
@@ -192,8 +194,7 @@ pub fn import_from_gltf(
                     }
                 } else {
                     // No extras — third-party glTF, use heuristic.
-                    let (gb, idx, mb) = detect_global_bones(&vertices, has_skin);
-                    (gb, false, idx, mb)
+                    detect_global_bones(&vertices, has_skin)
                 };
 
             // For global_bones or rigid_only sections, strip skin data and
@@ -349,6 +350,19 @@ pub fn import_from_gltf(
     // Rebuild all derived data that doesn't survive the glTF round-trip:
     // bone bounds, accessories, metadata flags, and AABB tree.
     geom.rebuild_derived_data();
+
+    // When targeting HW2, ensure all materials are Hogan format.
+    // glTF files edited in third-party tools (Blender etc.) lose the
+    // ugx_hogan extras, so the importer produces Legacy materials.
+    // The engine requires Hogan shader permutations to render HW2 models.
+    if options.version == UgxVersion::Hw2
+        && geom
+            .materials
+            .iter()
+            .any(|m| matches!(&m.data, MaterialData::Legacy(_)))
+    {
+        geom.materials = convert_geom_materials(&geom, true);
+    }
 
     Ok(geom)
 }
