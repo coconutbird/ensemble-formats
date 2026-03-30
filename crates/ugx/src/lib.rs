@@ -69,7 +69,7 @@ pub use types::*;
 
 mod processing;
 mod reader;
-pub use reader::{Reader, read_materials};
+pub use reader::{Reader, ReaderOptions, read_materials};
 
 mod writer;
 pub use writer::Writer;

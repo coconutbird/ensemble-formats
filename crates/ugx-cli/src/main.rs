@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use ecf::Reader as EcfReader;
 use std::fs;
 use std::path::PathBuf;
-use ugx::{Reader as UgxReader, UgxVersion, Writer as UgxWriter};
+use ugx::{Reader as UgxReader, ReaderOptions, UgxVersion, Writer as UgxWriter};
 use ugx_gltf::{
     GltfExportOptions, GltfImportOptions, export_to_gltf_with_buffer_name, import_from_gltf,
 };
@@ -14,6 +14,9 @@ use ugx_gltf::{
 #[command(about = "UGX (Unit Graphics) model file tool for Halo Wars")]
 #[command(version)]
 struct Cli {
+    #[arg(long, global = true)]
+    ignore_reserved_values: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -77,13 +80,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Info { input } => cmd_info(&input)?,
+        Commands::Info { input } => cmd_info(&input, cli.ignore_reserved_values)?,
         Commands::ToGltf {
             input,
             output,
             external_buffer,
             no_skeleton,
-        } => cmd_to_gltf(&input, &output, external_buffer, no_skeleton)?,
+        } => cmd_to_gltf(
+            &input,
+            &output,
+            external_buffer,
+            no_skeleton,
+            cli.ignore_reserved_values,
+        )?,
         Commands::FromGltf {
             input,
             output,
@@ -104,15 +113,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Diff {
             original,
             roundtrip,
-        } => cmd_diff(&original, &roundtrip)?,
+        } => cmd_diff(&original, &roundtrip, cli.ignore_reserved_values)?,
     }
 
     Ok(())
 }
 
-fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn read_ugx(
+    data: &[u8],
+    ignore_reserved_values: bool,
+) -> Result<ugx::UgxGeom, Box<dyn std::error::Error>> {
+    if ignore_reserved_values {
+        Ok(UgxReader::read_with_options(
+            data,
+            ReaderOptions {
+                ignore_reserved_values: true,
+            },
+        )?)
+    } else {
+        Ok(UgxReader::read(data)?)
+    }
+}
+
+fn cmd_info(input: &PathBuf, ignore_reserved_values: bool) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
-    let geom = UgxReader::read(&data)?;
+    let geom = if ignore_reserved_values {
+        UgxReader::read_with_options(
+            &data,
+            ReaderOptions {
+                ignore_reserved_values: true,
+            },
+        )?
+    } else {
+        UgxReader::read(&data)?
+    };
 
     println!("UGX File: {}", input.display());
     println!();
@@ -294,9 +328,19 @@ fn cmd_to_gltf(
     output: &PathBuf,
     external_buffer: bool,
     no_skeleton: bool,
+    ignore_reserved_values: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
-    let geom = UgxReader::read(&data)?;
+    let geom = if ignore_reserved_values {
+        UgxReader::read_with_options(
+            &data,
+            ReaderOptions {
+                ignore_reserved_values: true,
+            },
+        )?
+    } else {
+        UgxReader::read(&data)?
+    };
 
     let options = GltfExportOptions {
         embed_buffers: !external_buffer,
@@ -571,7 +615,11 @@ fn hexdump(data: &[u8], max: usize) {
 }
 
 #[allow(clippy::needless_range_loop)]
-fn cmd_diff(orig_path: &PathBuf, rt_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_diff(
+    orig_path: &PathBuf,
+    rt_path: &PathBuf,
+    ignore_reserved_values: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let chunk_name = |id: u64| -> &'static str {
         match id {
             0x700 => "CachedData (0x700)",
@@ -712,8 +760,8 @@ fn cmd_diff(orig_path: &PathBuf, rt_path: &PathBuf) -> Result<(), Box<dyn std::e
 
     // Also diff at the parsed geom level for sections/materials
     println!("\n=== Parsed Geom Diff ===");
-    let orig_geom = UgxReader::read(&orig_data)?;
-    let rt_geom = UgxReader::read(&rt_data)?;
+    let orig_geom = read_ugx(&orig_data, ignore_reserved_values)?;
+    let rt_geom = read_ugx(&rt_data, ignore_reserved_values)?;
 
     // Materials
     if orig_geom.materials.len() != rt_geom.materials.len() {

@@ -25,6 +25,7 @@ pub(super) fn read_packed_sections(
     data: &[u8],
     pos: &mut usize,
     version: UgxVersion,
+    options: super::ReaderOptions,
 ) -> Result<Vec<Section>> {
     let (arr, _): (Ref<_, PackedArrayRaw>, _) =
         Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
@@ -42,7 +43,7 @@ pub(super) fn read_packed_sections(
     let mut sections = Vec::with_capacity(count);
 
     for _ in 0..count {
-        sections.push(read_packed_section(data, &mut sec_pos, version)?);
+        sections.push(read_packed_section(data, &mut sec_pos, version, options)?);
     }
 
     Ok(sections)
@@ -54,7 +55,12 @@ pub(super) fn read_packed_sections(
 /// The trailing layout differs:
 /// - HW1 (112 bytes): bone_remap(16) + UnivertPacker(84) + flags(12)
 /// - HW2 (32 bytes): flags(8) + unknown(8) + bone_remap(16)
-fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Result<Section> {
+fn read_packed_section(
+    data: &[u8],
+    pos: &mut usize,
+    version: UgxVersion,
+    options: super::ReaderOptions,
+) -> Result<Section> {
     let (fixed, _): (Ref<_, PackedSectionFixedRaw>, _) =
         Ref::from_prefix(&data[*pos..]).map_err(|_| Error::UnexpectedEof {
             context: String::from("PackedSectionFixedRaw"),
@@ -72,8 +78,8 @@ fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Res
     *pos += core::mem::size_of::<PackedSectionFixedRaw>();
 
     let (bone_remap, base_vert_packer, rigid_only, global_bones) = match version {
-        UgxVersion::Hw1 => read_section_tail_hw1(data, pos)?,
-        UgxVersion::Hw2 => read_section_tail_hw2(data, pos)?,
+        UgxVersion::Hw1 => read_section_tail_hw1(data, pos, options)?,
+        UgxVersion::Hw2 => read_section_tail_hw2(data, pos, options)?,
     };
 
     Ok(Section {
@@ -98,6 +104,7 @@ fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Res
 fn read_section_tail_hw1(
     data: &[u8],
     pos: &mut usize,
+    _options: super::ReaderOptions,
 ) -> Result<(Vec<u8>, Option<UnivertPacker>, bool, bool)> {
     let bone_remap = read_bone_remap(data, pos)?;
     let packer = read_packed_univert_packer(data, pos)?;
@@ -115,6 +122,7 @@ fn read_section_tail_hw1(
 fn read_section_tail_hw2(
     data: &[u8],
     pos: &mut usize,
+    options: super::ReaderOptions,
 ) -> Result<(Vec<u8>, Option<UnivertPacker>, bool, bool)> {
     let mut cur = SliceCursor::new(&data[*pos..]);
     let rigid_only = cur.read_i32_le()? != 0;
@@ -123,7 +131,7 @@ fn read_section_tail_hw2(
     // The engine never reads these at runtime — they are constant defaults
     // written by the export pipeline. Error if they differ from expected.
     let reserved1 = cur.read_i32_le()?;
-    if reserved1 != crate::constants::HW2_SECTION_RESERVED1 {
+    if reserved1 != crate::constants::HW2_SECTION_RESERVED1 && !options.ignore_reserved_values {
         return Err(Error::UnexpectedReservedValue {
             context: "HW2 section +0x30",
             expected: crate::constants::HW2_SECTION_RESERVED1 as u32,
@@ -131,7 +139,7 @@ fn read_section_tail_hw2(
         });
     }
     let reserved2 = cur.read_i32_le()?;
-    if reserved2 != crate::constants::HW2_SECTION_RESERVED2 {
+    if reserved2 != crate::constants::HW2_SECTION_RESERVED2 && !options.ignore_reserved_values {
         return Err(Error::UnexpectedReservedValue {
             context: "HW2 section +0x34",
             expected: crate::constants::HW2_SECTION_RESERVED2 as u32,

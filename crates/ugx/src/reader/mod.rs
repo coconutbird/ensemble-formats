@@ -122,12 +122,32 @@ use cached_data::{
     read_bone_bounds, read_packed_accessories, read_packed_bones, read_packed_sections,
     read_valid_accessory_indices,
 };
+
+/// Options for UGX parsing.
+#[derive(Clone, Copy, Debug)]
+pub struct ReaderOptions {
+    /// When true, ignore unexpected values in reserved HW2 section fields.
+    pub ignore_reserved_values: bool,
+}
+
+impl Default for ReaderOptions {
+    fn default() -> Self {
+        Self {
+            ignore_reserved_values: false,
+        }
+    }
+}
 use granny::{parse_granny_bones, parse_granny_meshes, validate_granny_chunk};
 use material::read_materials as parse_materials;
 
 impl UgxGeom {
     /// Parse UGX geometry from a byte slice (ECF container).
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_options(data, ReaderOptions::default())
+    }
+
+    /// Parse UGX geometry with custom reader options.
+    pub fn from_bytes_with_options(data: &[u8], options: ReaderOptions) -> Result<Self> {
         let ecf = ecf::Reader::new(data)?;
 
         let cached_data = ecf
@@ -160,6 +180,7 @@ impl UgxGeom {
             aabb_tree_raw,
             vertex_buffer,
             index_buffer,
+            options,
         )
     }
 
@@ -171,6 +192,7 @@ impl UgxGeom {
         aabb_tree_raw: Option<Vec<u8>>,
         vertex_buffer: Vec<u8>,
         index_buffer: Vec<u16>,
+        options: ReaderOptions,
     ) -> Result<Self> {
         let (hdr, rest): (Ref<_, GeomHeaderRaw>, _) =
             Ref::from_prefix(data).map_err(|_| Error::UnexpectedEof {
@@ -199,7 +221,7 @@ impl UgxGeom {
 
         let pos = &mut (data.len() - rest.len());
 
-        let sections = read_packed_sections(data, pos, version)?;
+        let sections = read_packed_sections(data, pos, version, options)?;
         let bones = read_packed_bones(data, pos)?;
 
         // Validate the Granny chunk: the engine checks FromFileName == "gr2ugx"
@@ -287,6 +309,11 @@ impl Reader {
     /// Read a UGX file from a byte slice.
     pub fn read(data: &[u8]) -> Result<UgxGeom> {
         UgxGeom::from_bytes(data)
+    }
+
+    /// Read a UGX file from a byte slice with custom parsing options.
+    pub fn read_with_options(data: &[u8], options: ReaderOptions) -> Result<UgxGeom> {
+        UgxGeom::from_bytes_with_options(data, options)
     }
 }
 
