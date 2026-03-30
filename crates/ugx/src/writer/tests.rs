@@ -95,6 +95,9 @@ fn make_test_geom() -> UgxGeom {
         bone_remap: Vec::new(),
         rigid_only: true,
         global_bones: false,
+        lod_near_distance: 0.0,
+        lod_far_distance: f32::MAX,
+        lod_fade_distance: 0.0,
     };
 
     let bones = vec![

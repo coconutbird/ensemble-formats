@@ -25,12 +25,29 @@ use crate::vertex::packer::UnivertPacker;
 ///
 /// ## HW2 packed format (72 bytes / 0x48):
 /// - +0x00: same 40 bytes of fixed fields as HW1
-/// - +0x28: i32 flags (rigid_only / global_bones)
-/// - +0x2C: i32 flags2
-/// - +0x30: i32 reserved (`HW2_SECTION_RESERVED1` = `f32::MAX` / `0x7F7FFFFF`)
-/// - +0x34: i32 reserved (`HW2_SECTION_RESERVED2` = `0`)
+/// - +0x28: i32 rigid_only (boolean)
+/// - +0x2C: f32 lod_near_distance (LOD near transition distance; 0.0 = no LOD)
+/// - +0x30: f32 lod_far_distance  (LOD far transition distance; f32::MAX = always visible)
+/// - +0x34: f32 lod_fade_distance (vertical fade/height for atmospheric effects; 0.0 = unused)
 /// - +0x38: BoneRemap packed array (16 bytes)
 /// - No UnivertPacker (vertex format determined externally).
+///
+/// ### LOD distance fields (HW2 only)
+///
+/// Sections form a **LOD chain** where each level is visible in a distance
+/// range `[lod_near_distance, lod_far_distance)`:
+///
+/// | LOD   | near   | far        | Notes                        |
+/// |-------|--------|------------|------------------------------|
+/// | LOD 0 |  0.0   |  19.7     | Highest detail, closest      |
+/// | LOD 1 | 19.7   |  41.9     | Mid-detail                   |
+/// | LOD 2 | 41.9   |  64.0     | Low-detail                   |
+/// | Base  |  0.0   | f32::MAX  | No LOD, always visible       |
+///
+/// Flora/trees use larger distances (50–160 units). Infantry units use
+/// smaller distances (20–100 units).  `lod_fade_distance` is only non-zero
+/// on atmospheric effects (fog planes, cloud layers) where it specifies a
+/// vertical fade height (e.g. 200.0, 1000.0).
 #[derive(Debug, Clone)]
 pub struct Section {
     /// Material index.
@@ -61,6 +78,19 @@ pub struct Section {
     pub bone_remap: Vec<u8>,
     /// Is this section rigid (no skinning)?
     pub rigid_only: bool,
-    /// Uses global bone indices (HW1-specific field).
+    /// Uses global bone indices (HW1-specific field at +0x90).
+    /// In HW2 this field is not serialized; it is derived from context
+    /// (e.g. empty `bone_remap` means global bone indices).
     pub global_bones: bool,
+    /// LOD near transition distance in world units (HW2 only, +0x2C).
+    /// The section is visible when the camera distance exceeds this value.
+    /// `0.0` means visible from the closest range (or no LOD).
+    pub lod_near_distance: f32,
+    /// LOD far transition distance in world units (HW2 only, +0x30).
+    /// The section is culled when the camera distance exceeds this value.
+    /// `f32::MAX` means never culled (always visible).
+    pub lod_far_distance: f32,
+    /// Vertical fade/height distance for atmospheric effects (HW2 only, +0x34).
+    /// Only non-zero on fog planes and cloud layers. `0.0` = unused.
+    pub lod_fade_distance: f32,
 }

@@ -71,6 +71,12 @@ enum Commands {
         #[arg(short = 'b', long)]
         roundtrip: PathBuf,
     },
+    /// Scan a directory of UGX files and report raw reserved/padding field values
+    Scan {
+        /// Directory containing UGX files (searched recursively)
+        #[arg(short, long)]
+        dir: PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -105,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             original,
             roundtrip,
         } => cmd_diff(&original, &roundtrip)?,
+        Commands::Scan { dir } => cmd_scan(&dir)?,
     }
 
     Ok(())
@@ -966,5 +973,284 @@ fn cmd_diff(orig_path: &PathBuf, rt_path: &PathBuf) -> Result<(), Box<dyn std::e
         }
     }
 
+    Ok(())
+}
+
+fn cmd_scan(dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    use std::collections::BTreeMap;
+
+    // Walk the directory tree for .ugx files
+    let mut ugx_paths: Vec<PathBuf> = Vec::new();
+    collect_ugx_files(dir, &mut ugx_paths)?;
+    ugx_paths.sort();
+    println!("Found {} UGX files in {}", ugx_paths.len(), dir.display());
+    if ugx_paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut hw1_count = 0u32;
+    let mut hw2_count = 0u32;
+    let mut parse_errors = 0u32;
+
+    // HW2 section reserved fields: (reserved1, reserved2) -> Vec<(filename, section_idx)>
+    let mut hw2_reserved: BTreeMap<(u32, u32), Vec<(String, usize)>> = BTreeMap::new();
+
+    // Header padding: (pad_2byte, pad_4byte) -> Vec<filename>
+    let mut hdr_padding: BTreeMap<(u16, u32), Vec<String>> = BTreeMap::new();
+
+    // HW1 section trailing fields: (rigid_only, global_bones, padding) -> Vec<(filename, sec)>
+    let mut hw1_trailing: BTreeMap<(i32, i32, i32), Vec<(String, usize)>> = BTreeMap::new();
+
+    // HW2 section flags: (flags1, flags2) for non-boolean values
+    let mut hw2_flags: BTreeMap<(i32, i32), Vec<(String, usize)>> = BTreeMap::new();
+
+    for path in &ugx_paths {
+        let data = match fs::read(path) {
+            Ok(d) => d,
+            Err(_) => {
+                parse_errors += 1;
+                continue;
+            }
+        };
+
+        let ecf = match EcfReader::new(&data) {
+            Ok(e) => e,
+            Err(_) => {
+                parse_errors += 1;
+                continue;
+            }
+        };
+
+        let cached = match ecf.chunk_data_by_id(0x700) {
+            Ok(c) => c,
+            Err(_) => {
+                parse_errors += 1;
+                continue;
+            }
+        };
+
+        if cached.len() < 0x50 {
+            parse_errors += 1;
+            continue;
+        }
+
+        let sig = u32::from_le_bytes([cached[0], cached[1], cached[2], cached[3]]);
+        let fname = path.strip_prefix(dir).unwrap_or(path).display().to_string();
+
+        // Header padding at +0x38 (2 bytes) and +0x3C (4 bytes)
+        let pad1 = u16::from_le_bytes([cached[0x38], cached[0x39]]);
+        let pad2 = u32::from_le_bytes([cached[0x3C], cached[0x3D], cached[0x3E], cached[0x3F]]);
+        hdr_padding
+            .entry((pad1, pad2))
+            .or_default()
+            .push(fname.clone());
+
+        // Sections packed array at +0x40
+        let sec_count =
+            u32::from_le_bytes([cached[0x40], cached[0x41], cached[0x42], cached[0x43]]) as usize;
+        // skip 4 bytes padding at +0x44
+        let sec_offset = u64::from_le_bytes([
+            cached[0x48],
+            cached[0x49],
+            cached[0x4A],
+            cached[0x4B],
+            cached[0x4C],
+            cached[0x4D],
+            cached[0x4E],
+            cached[0x4F],
+        ]) as usize;
+
+        match sig {
+            0xC2340006 => {
+                // HW2 — 72-byte sections
+                hw2_count += 1;
+                for s in 0..sec_count {
+                    let base = sec_offset + s * 72;
+                    if base + 72 > cached.len() {
+                        break;
+                    }
+                    // flags at +0x28, +0x2C
+                    let f1 = i32::from_le_bytes([
+                        cached[base + 0x28],
+                        cached[base + 0x29],
+                        cached[base + 0x2A],
+                        cached[base + 0x2B],
+                    ]);
+                    let f2 = i32::from_le_bytes([
+                        cached[base + 0x2C],
+                        cached[base + 0x2D],
+                        cached[base + 0x2E],
+                        cached[base + 0x2F],
+                    ]);
+                    if f1 != 0 && f1 != 1 || f2 != 0 && f2 != 1 {
+                        hw2_flags
+                            .entry((f1, f2))
+                            .or_default()
+                            .push((fname.clone(), s));
+                    }
+
+                    // reserved at +0x30, +0x34
+                    let r1 = u32::from_le_bytes([
+                        cached[base + 0x30],
+                        cached[base + 0x31],
+                        cached[base + 0x32],
+                        cached[base + 0x33],
+                    ]);
+                    let r2 = u32::from_le_bytes([
+                        cached[base + 0x34],
+                        cached[base + 0x35],
+                        cached[base + 0x36],
+                        cached[base + 0x37],
+                    ]);
+                    hw2_reserved
+                        .entry((r1, r2))
+                        .or_default()
+                        .push((fname.clone(), s));
+                }
+            }
+            0xC2340004 => {
+                // HW1 — 152-byte sections
+                hw1_count += 1;
+                for s in 0..sec_count {
+                    let base = sec_offset + s * 152;
+                    if base + 152 > cached.len() {
+                        break;
+                    }
+                    let rigid = i32::from_le_bytes([
+                        cached[base + 0x8C],
+                        cached[base + 0x8D],
+                        cached[base + 0x8E],
+                        cached[base + 0x8F],
+                    ]);
+                    let global = i32::from_le_bytes([
+                        cached[base + 0x90],
+                        cached[base + 0x91],
+                        cached[base + 0x92],
+                        cached[base + 0x93],
+                    ]);
+                    let padding = i32::from_le_bytes([
+                        cached[base + 0x94],
+                        cached[base + 0x95],
+                        cached[base + 0x96],
+                        cached[base + 0x97],
+                    ]);
+                    if rigid != 0 && rigid != 1 || global != 0 && global != 1 || padding != 0 {
+                        hw1_trailing
+                            .entry((rigid, global, padding))
+                            .or_default()
+                            .push((fname.clone(), s));
+                    }
+                }
+            }
+            _ => {
+                parse_errors += 1;
+            }
+        }
+    }
+
+    println!("\n=== Summary ===");
+    println!(
+        "HW1 (v4): {} files, HW2 (v6): {} files, errors: {}",
+        hw1_count, hw2_count, parse_errors
+    );
+
+    // --- Header padding ---
+    println!("\n=== GeomHeader Padding (+0x38 u16, +0x3C u32) ===");
+    for ((p1, p2), files) in &hdr_padding {
+        println!(
+            "  pad1=0x{:04X} pad2=0x{:08X}: {} files",
+            p1,
+            p2,
+            files.len()
+        );
+        if *p1 != 0 || *p2 != 0 {
+            for f in files.iter().take(10) {
+                println!("    {}", f);
+            }
+            if files.len() > 10 {
+                println!("    ... and {} more", files.len() - 10);
+            }
+        }
+    }
+
+    // --- HW2 reserved fields ---
+    println!("\n=== HW2 Section Reserved Fields (+0x30, +0x34) ===");
+    for ((r1, r2), entries) in &hw2_reserved {
+        let r1_f = f32::from_bits(*r1);
+        println!(
+            "  reserved1=0x{:08X} ({:e}), reserved2=0x{:08X}: {} sections",
+            r1,
+            r1_f,
+            r2,
+            entries.len()
+        );
+        if *r1 != 0x7F7FFFFF || *r2 != 0 {
+            // Non-standard — show examples
+            for (f, s) in entries.iter().take(10) {
+                println!("    {}[sec{}]", f, s);
+            }
+            if entries.len() > 10 {
+                println!("    ... and {} more", entries.len() - 10);
+            }
+        }
+    }
+
+    // --- HW2 non-boolean flags ---
+    if !hw2_flags.is_empty() {
+        println!("\n=== HW2 Section Flags (non-boolean values at +0x28, +0x2C) ===");
+        for ((f1, f2), entries) in &hw2_flags {
+            println!(
+                "  flags1={} (0x{:08X}), flags2={} (0x{:08X}): {} sections",
+                f1,
+                *f1 as u32,
+                f2,
+                *f2 as u32,
+                entries.len()
+            );
+            for (f, s) in entries.iter().take(10) {
+                println!("    {}[sec{}]", f, s);
+            }
+            if entries.len() > 10 {
+                println!("    ... and {} more", entries.len() - 10);
+            }
+        }
+    }
+
+    // --- HW1 non-standard trailing ---
+    if !hw1_trailing.is_empty() {
+        println!("\n=== HW1 Section Trailing (non-standard rigid/global/padding) ===");
+        for ((r, g, p), entries) in &hw1_trailing {
+            println!(
+                "  rigid={} global={} padding=0x{:08X}: {} sections",
+                r,
+                g,
+                *p as u32,
+                entries.len()
+            );
+            for (f, s) in entries.iter().take(10) {
+                println!("    {}[sec{}]", f, s);
+            }
+            if entries.len() > 10 {
+                println!("    ... and {} more", entries.len() - 10);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_ugx_files(
+    dir: &std::path::Path,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_ugx_files(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("ugx") {
+            out.push(path);
+        }
+    }
     Ok(())
 }

@@ -71,10 +71,14 @@ fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Res
     let num_verts = i32::from_le_bytes(fixed.num_verts);
     *pos += core::mem::size_of::<PackedSectionFixedRaw>();
 
-    let (bone_remap, base_vert_packer, rigid_only, global_bones) = match version {
-        UgxVersion::Hw1 => read_section_tail_hw1(data, pos)?,
-        UgxVersion::Hw2 => read_section_tail_hw2(data, pos)?,
-    };
+    let (bone_remap, base_vert_packer, rigid_only, global_bones, lod_near, lod_far, lod_fade) =
+        match version {
+            UgxVersion::Hw1 => {
+                let (br, packer, ro, gb) = read_section_tail_hw1(data, pos)?;
+                (br, packer, ro, gb, 0.0, f32::MAX, 0.0)
+            }
+            UgxVersion::Hw2 => read_section_tail_hw2(data, pos)?,
+        };
 
     Ok(Section {
         material_index,
@@ -91,6 +95,9 @@ fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Res
         bone_remap,
         rigid_only,
         global_bones,
+        lod_near_distance: lod_near,
+        lod_far_distance: lod_far,
+        lod_fade_distance: lod_fade,
     })
 }
 
@@ -111,38 +118,39 @@ fn read_section_tail_hw1(
     Ok((bone_remap, Some(packer), rigid_only, global_bones))
 }
 
-/// HW2 section tail: flags(8) + reserved(8) + bone_remap(16).
+/// HW2 section tail: rigid_only(4) + lod_near(4) + lod_far(4) + lod_fade(4) + bone_remap(16).
+///
+/// The three LOD fields form a distance-based LOD chain:
+/// - `lod_near_distance` (+0x2C): near transition distance (0.0 = closest)
+/// - `lod_far_distance`  (+0x30): far transition distance (f32::MAX = always visible)
+/// - `lod_fade_distance`  (+0x34): vertical fade for atmospheric effects (0.0 = unused)
+///
+/// Note: HW2 sections do NOT have a serialised `global_bones` flag at +0x2C
+/// (that field was repurposed as `lod_near_distance`).  The `global_bones`
+/// flag is set to `false` here; the geom-level flag is derived from context.
+#[allow(clippy::type_complexity)]
 fn read_section_tail_hw2(
     data: &[u8],
     pos: &mut usize,
-) -> Result<(Vec<u8>, Option<UnivertPacker>, bool, bool)> {
+) -> Result<(Vec<u8>, Option<UnivertPacker>, bool, bool, f32, f32, f32)> {
     let mut cur = SliceCursor::new(&data[*pos..]);
     let rigid_only = cur.read_i32_le()? != 0;
-    let global_bones = cur.read_i32_le()? != 0;
-    // +0x30, +0x34: reserved fields (always HW2_SECTION_RESERVED1/2).
-    // The engine never reads these at runtime — they are constant defaults
-    // written by the export pipeline. Error if they differ from expected.
-    let reserved1 = cur.read_i32_le()?;
-    if reserved1 != crate::constants::HW2_SECTION_RESERVED1 {
-        return Err(Error::UnexpectedReservedValue {
-            context: "HW2 section +0x30",
-            expected: crate::constants::HW2_SECTION_RESERVED1 as u32,
-            actual: reserved1 as u32,
-        });
-    }
-    let reserved2 = cur.read_i32_le()?;
-    if reserved2 != crate::constants::HW2_SECTION_RESERVED2 {
-        return Err(Error::UnexpectedReservedValue {
-            context: "HW2 section +0x34",
-            expected: crate::constants::HW2_SECTION_RESERVED2 as u32,
-            actual: reserved2 as u32,
-        });
-    }
+    let lod_near_distance = f32::from_bits(cur.read_u32_le()?);
+    let lod_far_distance = f32::from_bits(cur.read_u32_le()?);
+    let lod_fade_distance = f32::from_bits(cur.read_u32_le()?);
     *pos += cur.position();
 
     let bone_remap = read_bone_remap(data, pos)?;
 
-    Ok((bone_remap, None, rigid_only, global_bones))
+    Ok((
+        bone_remap,
+        None,
+        rigid_only,
+        false,
+        lod_near_distance,
+        lod_far_distance,
+        lod_fade_distance,
+    ))
 }
 
 /// Read a bone remap packed array: overlay `PackedArrayRaw`, resolve offset, copy bytes.

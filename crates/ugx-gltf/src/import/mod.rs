@@ -122,6 +122,13 @@ pub fn import_from_gltf(
         let extras_granny_mesh_index: Option<usize> =
             mesh_ext.as_ref().and_then(|e| e.ugx_granny_mesh_index);
 
+        // LOD distances: use values from extras (our exporter), default for third-party glTFs.
+        let lod_near = mesh_ext.as_ref().map_or(0.0, |e| e.ugx_lod_near_distance);
+        let lod_far = mesh_ext
+            .as_ref()
+            .map_or(f32::MAX, |e| e.ugx_lod_far_distance);
+        let lod_fade = mesh_ext.as_ref().map_or(0.0, |e| e.ugx_lod_fade_distance);
+
         for primitive in &mesh.primitives {
             let (vertices, indices, material_index) =
                 import_primitive(primitive, &root, &buffer_bytes, has_skeleton, bones.len())?;
@@ -259,6 +266,9 @@ pub fn import_from_gltf(
                 bone_remap: Vec::new(),
                 rigid_only: is_rigid_only,
                 global_bones: is_global_bones,
+                lod_near_distance: lod_near,
+                lod_far_distance: lod_far,
+                lod_fade_distance: lod_fade,
             });
 
             all_vertices.extend(final_vertices);

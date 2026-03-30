@@ -161,6 +161,11 @@ pub fn export_to_gltf_with_buffer_name(
                 }
             }
 
+            // Store LOD distances — these can't be inferred from geometry.
+            ext.ugx_lod_near_distance = section.lod_near_distance;
+            ext.ugx_lod_far_distance = section.lod_far_distance;
+            ext.ugx_lod_fade_distance = section.lod_fade_distance;
+
             if ext.is_empty() {
                 None
             } else {

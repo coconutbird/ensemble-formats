@@ -266,7 +266,7 @@ fn write_sections(
 /// Write the version-specific tail of a single section struct.
 ///
 /// HW1 (112 bytes after fixed): bone_remap(16) + UnivertPacker(84) + flags(12).
-/// HW2 (32 bytes after fixed): flags(16) + bone_remap(16).
+/// HW2 (32 bytes after fixed): rigid_only(4) + lod_near(4) + lod_far(4) + lod_fade(4) + bone_remap(16).
 fn write_section_tail(
     cursor: &mut MutCursor<'_>,
     section: &crate::types::Section,
@@ -291,9 +291,9 @@ fn write_section_tail(
         }
         UgxVersion::Hw2 => {
             cursor.write_i32_le(if section.rigid_only { 1 } else { 0 })?;
-            cursor.write_i32_le(if section.global_bones { 1 } else { 0 })?;
-            cursor.write_i32_le(crate::constants::HW2_SECTION_RESERVED1)?;
-            cursor.write_i32_le(crate::constants::HW2_SECTION_RESERVED2)?;
+            cursor.write_u32_le(section.lod_near_distance.to_bits())?;
+            cursor.write_u32_le(section.lod_far_distance.to_bits())?;
+            cursor.write_u32_le(section.lod_fade_distance.to_bits())?;
 
             write_bone_remap_header(cursor, section, section_idx, bone_remap_fixups)?;
         }

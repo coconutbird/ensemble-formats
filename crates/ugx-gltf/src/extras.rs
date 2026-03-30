@@ -303,6 +303,19 @@ pub(crate) struct MeshExtrasJson {
     pub ugx_rigid_bone_index: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_granny_mesh_index: Option<usize>,
+
+    /// LOD near transition distance (HW2 section +0x2C).
+    /// Omitted when `0.0` (default for single-LOD or closest LOD).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ugx_lod_near_distance: f32,
+    /// LOD far transition distance (HW2 section +0x30).
+    /// Omitted when `f32::MAX` (default = always visible).
+    #[serde(default = "default_lod_far", skip_serializing_if = "is_f32_max")]
+    pub ugx_lod_far_distance: f32,
+    /// LOD vertical fade distance (HW2 section +0x34).
+    /// Omitted when `0.0` (default = no atmospheric fade).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ugx_lod_fade_distance: f32,
 }
 
 impl MeshExtrasJson {
@@ -313,6 +326,9 @@ impl MeshExtrasJson {
             && self.ugx_rigid_only.is_none()
             && self.ugx_rigid_bone_index.is_none()
             && self.ugx_granny_mesh_index.is_none()
+            && is_zero(&self.ugx_lod_near_distance)
+            && is_f32_max(&self.ugx_lod_far_distance)
+            && is_zero(&self.ugx_lod_fade_distance)
     }
 }
 
@@ -337,4 +353,16 @@ fn default_mat_version() -> u32 {
 
 fn default_ufx_version() -> u32 {
     9
+}
+
+fn default_lod_far() -> f32 {
+    f32::MAX
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn is_f32_max(v: &f32) -> bool {
+    *v == f32::MAX
 }
