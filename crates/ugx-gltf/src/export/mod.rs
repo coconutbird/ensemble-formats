@@ -129,6 +129,7 @@ pub fn export_to_gltf_with_buffer_name(
             has_skeleton,
             bone_count,
             section.rigid_bone_index,
+            &section.bone_remap,
         );
 
         // Use the matching granny_mesh name if available, otherwise generate from section index
@@ -467,6 +468,7 @@ mod tests {
             has_skin,
             bone_count,
             rigid_bone_index,
+            &[], // no bone_remap — tests use 1-based global indices
         );
         (prim, buf, accessors, views)
     }

@@ -20,6 +20,7 @@ pub(crate) fn create_primitive(
     has_skeleton: bool,
     bone_count: usize,
     rigid_bone_index: i32,
+    bone_remap: &[u8],
 ) -> json::mesh::Primitive {
     let mut attributes = std::collections::BTreeMap::new();
 
@@ -260,19 +261,17 @@ pub(crate) fn create_primitive(
         );
     }
 
-    // Write bone indices and weights if we have a skeleton
+    // Write bone indices and weights if we have a skeleton.
     //
-    // TODO: Bone remap — when section.bone_remap is non-empty, vertex bone indices
-    // are section-local and need to be remapped to global skeleton indices using the
-    // remap table before writing to glTF JOINTS_0. Currently we write indices as-is
-    // (converting from 1-based to 0-based), which is correct only when global_bones
-    // is true or bone_remap is empty. To fix: pass bone_remap into create_primitive,
-    // and when non-empty, do `global_idx = bone_remap[local_idx]` before the 1-based
-    // to 0-based conversion. Need a real skinned UGX file with per-section bone
-    // remaps to verify.
+    // Bone index conventions in UGX vertex buffers:
+    //   • bone_remap non-empty → indices are 0-based section-local;
+    //     look up `bone_remap[local_idx]` to get the 0-based global index.
+    //   • bone_remap empty → indices are 1-based global (0 = no bone);
+    //     subtract 1 to get the 0-based global index for glTF.
     if has_skeleton && bone_count > 0 {
         let max_bone_idx = (bone_count - 1) as u16;
         let use_u16_joints = bone_count > 256;
+        let has_remap = !bone_remap.is_empty();
         // rigid_bone_index can be INT_MAX (0x7FFFFFFF) meaning "no rigid bone".
         // Default to bone 0 when invalid.
         let rigid_idx: u16 = if rigid_bone_index >= 0 && (rigid_bone_index as usize) < bone_count {
@@ -296,10 +295,19 @@ pub(crate) fn create_primitive(
             } else {
                 let mut indices = v.bone_indices;
                 for idx in &mut indices {
-                    // Vertex bone indices are 1-based in UGX data (0 = no bone);
-                    // convert to 0-based for glTF joint indices.
-                    if *idx > 0 {
-                        *idx -= 1;
+                    if has_remap {
+                        // Section-local 0-based index → remap to global 0-based.
+                        let local = *idx as usize;
+                        *idx = if local < bone_remap.len() {
+                            bone_remap[local] as u16
+                        } else {
+                            0
+                        };
+                    } else {
+                        // Global 1-based index → 0-based for glTF.
+                        if *idx > 0 {
+                            *idx -= 1;
+                        }
                     }
                     if *idx > max_bone_idx {
                         *idx = 0;
