@@ -478,8 +478,8 @@ pub fn read_transform(data: &[u8], offset: usize) -> Transform {
         read_f32_le(data, offset + transform::ORIENTATION + 12).unwrap_or(1.0),
     ];
     let mut scale_shear = [0.0f32; 9];
-    for i in 0..9 {
-        scale_shear[i] = read_f32_le(data, offset + transform::SCALE_SHEAR + i * 4)
+    for (i, val) in scale_shear.iter_mut().enumerate() {
+        *val = read_f32_le(data, offset + transform::SCALE_SHEAR + i * 4)
             .unwrap_or(if i % 4 == 0 { 1.0 } else { 0.0 });
     }
     Transform {

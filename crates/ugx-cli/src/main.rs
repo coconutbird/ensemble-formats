@@ -570,6 +570,7 @@ fn hexdump(data: &[u8], max: usize) {
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn cmd_diff(orig_path: &PathBuf, rt_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let chunk_name = |id: u64| -> &'static str {
         match id {

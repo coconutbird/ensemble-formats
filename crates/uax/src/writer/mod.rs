@@ -333,6 +333,7 @@ fn write_transform(buf: &mut [u8], offset: usize, t: &Transform) {
 }
 
 /// Write all track group structs and their transform track arrays.
+#[allow(clippy::too_many_arguments)]
 fn write_track_groups(
     buf: &mut [u8],
     strings: &mut StringTable,
@@ -550,14 +551,14 @@ fn write_single_curve(buf: &mut [u8], cl: &CurveObjLayout, curve: &CurveData) {
         }
         CurvePayload::D3Constant32f { padding, controls } => {
             put_u16(buf, p, *padding);
-            for i in 0..3 {
-                put_f32(buf, p + 2 + i * 4, controls[i]);
+            for (i, ctrl) in controls.iter().enumerate().take(3) {
+                put_f32(buf, p + 2 + i * 4, *ctrl);
             }
         }
         CurvePayload::D4Constant32f { padding, controls } => {
             put_u16(buf, p, *padding);
-            for i in 0..4 {
-                put_f32(buf, p + 2 + i * 4, controls[i]);
+            for (i, ctrl) in controls.iter().enumerate().take(4) {
+                put_f32(buf, p + 2 + i * 4, *ctrl);
             }
         }
         CurvePayload::DaK32fC32f {
@@ -632,11 +633,11 @@ fn write_single_curve(buf: &mut [u8], cl: &CurveObjLayout, curve: &CurveData) {
             knots_controls,
         } => {
             put_u16(buf, p, *one_over_knot_scale_trunc);
-            for i in 0..3 {
-                put_f32(buf, p + 2 + i * 4, control_scales[i]);
+            for (i, cs) in control_scales.iter().enumerate().take(3) {
+                put_f32(buf, p + 2 + i * 4, *cs);
             }
-            for i in 0..3 {
-                put_f32(buf, p + 14 + i * 4, control_offsets[i]);
+            for (i, co) in control_offsets.iter().enumerate().take(3) {
+                put_f32(buf, p + 14 + i * 4, *co);
             }
             write_ref_arr(
                 buf,

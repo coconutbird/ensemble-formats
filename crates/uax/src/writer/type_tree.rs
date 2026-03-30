@@ -75,10 +75,10 @@ fn emit(tmp: &mut Vec<u8>, base: usize, st: &mut StringTable, ms: &[M]) -> usize
         tmp.extend_from_slice(&0u64.to_le_bytes()); // +12 ReferenceTypePtr
         tmp.extend_from_slice(&member.aw.to_le_bytes()); // +20 ArrayWidth
         tmp.extend_from_slice(&[0u8; 20]); // +24 Extra[3]+Unused[2]
-        if let Some(ref s) = member.sub {
-            if !s.is_empty() {
-                deferred.push((rp, s.as_slice()));
-            }
+        if let Some(ref s) = member.sub
+            && !s.is_empty()
+        {
+            deferred.push((rp, s.as_slice()));
         }
     }
     tmp.extend_from_slice(&[0u8; STRIDE]); // terminator

@@ -136,12 +136,12 @@ fn parse_file_info(fi: &[u8]) -> Result<Animation> {
     let tg_count = cursor_i32(&mut c, file_info::TRACK_GROUP_COUNT).unwrap_or(0);
     let mut track_groups = Vec::new();
 
-    if tg_count > 0 {
-        if let Some(tg_arr) = cursor_ptr(&mut c, file_info::TRACK_GROUPS_PTR) {
-            for i in 0..tg_count as usize {
-                if let Some(tg_off) = cursor_ptr(&mut c, tg_arr + i * 8) {
-                    track_groups.push(parse_track_group(&mut c, tg_off));
-                }
+    if tg_count > 0
+        && let Some(tg_arr) = cursor_ptr(&mut c, file_info::TRACK_GROUPS_PTR)
+    {
+        for i in 0..tg_count as usize {
+            if let Some(tg_off) = cursor_ptr(&mut c, tg_arr + i * 8) {
+                track_groups.push(parse_track_group(&mut c, tg_off));
             }
         }
     }
@@ -445,9 +445,12 @@ fn read_transform(c: &mut SliceCursor, offset: usize) -> Transform {
     let position = read_f32x3(c, offset + transform::POSITION);
     let orientation = read_f32x4(c, offset + transform::ORIENTATION);
     let mut scale_shear = [0.0f32; 9];
-    for i in 0..9 {
-        scale_shear[i] = cursor_f32(c, offset + transform::SCALE_SHEAR + i * 4)
-            .unwrap_or(if i % 4 == 0 { 1.0 } else { 0.0 });
+    for (i, val) in scale_shear.iter_mut().enumerate() {
+        *val = cursor_f32(c, offset + transform::SCALE_SHEAR + i * 4).unwrap_or(if i % 4 == 0 {
+            1.0
+        } else {
+            0.0
+        });
     }
     Transform {
         flags,
