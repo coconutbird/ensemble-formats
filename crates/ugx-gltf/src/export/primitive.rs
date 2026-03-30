@@ -80,28 +80,27 @@ pub(crate) fn create_primitive(
         json::Index::new(pos_accessor_idx),
     );
 
-    // Write normals (normalized to unit length for glTF compliance).
+    // Write normals — always normalize to unit length for glTF compliance.
     //
-    // Skip normalization when the length is already within 0.5% of 1.0.
-    // This preserves Dec3N (10-bit) packed normals through the glTF roundtrip:
-    // Dec3N unpack gives values ≈ ±int/511, whose vector length deviates from
-    // 1.0 by at most ~0.2%.  Re-normalizing would change the float values just
-    // enough to produce different 10-bit integers when re-packed.
+    // HW2 Dec3N normals are frequently non-unit-length (avg ~0.7, range 0.05–1.39)
+    // but the game's vertex shader always normalizes them (dp3+rsq+mul pattern
+    // confirmed in hogan_standard VS), so the magnitude is irrelevant for rendering.
+    // Normalizing here produces spec-compliant glTF and the game shader produces
+    // identical output regardless of input magnitude.
     let norm_view_idx = buffer_views.len() as u32;
     let norm_offset = buffer_data.len();
     for v in vertices {
         let len_sq =
             v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1] + v.normal[2] * v.normal[2];
         let (nx, ny, nz) = if len_sq < 1e-12 {
-            // Zero-length → fall back to up
             (0.0, 1.0, 0.0)
-        } else if (len_sq - 1.0).abs() < 0.01 {
-            // Already near unit length — pass through unchanged
-            (v.normal[0], v.normal[1], v.normal[2])
         } else {
-            // Genuinely non-unit — normalize
-            let len = len_sq.sqrt();
-            (v.normal[0] / len, v.normal[1] / len, v.normal[2] / len)
+            let inv_len = 1.0 / len_sq.sqrt();
+            (
+                v.normal[0] * inv_len,
+                v.normal[1] * inv_len,
+                v.normal[2] * inv_len,
+            )
         };
         buffer_data.extend_from_slice(&nx.to_le_bytes());
         buffer_data.extend_from_slice(&ny.to_le_bytes());
@@ -198,18 +197,20 @@ pub(crate) fn create_primitive(
         let tangent_view_idx = buffer_views.len() as u32;
         let tangent_offset = buffer_data.len();
         for v in vertices {
-            // glTF requires unit-length tangent xyz.
-            // Same near-unit tolerance as normals to preserve Dec3N fidelity.
+            // Normalize tangent xyz to unit length — same reasoning as normals.
+            // Game VS normalizes all basis vectors (dp3+rsq+mul confirmed).
             let len_sq = v.tangent[0] * v.tangent[0]
                 + v.tangent[1] * v.tangent[1]
                 + v.tangent[2] * v.tangent[2];
             let (tx, ty, tz) = if len_sq < 1e-12 {
                 (1.0, 0.0, 0.0)
-            } else if (len_sq - 1.0).abs() < 0.01 {
-                (v.tangent[0], v.tangent[1], v.tangent[2])
             } else {
-                let len = len_sq.sqrt();
-                (v.tangent[0] / len, v.tangent[1] / len, v.tangent[2] / len)
+                let inv_len = 1.0 / len_sq.sqrt();
+                (
+                    v.tangent[0] * inv_len,
+                    v.tangent[1] * inv_len,
+                    v.tangent[2] * inv_len,
+                )
             };
             buffer_data.extend_from_slice(&tx.to_le_bytes());
             buffer_data.extend_from_slice(&ty.to_le_bytes());

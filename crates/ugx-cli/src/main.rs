@@ -62,6 +62,15 @@ enum Commands {
         #[arg(short, long)]
         input: PathBuf,
     },
+    /// Binary diff two UGX files chunk-by-chunk
+    Diff {
+        /// First (original) UGX file
+        #[arg(short = 'a', long)]
+        original: PathBuf,
+        /// Second (round-tripped) UGX file
+        #[arg(short = 'b', long)]
+        roundtrip: PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,6 +101,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd_from_gltf(&input, &output, no_skeleton, ugx_version)?
         }
         Commands::Dump { input } => cmd_dump(&input)?,
+        Commands::Diff {
+            original,
+            roundtrip,
+        } => cmd_diff(&original, &roundtrip)?,
     }
 
     Ok(())
@@ -555,4 +568,402 @@ fn hexdump(data: &[u8], max: usize) {
     if data.len() > max {
         println!("  ... ({} more bytes)", data.len() - max);
     }
+}
+
+fn cmd_diff(orig_path: &PathBuf, rt_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let chunk_name = |id: u64| -> &'static str {
+        match id {
+            0x700 => "CachedData (0x700)",
+            0x701 => "IndexBuffer (0x701)",
+            0x702 => "VertexBuffer (0x702)",
+            0x703 => "Granny (0x703)",
+            0x704 => "Material (0x704)",
+            0x705 => "AABBTree (0x705)",
+            _ => "Unknown",
+        }
+    };
+
+    let orig_data = fs::read(orig_path)?;
+    let rt_data = fs::read(rt_path)?;
+
+    let orig_ecf = EcfReader::new(&orig_data)?;
+    let rt_ecf = EcfReader::new(&rt_data)?;
+
+    println!("=== UGX Binary Diff ===");
+    println!("  A: {} ({} bytes)", orig_path.display(), orig_data.len());
+    println!("  B: {} ({} bytes)", rt_path.display(), rt_data.len());
+    println!();
+
+    // Collect all chunk IDs
+    let mut all_ids: Vec<u64> = Vec::new();
+    for c in orig_ecf.chunks() {
+        if !all_ids.contains(&c.id) {
+            all_ids.push(c.id);
+        }
+    }
+    for c in rt_ecf.chunks() {
+        if !all_ids.contains(&c.id) {
+            all_ids.push(c.id);
+        }
+    }
+    all_ids.sort();
+
+    let mut any_diff = false;
+
+    for &id in &all_ids {
+        let o = orig_ecf.chunk_data_by_id(id);
+        let r = rt_ecf.chunk_data_by_id(id);
+
+        match (o, r) {
+            (Err(_), Ok(r_data)) => {
+                println!(
+                    "  {} : MISSING in A, {} bytes in B",
+                    chunk_name(id),
+                    r_data.len()
+                );
+                any_diff = true;
+            }
+            (Ok(o_data), Err(_)) => {
+                println!(
+                    "  {} : {} bytes in A, MISSING in B",
+                    chunk_name(id),
+                    o_data.len()
+                );
+                any_diff = true;
+            }
+            (Err(_), Err(_)) => {}
+            (Ok(o_data), Ok(r_data)) => {
+                if o_data == r_data {
+                    println!("  {} : IDENTICAL ({} bytes)", chunk_name(id), o_data.len());
+                } else {
+                    any_diff = true;
+                    let diff_count = o_data
+                        .iter()
+                        .zip(r_data.iter())
+                        .filter(|(a, b)| a != b)
+                        .count()
+                        + o_data.len().abs_diff(r_data.len());
+                    println!(
+                        "  {} : DIFFER (A={} B={} bytes, {} bytes differ)",
+                        chunk_name(id),
+                        o_data.len(),
+                        r_data.len(),
+                        diff_count
+                    );
+
+                    // Show first few diffs with context
+                    let min_len = o_data.len().min(r_data.len());
+                    let mut shown = 0;
+                    let mut i = 0;
+                    while i < min_len && shown < 5 {
+                        if o_data[i] != r_data[i] {
+                            // Find the end of this diff region
+                            let start = i;
+                            while i < min_len && o_data[i] != r_data[i] {
+                                i += 1;
+                            }
+                            let end = i;
+                            let ctx_start = start.saturating_sub(4);
+                            let ctx_end = (end + 4).min(min_len);
+                            println!(
+                                "    offset 0x{:04X}..0x{:04X} ({} bytes differ):",
+                                start,
+                                end,
+                                end - start
+                            );
+                            print!("      A: ");
+                            for j in ctx_start..ctx_end {
+                                if j >= start && j < end {
+                                    print!("\x1b[31m{:02X}\x1b[0m ", o_data[j]);
+                                } else {
+                                    print!("{:02X} ", o_data[j]);
+                                }
+                            }
+                            println!();
+                            print!("      B: ");
+                            for j in ctx_start..ctx_end {
+                                if j >= start && j < end {
+                                    print!("\x1b[32m{:02X}\x1b[0m ", r_data[j]);
+                                } else {
+                                    print!("{:02X} ", r_data[j]);
+                                }
+                            }
+                            println!();
+                            shown += 1;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    if o_data.len() != r_data.len() {
+                        println!(
+                            "    size diff: A has {} extra bytes",
+                            o_data.len() as i64 - r_data.len() as i64
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if !any_diff {
+        println!("\nAll chunks identical.");
+    }
+
+    // Also diff at the parsed geom level for sections/materials
+    println!("\n=== Parsed Geom Diff ===");
+    let orig_geom = UgxReader::read(&orig_data)?;
+    let rt_geom = UgxReader::read(&rt_data)?;
+
+    // Materials
+    if orig_geom.materials.len() != rt_geom.materials.len() {
+        println!(
+            "  Materials: count differs ({} vs {})",
+            orig_geom.materials.len(),
+            rt_geom.materials.len()
+        );
+    }
+    for i in 0..orig_geom.materials.len().min(rt_geom.materials.len()) {
+        let om = &orig_geom.materials[i];
+        let rm = &rt_geom.materials[i];
+        let mut diffs = Vec::new();
+        if om.name != rm.name {
+            diffs.push(format!("name: {:?} vs {:?}", om.name, rm.name));
+        }
+        match (&om.data, &rm.data) {
+            (ugx::types::MaterialData::Hogan(oh), ugx::types::MaterialData::Hogan(rh)) => {
+                if oh.skinned != rh.skinned {
+                    diffs.push(format!("skinned: {} vs {}", oh.skinned, rh.skinned));
+                }
+                if oh.textures != rh.textures {
+                    diffs.push(format!("textures: {:?} vs {:?}", oh.textures, rh.textures));
+                }
+                if oh.blend_mode != rh.blend_mode {
+                    diffs.push(format!(
+                        "blend_mode: {} vs {}",
+                        oh.blend_mode, rh.blend_mode
+                    ));
+                }
+                if oh.shader_permutations.len() != rh.shader_permutations.len() {
+                    diffs.push(format!(
+                        "perm count: {} vs {}",
+                        oh.shader_permutations.len(),
+                        rh.shader_permutations.len()
+                    ));
+                }
+                for j in 0..oh
+                    .shader_permutations
+                    .len()
+                    .min(rh.shader_permutations.len())
+                {
+                    if oh.shader_permutations[j].name != rh.shader_permutations[j].name {
+                        diffs.push(format!(
+                            "perm[{}]: {} vs {}",
+                            j, oh.shader_permutations[j].name, rh.shader_permutations[j].name
+                        ));
+                    }
+                    if oh.shader_permutations[j].hash != rh.shader_permutations[j].hash {
+                        diffs.push(format!(
+                            "perm[{}] hash: 0x{:08X} vs 0x{:08X}",
+                            j, oh.shader_permutations[j].hash, rh.shader_permutations[j].hash
+                        ));
+                    }
+                }
+                if oh.ps_cb_data != rh.ps_cb_data {
+                    diffs.push(format!(
+                        "ps_cb: {} vs {} bytes",
+                        oh.ps_cb_data.len(),
+                        rh.ps_cb_data.len()
+                    ));
+                }
+                if oh.vs_cb_data != rh.vs_cb_data {
+                    diffs.push(format!(
+                        "vs_cb: {} vs {} bytes",
+                        oh.vs_cb_data.len(),
+                        rh.vs_cb_data.len()
+                    ));
+                }
+            }
+            (ugx::types::MaterialData::Legacy(_), ugx::types::MaterialData::Hogan(_)) => {
+                diffs.push("type: Legacy vs Hogan".to_string());
+            }
+            (ugx::types::MaterialData::Hogan(_), ugx::types::MaterialData::Legacy(_)) => {
+                diffs.push("type: Hogan vs Legacy".to_string());
+            }
+            _ => {}
+        }
+        if diffs.is_empty() {
+            println!("  Material[{}]: identical", i);
+        } else {
+            println!("  Material[{}]: DIFFERS", i);
+            for d in &diffs {
+                println!("    {}", d);
+            }
+        }
+    }
+
+    // Sections
+    if orig_geom.sections.len() != rt_geom.sections.len() {
+        println!(
+            "  Sections: count differs ({} vs {})",
+            orig_geom.sections.len(),
+            rt_geom.sections.len()
+        );
+    }
+    for i in 0..orig_geom.sections.len().min(rt_geom.sections.len()) {
+        let os = &orig_geom.sections[i];
+        let rs = &rt_geom.sections[i];
+        let mut diffs = Vec::new();
+        if os.vert_size != rs.vert_size {
+            diffs.push(format!("vert_size: {} vs {}", os.vert_size, rs.vert_size));
+        }
+        if os.num_verts != rs.num_verts {
+            diffs.push(format!("num_verts: {} vs {}", os.num_verts, rs.num_verts));
+        }
+        if os.num_tris != rs.num_tris {
+            diffs.push(format!("num_tris: {} vs {}", os.num_tris, rs.num_tris));
+        }
+        if os.material_index != rs.material_index {
+            diffs.push(format!(
+                "material: {} vs {}",
+                os.material_index, rs.material_index
+            ));
+        }
+        if os.rigid_only != rs.rigid_only {
+            diffs.push(format!(
+                "rigid_only: {} vs {}",
+                os.rigid_only, rs.rigid_only
+            ));
+        }
+        if os.global_bones != rs.global_bones {
+            diffs.push(format!(
+                "global_bones: {} vs {}",
+                os.global_bones, rs.global_bones
+            ));
+        }
+        if os.max_bones != rs.max_bones {
+            diffs.push(format!("max_bones: {} vs {}", os.max_bones, rs.max_bones));
+        }
+        if os.rigid_bone_index != rs.rigid_bone_index {
+            diffs.push(format!(
+                "rigid_bone_index: {} vs {}",
+                os.rigid_bone_index, rs.rigid_bone_index
+            ));
+        }
+        if diffs.is_empty() {
+            println!("  Section[{}]: identical", i);
+        } else {
+            println!("  Section[{}]: DIFFERS", i);
+            for d in &diffs {
+                println!("    {}", d);
+            }
+        }
+    }
+
+    // Normal length analysis on original file
+    println!("\n=== Normal Length Analysis (original) ===");
+    for i in 0..orig_geom.sections.len() {
+        if let Ok(ov) = orig_geom.unpack_section_vertices(i) {
+            let lengths: Vec<f32> = ov
+                .iter()
+                .map(|v| {
+                    (v.normal[0] * v.normal[0]
+                        + v.normal[1] * v.normal[1]
+                        + v.normal[2] * v.normal[2])
+                        .sqrt()
+                })
+                .collect();
+            let min_len = lengths.iter().cloned().fold(f32::MAX, f32::min);
+            let max_len = lengths.iter().cloned().fold(0.0f32, f32::max);
+            let avg_len: f32 = lengths.iter().sum::<f32>() / lengths.len() as f32;
+            let near_unit = lengths.iter().filter(|l| (1.0 - **l).abs() < 0.01).count();
+            println!(
+                "  Section[{}]: {} normals, len min={:.4} max={:.4} avg={:.4}, near_unit={}/{}",
+                i,
+                lengths.len(),
+                min_len,
+                max_len,
+                avg_len,
+                near_unit,
+                lengths.len()
+            );
+            // Print first 5 normals
+            for (vi, v) in ov.iter().take(5).enumerate() {
+                let len = (v.normal[0] * v.normal[0]
+                    + v.normal[1] * v.normal[1]
+                    + v.normal[2] * v.normal[2])
+                    .sqrt();
+                println!(
+                    "    [{}] normal=[{:.6}, {:.6}, {:.6}] len={:.6}",
+                    vi, v.normal[0], v.normal[1], v.normal[2], len
+                );
+            }
+        }
+    }
+
+    // Vertex comparison (first few verts per section)
+    for i in 0..orig_geom.sections.len().min(rt_geom.sections.len()) {
+        if let (Ok(ov), Ok(rv)) = (
+            orig_geom.unpack_section_vertices(i),
+            rt_geom.unpack_section_vertices(i),
+        ) {
+            let mut pos_diffs = 0;
+            let mut norm_diffs = 0;
+            let mut uv_diffs = 0;
+            let max_pos_err: f32 = ov
+                .iter()
+                .zip(rv.iter())
+                .map(|(a, b)| {
+                    let dx = a.position[0] - b.position[0];
+                    let dy = a.position[1] - b.position[1];
+                    let dz = a.position[2] - b.position[2];
+                    (dx * dx + dy * dy + dz * dz).sqrt()
+                })
+                .fold(0.0f32, f32::max);
+
+            for (a, b) in ov.iter().zip(rv.iter()) {
+                let pdist = ((a.position[0] - b.position[0]).powi(2)
+                    + (a.position[1] - b.position[1]).powi(2)
+                    + (a.position[2] - b.position[2]).powi(2))
+                .sqrt();
+                if pdist > 0.01 {
+                    pos_diffs += 1;
+                }
+                let ndist = ((a.normal[0] - b.normal[0]).powi(2)
+                    + (a.normal[1] - b.normal[1]).powi(2)
+                    + (a.normal[2] - b.normal[2]).powi(2))
+                .sqrt();
+                if ndist > 0.05 {
+                    norm_diffs += 1;
+                }
+                if a.num_texcoords > 0
+                    && b.num_texcoords > 0
+                    && ((a.texcoords[0][0] - b.texcoords[0][0]).abs() > 0.001
+                        || (a.texcoords[0][1] - b.texcoords[0][1]).abs() > 0.001)
+                {
+                    uv_diffs += 1;
+                }
+            }
+            if pos_diffs > 0 || norm_diffs > 0 || uv_diffs > 0 || ov.len() != rv.len() {
+                println!(
+                    "  Section[{}] vertices: {} vs {} verts, max_pos_err={:.4}, pos_diffs={}, norm_diffs={}, uv_diffs={}",
+                    i,
+                    ov.len(),
+                    rv.len(),
+                    max_pos_err,
+                    pos_diffs,
+                    norm_diffs,
+                    uv_diffs
+                );
+            } else {
+                println!(
+                    "  Section[{}] vertices: identical ({} verts, max_pos_err={:.6})",
+                    i,
+                    ov.len(),
+                    max_pos_err
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
