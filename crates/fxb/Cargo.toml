@@ -1,0 +1,16 @@
+[package]
+name = "fxb"
+description = "Parser for the FXB0 container format used by Halo Wars 1: Definitive Edition compiled shaders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+d3dasm.workspace = true
+nostdio.workspace = true
+
+[dev-dependencies]
+test-utils.workspace = true
+era.workspace = true

@@ -24,6 +24,8 @@ members = [
     "crates/uax-cli",
     "crates/ufx",
     "crates/ufx-cli",
+    "crates/fxb",
+    "crates/fxb-cli",
 ]
 
 [workspace.package]
@@ -54,6 +56,8 @@ ugx-cli = { path = "crates/ugx-cli" }
 pkg = { path = "crates/pkg" }
 ufx = { path = "crates/ufx" }
 ufx-cli = { path = "crates/ufx-cli" }
+fxb = { path = "crates/fxb" }
+fxb-cli = { path = "crates/fxb-cli" }
 
 # External dependencies
 cfglib = { git = "https://github.com/coconutbird/cfglib.git" }
