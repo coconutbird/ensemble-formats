@@ -126,7 +126,14 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
             );
         }
 
-        match (&om.data, &rm.data) {
+        // The importer converts materials to the target version format
+        // (Legacy→Hogan for HW2, Hogan→Legacy for HW1), so the roundtrip
+        // material type may differ from the original. Convert the original
+        // to match before comparing.
+        let converted_om =
+            ugx::types::convert::convert_material(om, version == ugx::UgxVersion::Hw2, false);
+
+        match (&converted_om.data, &rm.data) {
             (ugx::MaterialData::Legacy(ol), ugx::MaterialData::Legacy(rl)) => {
                 if rl.blend_type != ol.blend_type {
                     fail!(
@@ -220,7 +227,11 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
             _ => {
                 fail!(
                     "{label}: material {mi} type mismatch: orig={} rt={}",
-                    if om.is_legacy() { "legacy" } else { "hogan" },
+                    if converted_om.is_legacy() {
+                        "legacy"
+                    } else {
+                        "hogan"
+                    },
                     if rm.is_legacy() { "legacy" } else { "hogan" }
                 );
             }
