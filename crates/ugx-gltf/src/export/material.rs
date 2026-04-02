@@ -28,8 +28,30 @@ pub(super) fn build_material_extras(mat: &Material) -> json::Extras {
 
     match &mat.data {
         MaterialData::Legacy(legacy) => {
-            ext.ugx_flags = Some(legacy.flags);
-            ext.ugx_blend_type = Some(legacy.blend_type);
+            let uses_opacity = legacy.flags & material_flags::OPACITY_VALID != 0;
+
+            // Flags: strip TWO_SIDED (bit 2) — it lives in glTF `doubleSided`.
+            // Store the remaining bits so non-glTF flags survive round-trip.
+            let flags_without_two_sided = legacy.flags & !material_flags::TWO_SIDED;
+            if flags_without_two_sided != 0 {
+                ext.ugx_flags = Some(flags_without_two_sided);
+            }
+
+            // blend_type: only store in extras when the raw value has no
+            // glTF equivalent (≥ 4).  Values 0–3 are reconstructed from
+            // alphaMode on import.
+            if legacy.blend_type >= 4 {
+                ext.ugx_blend_type = Some(legacy.blend_type);
+            }
+
+            // opacity: only store when OPACITY_VALID is *not* set — the
+            // engine ignores it, but we need the raw byte for round-trip.
+            // When OPACITY_VALID *is* set, the visual value lives in
+            // baseColorFactor[3] and is authoritative.
+            if !uses_opacity {
+                ext.ugx_opacity = Some(legacy.opacity);
+            }
+
             ext.ugx_spec_power = Some(legacy.spec_power);
             ext.ugx_spec_color = Some(legacy.spec_color);
             ext.ugx_env_reflectivity = Some(legacy.env_reflectivity);
@@ -37,7 +59,6 @@ pub(super) fn build_material_extras(mat: &Material) -> json::Extras {
             ext.ugx_env_fresnel = Some(legacy.env_fresnel);
             ext.ugx_env_fresnel_power = Some(legacy.env_fresnel_power);
             ext.ugx_accessory_index = Some(legacy.accessory_index);
-            ext.ugx_opacity = Some(legacy.opacity);
 
             let has_any_uvw = legacy
                 .uvw_velocity
