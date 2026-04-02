@@ -101,6 +101,76 @@ pub fn import_from_gltf(
 
     let has_skeleton = !bones.is_empty();
 
+    // Build structural maps for detecting rigid sections from the glTF node
+    // hierarchy. A mesh node that has no skin reference and is a child of a
+    // joint node is a rigid section bound to that joint/bone.
+
+    // Map from node index to its parent node index.
+    let mut node_parent: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (i, node) in root.nodes.iter().enumerate() {
+        if let Some(ref children) = node.children {
+            for child in children {
+                node_parent.insert(child.value(), i);
+            }
+        }
+    }
+
+    // Set of node indices that are joints in the skin.
+    let joint_node_set: std::collections::HashSet<usize> = root
+        .skins
+        .first()
+        .map(|skin| skin.joints.iter().map(|j| j.value()).collect())
+        .unwrap_or_default();
+
+    // Map from mesh index to the node that references it, and whether it has a skin.
+    struct MeshNodeInfo {
+        #[allow(dead_code)]
+        node_idx: usize,
+        has_skin: bool,
+        parent_bone_idx: Option<usize>, // joint index (0-based) if parent is a bone
+    }
+    let mut mesh_node_map: std::collections::HashMap<usize, MeshNodeInfo> =
+        std::collections::HashMap::new();
+    for (node_idx, node) in root.nodes.iter().enumerate() {
+        if let Some(ref mesh_ref) = node.mesh {
+            let mi = mesh_ref.value();
+            let has_skin = node.skin.is_some();
+            let parent_bone = if !has_skin {
+                // Check if this node's parent is a joint → rigid section
+                node_parent.get(&node_idx).and_then(|&parent_idx| {
+                    if joint_node_set.contains(&parent_idx) {
+                        // The parent node is a joint. Find which bone index it maps to.
+                        root.skins.first().and_then(|skin| {
+                            skin.joints
+                                .iter()
+                                .position(|j| j.value() == parent_idx)
+                        })
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
+            mesh_node_map.insert(mi, MeshNodeInfo {
+                node_idx,
+                has_skin,
+                parent_bone_idx: parent_bone,
+            });
+        }
+    }
+
+    // Precompute bone world matrices (IWM⁻¹) for transforming rigid vertices
+    // from bone-local space back to model space.
+    let bone_world_matrices: Vec<ugx::Matrix4x4> = granny_bones
+        .iter()
+        .map(|b| {
+            b.inverse_world_matrix
+                .inverse()
+                .unwrap_or_else(ugx::Matrix4x4::identity)
+        })
+        .collect();
+
     for (mesh_idx, mesh) in root.meshes.iter().enumerate() {
         let mesh_name = mesh
             .name
@@ -109,16 +179,11 @@ pub fn import_from_gltf(
         let mesh_start_vertex = all_vertices.len();
         let mesh_start_section = sections.len();
 
-        // Read section flags from mesh extras if present (written by our exporter).
-        // None means third-party glTF (Blender etc.) → fall back to heuristic.
+        // Read mesh extras for metadata that can't be inferred from structure.
         let mesh_ext: Option<MeshExtrasJson> = mesh
             .extras
             .as_ref()
             .and_then(|raw| serde_json::from_str(raw.get()).ok());
-        let extras_global_bones: Option<bool> = mesh_ext.as_ref().and_then(|e| e.ugx_global_bones);
-        let extras_rigid_only: Option<bool> = mesh_ext.as_ref().and_then(|e| e.ugx_rigid_only);
-        let extras_rigid_bone_index: Option<i32> =
-            mesh_ext.as_ref().and_then(|e| e.ugx_rigid_bone_index);
         let extras_granny_mesh_index: Option<usize> =
             mesh_ext.as_ref().and_then(|e| e.ugx_granny_mesh_index);
 
@@ -128,6 +193,20 @@ pub fn import_from_gltf(
             .as_ref()
             .map_or(f32::MAX, |e| e.ugx_lod_far_distance);
         let lod_fade = mesh_ext.as_ref().map_or(0.0, |e| e.ugx_lod_fade_distance);
+
+        // Detect rigid section from glTF structure:
+        // - Mesh node has no skin AND is parented to a bone node → rigid
+        // - Mesh node has skin → skinned
+        // - No node info (shouldn't happen) → fall back to heuristic
+        let struct_rigid_bone: Option<usize> = mesh_node_map
+            .get(&mesh_idx)
+            .and_then(|info| {
+                if !info.has_skin {
+                    info.parent_bone_idx
+                } else {
+                    None
+                }
+            });
 
         for primitive in &mesh.primitives {
             let (vertices, indices, material_index) =
@@ -169,45 +248,35 @@ pub fn import_from_gltf(
                 has_colors,
             );
 
-            // Determine global_bones / rigid_only: use extras if present,
-            // otherwise fall back to heuristic for third-party glTFs.
+            // Determine rigid/skinned from glTF structure:
+            // - struct_rigid_bone is Some(bone_idx) → rigid (bone-parented, no skin)
+            // - struct_rigid_bone is None → skinned or no skeleton
+            // For third-party glTFs without our node structure, fall back to heuristic.
             let (is_global_bones, is_rigid_only, global_bone_idx, actual_max_bones) =
-                if let Some(gb) = extras_global_bones {
-                    let ro = extras_rigid_only.unwrap_or(false);
-                    if gb || ro {
-                        // Explicitly rigid — use extras rigid_bone_index if present,
-                        // otherwise find the common bone from vertex data.
-                        let bone_idx = extras_rigid_bone_index.unwrap_or_else(|| {
-                            vertices
-                                .iter()
-                                .find(|v| v.bone_weights[0] > 0.0)
-                                .map(|v| v.bone_indices[0] as i32)
-                                .unwrap_or(0)
-                        });
-                        (gb, ro, bone_idx, 1)
+                if let Some(bone_idx) = struct_rigid_bone {
+                    // Structurally rigid: mesh is parented to a bone, no skin.
+                    (true, true, bone_idx as i32, 1)
+                } else if mesh_node_map.get(&mesh_idx).is_some_and(|info| info.has_skin) {
+                    // Structurally skinned: mesh has a skin reference.
+                    let max_inf = if has_skin {
+                        vertices
+                            .iter()
+                            .map(|v| v.bone_weights.iter().filter(|&&w| w > 0.0).count() as i32)
+                            .max()
+                            .unwrap_or(1)
+                            .max(1)
                     } else {
-                        // Explicitly NOT global_bones/rigid — compute max influences.
-                        let max_inf = if has_skin {
-                            vertices
-                                .iter()
-                                .map(|v| v.bone_weights.iter().filter(|&&w| w > 0.0).count() as i32)
-                                .max()
-                                .unwrap_or(1)
-                                .max(1)
-                        } else {
-                            1
-                        };
-                        (false, false, i32::MAX, max_inf)
-                    }
+                        1
+                    };
+                    (false, false, i32::MAX, max_inf)
                 } else {
-                    // No extras — third-party glTF, use heuristic.
+                    // No node info or no skin/parent — third-party glTF, use heuristic.
                     detect_global_bones(&vertices, has_skin)
                 };
 
-            // For global_bones or rigid_only sections, strip skin data and
-            // restore zero weights (the original buffer had no skin element).
-            let strip_skin = is_global_bones || is_rigid_only;
-            let (final_packer, final_vertices) = if strip_skin {
+            // For rigid sections: transform vertices from bone-local space back
+            // to model space, and strip skin data (rigid sections have no skin element).
+            let (final_packer, final_vertices) = if is_global_bones || is_rigid_only {
                 let rigid_packer = build_packer(
                     options.version,
                     max_texcoords,
@@ -216,10 +285,45 @@ pub fn import_from_gltf(
                     has_colors,
                 );
 
+                // Transform bone-local → model space if we have the bone's world matrix.
+                let bone_idx = global_bone_idx as usize;
+                let has_world_mat = bone_idx < bone_world_matrices.len();
+
                 let restored_vertices: Vec<UnpackedVertex> = vertices
                     .iter()
                     .map(|v| {
                         let mut rv = v.clone();
+                        if has_world_mat {
+                            let m = &bone_world_matrices[bone_idx].rows;
+                            // Position: v_model = v_local * bone_to_model
+                            let px = v.position[0];
+                            let py = v.position[1];
+                            let pz = v.position[2];
+                            rv.position = [
+                                px * m[0][0] + py * m[1][0] + pz * m[2][0] + m[3][0],
+                                px * m[0][1] + py * m[1][1] + pz * m[2][1] + m[3][1],
+                                px * m[0][2] + py * m[1][2] + pz * m[2][2] + m[3][2],
+                            ];
+                            // Normal: rotate only
+                            let nx = v.normal[0];
+                            let ny = v.normal[1];
+                            let nz = v.normal[2];
+                            rv.normal = [
+                                nx * m[0][0] + ny * m[1][0] + nz * m[2][0],
+                                nx * m[0][1] + ny * m[1][1] + nz * m[2][1],
+                                nx * m[0][2] + ny * m[1][2] + nz * m[2][2],
+                            ];
+                            // Tangent: rotate xyz, preserve w
+                            let tx = v.tangent[0];
+                            let ty = v.tangent[1];
+                            let tz = v.tangent[2];
+                            rv.tangent = [
+                                tx * m[0][0] + ty * m[1][0] + tz * m[2][0],
+                                tx * m[0][1] + ty * m[1][1] + tz * m[2][1],
+                                tx * m[0][2] + ty * m[1][2] + tz * m[2][2],
+                                v.tangent[3],
+                            ];
+                        }
                         rv.bone_weights = [0.0, 0.0, 0.0, 0.0];
                         rv.bone_indices = [0, 0, 0, 0];
                         rv

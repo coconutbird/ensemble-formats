@@ -106,10 +106,29 @@ pub fn export_to_gltf_with_buffer_name(
     // This helps determine the correct mesh name for each section.
     let section_to_mesh = build_section_to_mesh_mapping(geom, &geom.granny_bones);
 
+    // Determine which sections are rigid (global_bones or rigid_only with a valid bone).
+    // Rigid sections are exported WITHOUT skin data; their vertices are transformed
+    // into bone-local space and their mesh nodes are parented to the corresponding
+    // bone node in the glTF hierarchy. This structurally encodes the rigid/skinned
+    // distinction, making it survive Blender edits without metadata flags.
+    struct SectionExportInfo {
+        mesh_idx: usize,
+        /// If Some(bone_idx), this section is rigid and parented to the given bone.
+        rigid_parent_bone: Option<usize>,
+    }
+    let mut section_export_infos: Vec<SectionExportInfo> = Vec::new();
+
+    // Precompute bone world matrices (IWM⁻¹) for transforming rigid vertices.
+    let bone_model_to_bone: Vec<_> = if use_granny_bones {
+        geom.granny_bones
+            .iter()
+            .map(|b| b.inverse_world_matrix.clone())
+            .collect()
+    } else {
+        geom.bones.iter().map(|b| b.model_to_bone.clone()).collect()
+    };
+
     // Process each section as a separate glTF mesh (one primitive per mesh).
-    // We can't reliably group sections into meshes because multiple meshes can have
-    // the same bone_bindings (e.g., banshee has 6 meshes all using "bone_impact_01").
-    // The import side generates granny_meshes from vertex skin data, which is more accurate.
     for (section_idx, section) in geom.sections.iter().enumerate() {
         let vertices = geom.unpack_section_vertices(section_idx)?;
         let indices = geom.get_section_indices(section_idx);
@@ -118,15 +137,67 @@ pub fn export_to_gltf_with_buffer_name(
             continue;
         }
 
+        // Determine if this section is rigid (should be bone-parented, no skin).
+        let is_rigid = (section.global_bones || section.rigid_only)
+            && section.rigid_bone_index >= 0
+            && (section.rigid_bone_index as usize) < bone_count;
+
+        // For rigid sections, transform vertices into bone-local space.
+        let (export_vertices, export_has_skeleton) = if is_rigid {
+            let bone_idx = section.rigid_bone_index as usize;
+            let m = &bone_model_to_bone[bone_idx].rows;
+            let transformed: Vec<ugx::UnpackedVertex> = vertices
+                .iter()
+                .map(|v| {
+                    let mut tv = v.clone();
+                    // Position: v_local = v_model * model_to_bone
+                    let px = v.position[0];
+                    let py = v.position[1];
+                    let pz = v.position[2];
+                    tv.position = [
+                        px * m[0][0] + py * m[1][0] + pz * m[2][0] + m[3][0],
+                        px * m[0][1] + py * m[1][1] + pz * m[2][1] + m[3][1],
+                        px * m[0][2] + py * m[1][2] + pz * m[2][2] + m[3][2],
+                    ];
+                    // Normal: rotate only (no translation)
+                    let nx = v.normal[0];
+                    let ny = v.normal[1];
+                    let nz = v.normal[2];
+                    tv.normal = [
+                        nx * m[0][0] + ny * m[1][0] + nz * m[2][0],
+                        nx * m[0][1] + ny * m[1][1] + nz * m[2][1],
+                        nx * m[0][2] + ny * m[1][2] + nz * m[2][2],
+                    ];
+                    // Tangent: rotate xyz, preserve w handedness
+                    let tx = v.tangent[0];
+                    let ty = v.tangent[1];
+                    let tz = v.tangent[2];
+                    tv.tangent = [
+                        tx * m[0][0] + ty * m[1][0] + tz * m[2][0],
+                        tx * m[0][1] + ty * m[1][1] + tz * m[2][1],
+                        tx * m[0][2] + ty * m[1][2] + tz * m[2][2],
+                        v.tangent[3],
+                    ];
+                    // Clear skin data — rigid sections don't have it
+                    tv.bone_weights = [0.0; 4];
+                    tv.bone_indices = [0; 4];
+                    tv
+                })
+                .collect();
+            (transformed, false) // no skeleton for this primitive
+        } else {
+            (vertices, has_skeleton)
+        };
+
         let primitive = create_primitive(
-            &vertices,
+            &export_vertices,
             &indices,
             section.material_index,
             &mut buffer_data,
             &mut accessors,
             &mut buffer_views,
             options.include_materials && !materials_json.is_empty(),
-            has_skeleton,
+            export_has_skeleton,
             bone_count,
             section.rigid_bone_index,
             &section.bone_remap,
@@ -141,16 +212,11 @@ pub fn export_to_gltf_with_buffer_name(
         };
 
         // Store mesh extras for data that can't be recalculated from vertex data.
+        // Section flags (global_bones, rigid_only, rigid_bone_index) are NOT stored —
+        // the import side detects them from the glTF structure (bone-parented mesh
+        // without skin = rigid; mesh with skin = skinned).
         let mesh_extras = {
             let mut ext = MeshExtrasJson::default();
-
-            // Store section flags — the detect_global_bones() heuristic can
-            // incorrectly convert single-bone skinned meshes to rigid, which
-            // changes in-game rendering (rigid applies the bone's world transform
-            // without the IBM cancellation that skinning provides).
-            ext.ugx_global_bones = Some(section.global_bones);
-            ext.ugx_rigid_only = Some(section.rigid_only);
-            ext.ugx_rigid_bone_index = Some(section.rigid_bone_index);
 
             // Store granny mesh index for multi-section-per-mesh merging.
             if mesh_idx < geom.granny_meshes.len() {
@@ -184,6 +250,17 @@ pub fn export_to_gltf_with_buffer_name(
             }
         };
 
+        let rigid_parent = if is_rigid {
+            Some(section.rigid_bone_index as usize)
+        } else {
+            None
+        };
+
+        section_export_infos.push(SectionExportInfo {
+            mesh_idx: meshes.len(),
+            rigid_parent_bone: rigid_parent,
+        });
+
         meshes.push(json::Mesh {
             extensions: None,
             extras: mesh_extras,
@@ -203,7 +280,6 @@ pub fn export_to_gltf_with_buffer_name(
         // Create bone nodes first (they come before mesh nodes)
         let bone_node_start = 0u32;
         let (bone_nodes, ibm_accessor_idx) = if use_granny_bones {
-            // Use granny bones with correct inverse world matrices (same as Python script)
             create_skeleton_nodes_from_granny(
                 &geom.granny_bones,
                 &mut buffer_data,
@@ -211,7 +287,6 @@ pub fn export_to_gltf_with_buffer_name(
                 &mut buffer_views,
             )
         } else {
-            // Fallback to cached data bones
             create_skeleton_nodes(
                 &geom.bones,
                 &mut buffer_data,
@@ -238,12 +313,10 @@ pub fn export_to_gltf_with_buffer_name(
                 .collect()
         };
 
-        // Create skin
+        // Create skin (only needed if there are any skinned sections)
         let joint_indices: Vec<json::Index<json::Node>> = (0..bone_count as u32)
             .map(|i| json::Index::new(bone_node_start + i))
             .collect();
-
-        // Set skeleton root to first root bone (if there is one)
         let skeleton_root = root_bone_indices.first().copied().map(json::Index::new);
 
         skins.push(json::Skin {
@@ -256,8 +329,15 @@ pub fn export_to_gltf_with_buffer_name(
         });
         skin_index = Some(json::Index::new(0));
 
-        // Create mesh nodes (after bone nodes)
+        // Create mesh nodes (after bone nodes).
+        // Rigid sections get NO skin and are parented to their bone node.
+        // Skinned sections get a skin reference and go at the scene root.
         for (i, _mesh) in meshes.iter().enumerate() {
+            let info = section_export_infos
+                .iter()
+                .find(|s| s.mesh_idx == i);
+            let is_rigid = info.is_some_and(|s| s.rigid_parent_bone.is_some());
+
             nodes.push(json::Node {
                 camera: None,
                 children: None,
@@ -269,9 +349,22 @@ pub fn export_to_gltf_with_buffer_name(
                 rotation: None,
                 scale: None,
                 translation: None,
-                skin: skin_index,
+                skin: if is_rigid { None } else { skin_index },
                 weights: None,
             });
+        }
+
+        // Add rigid mesh nodes as children of their parent bone nodes.
+        let mesh_node_start = bone_count as u32;
+        for info in &section_export_infos {
+            if let Some(bone_idx) = info.rigid_parent_bone {
+                let mesh_node_idx = mesh_node_start + info.mesh_idx as u32;
+                let bone_node = &mut nodes[bone_idx];
+                let children = bone_node
+                    .children
+                    .get_or_insert_with(Vec::new);
+                children.push(json::Index::new(mesh_node_idx));
+            }
         }
     } else {
         // No skeleton - just create mesh nodes
@@ -293,20 +386,22 @@ pub fn export_to_gltf_with_buffer_name(
         }
     }
 
-    // Build scene: only root bones (children reached through hierarchy) + mesh nodes
+    // Build scene: root bones + skinned mesh nodes (rigid mesh nodes are
+    // reached through their parent bone's children list).
     let mut scene_node_indices = Vec::new();
     if has_skeleton {
-        // Only root bones go in the scene (child bones are in parent.children)
         for &root_idx in &root_bone_indices {
             scene_node_indices.push(json::Index::new(root_idx));
         }
-        // Add mesh nodes (they come after bone nodes)
+        // Only add SKINNED mesh nodes to the scene root.
         let mesh_node_start = bone_count as u32;
-        for i in 0..meshes.len() as u32 {
-            scene_node_indices.push(json::Index::new(mesh_node_start + i));
+        for info in &section_export_infos {
+            if info.rigid_parent_bone.is_none() {
+                scene_node_indices
+                    .push(json::Index::new(mesh_node_start + info.mesh_idx as u32));
+            }
         }
     } else {
-        // No skeleton - all nodes are mesh nodes and are roots
         scene_node_indices = (0..nodes.len() as u32).map(json::Index::new).collect();
     }
 

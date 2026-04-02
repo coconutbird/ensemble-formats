@@ -293,14 +293,7 @@ pub(crate) struct MeshExtrasJson {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_triangle_indices: Option<std::collections::BTreeMap<String, Vec<i32>>>,
 
-    // The following fields are read by import but NOT written by the current
-    // exporter (the import side infers them from vertex bone weights).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_global_bones: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_rigid_only: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_rigid_bone_index: Option<i32>,
+    /// Granny mesh index for multi-section-per-mesh merging.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_granny_mesh_index: Option<usize>,
 
@@ -322,9 +315,6 @@ impl MeshExtrasJson {
     /// Returns `true` when no extras data is present.
     pub fn is_empty(&self) -> bool {
         self.ugx_triangle_indices.is_none()
-            && self.ugx_global_bones.is_none()
-            && self.ugx_rigid_only.is_none()
-            && self.ugx_rigid_bone_index.is_none()
             && self.ugx_granny_mesh_index.is_none()
             && is_zero(&self.ugx_lod_near_distance)
             && is_f32_max(&self.ugx_lod_far_distance)
