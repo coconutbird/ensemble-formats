@@ -3,6 +3,11 @@
 use ugx::{AABB, Sphere, UnpackedVertex};
 
 /// Compute AABB and bounding sphere from vertices.
+///
+/// The bounding sphere is centered at the model origin `[0,0,0]` (root bone),
+/// **not** the geometric centroid.  The engine uses the sphere center as the
+/// model's anchor/pivot point, so shifting it to the mesh centroid would
+/// offset the model in-game.
 pub(crate) fn compute_bounds(vertices: &[UnpackedVertex]) -> (AABB, Sphere) {
     if vertices.is_empty() {
         return (AABB::default(), Sphere::default());
@@ -18,18 +23,15 @@ pub(crate) fn compute_bounds(vertices: &[UnpackedVertex]) -> (AABB, Sphere) {
         }
     }
 
-    let center = [
-        (min[0] + max[0]) * 0.5,
-        (min[1] + max[1]) * 0.5,
-        (min[2] + max[2]) * 0.5,
-    ];
-
+    // Sphere centered at the model origin — radius is max distance from
+    // origin to any vertex.
+    let center = [0.0f32; 3];
     let mut max_dist_sq = 0.0f32;
     for v in vertices {
-        let dx = v.position[0] - center[0];
-        let dy = v.position[1] - center[1];
-        let dz = v.position[2] - center[2];
-        max_dist_sq = max_dist_sq.max(dx * dx + dy * dy + dz * dz);
+        let d = v.position[0] * v.position[0]
+            + v.position[1] * v.position[1]
+            + v.position[2] * v.position[2];
+        max_dist_sq = max_dist_sq.max(d);
     }
 
     (
