@@ -347,15 +347,15 @@ fn write_bones(
             }
         }
 
-        // Padding after parent_index is always zero.
-        // (The engine's BPackedArray rebase only checks the name_offset
-        // sentinel at +0, not the parent_index padding at +76.)
-        let padding = [0u8; 4];
+        // The engine writes parent_index as a sign-extended i64, so the
+        // trailing 4 bytes are the upper half: 0xFFFFFFFF for root bones
+        // (parent_index == -1) and 0x00000000 for all others.
+        let parent_i64 = (bone.parent_index as i64).to_le_bytes();
         let packed = crate::types::raw::PackedBoneRaw {
             name_offset: 0u64.to_le_bytes(), // placeholder
             model_to_bone: mtb,
-            parent_index: bone.parent_index.to_le_bytes(),
-            _padding: padding,
+            parent_index: [parent_i64[0], parent_i64[1], parent_i64[2], parent_i64[3]],
+            _padding: [parent_i64[4], parent_i64[5], parent_i64[6], parent_i64[7]],
         };
         cursor.write_all(packed.as_bytes())?;
         name_fixups.push(InlineStringFixup {

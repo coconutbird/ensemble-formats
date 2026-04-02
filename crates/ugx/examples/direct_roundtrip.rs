@@ -21,7 +21,7 @@ fn main() {
     };
     eprintln!("Original file: {} bytes", data.len());
 
-    let geom = ugx::Reader::read(&data).unwrap();
+    let geom = ugx::UgxGeom::from_bytes_unchecked(&data).unwrap();
     eprintln!(
         "Read: {} bones, {} granny_bones, {} sections",
         geom.bones.len(),
@@ -83,8 +83,8 @@ fn main() {
     }
 
     // Compare decompressed chunk data
-    let ecf_orig = ecf::Reader::new(&data).unwrap();
-    let ecf_rt = ecf::Reader::new(&rt).unwrap();
+    let ecf_orig = ecf::Reader::new_unchecked(&data).unwrap();
+    let ecf_rt = ecf::Reader::new_unchecked(&rt).unwrap();
 
     eprintln!("\n=== PER-CHUNK DECOMPRESSED COMPARISON ===");
     let chunk_ids: &[(u64, &str)] = &[
