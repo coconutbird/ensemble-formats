@@ -26,12 +26,12 @@ pub(super) fn compute_fallback_local_transforms(geom: &UgxGeom) -> Vec<FallbackT
         .iter()
         .enumerate()
         .map(|(i, bone)| {
+            // DX row-vector: World = Local * ParentWorld
+            // Therefore:    Local = World * ParentWorld^{-1} = World * ParentIWM
             let local_matrix =
                 if bone.parent_index >= 0 && (bone.parent_index as usize) < bone_count {
                     let parent_idx = bone.parent_index as usize;
-                    geom.granny_bones[parent_idx]
-                        .inverse_world_matrix
-                        .multiply(&world_matrices[i])
+                    world_matrices[i].multiply(&geom.granny_bones[parent_idx].inverse_world_matrix)
                 } else {
                     world_matrices[i].clone()
                 };
