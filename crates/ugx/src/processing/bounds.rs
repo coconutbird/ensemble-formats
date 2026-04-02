@@ -36,25 +36,18 @@ impl UgxGeom {
 
         self.bounds = AABB { min, max };
 
-        // Bounding sphere centered at the model origin [0,0,0] (root bone),
-        // NOT the geometric centroid.  The engine uses the sphere center as the
-        // model's anchor/pivot point — shifting it to the mesh centroid would
-        // offset the model in-game.
-        let center = [0.0f32; 3];
+        let center = [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ];
 
-        // Radius is the max distance from the origin to any vertex.
-        let mut max_dist_sq = 0.0f32;
-        for section_idx in 0..self.sections.len() {
-            if let Ok(verts) = self.unpack_section_vertices(section_idx) {
-                for v in &verts {
-                    let d = v.position[0] * v.position[0]
-                        + v.position[1] * v.position[1]
-                        + v.position[2] * v.position[2];
-                    max_dist_sq = max_dist_sq.max(d);
-                }
-            }
-        }
-        let radius = max_dist_sq.sqrt();
+        // The original engine computes the bounding sphere as the sphere
+        // enclosing the AABB: center at AABB center, radius = half the diagonal.
+        let dx = max[0] - min[0];
+        let dy = max[1] - min[1];
+        let dz = max[2] - min[2];
+        let radius = (dx * dx + dy * dy + dz * dz).sqrt() * 0.5;
 
         self.bounding_sphere = Sphere { center, radius };
     }
