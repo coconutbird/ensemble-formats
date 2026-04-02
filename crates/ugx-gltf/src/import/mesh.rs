@@ -86,6 +86,12 @@ pub(super) fn generate_granny_meshes_from_vertices(
             continue;
         }
 
+        // Always include the root bone (index 0) in the binding list.
+        // The engine expects meshes to be bound to the skeleton root.
+        if !granny_bones.is_empty() {
+            used_bones.insert(0);
+        }
+
         let all_group_verts: Vec<&UnpackedVertex> = group
             .ranges
             .iter()
