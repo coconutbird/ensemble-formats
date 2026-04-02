@@ -67,19 +67,17 @@ pub(super) fn generate_granny_meshes_from_vertices(
         for &(sv, ev, ss, es) in &group.ranges {
             for v in &vertices[sv..ev] {
                 for k in 0..4 {
-                    if v.bone_weights[k] > 0.0 && v.bone_indices[k] > 0 {
+                    if v.bone_weights[k] > 0.0 {
                         used_bones.insert(v.bone_indices[k]);
                     }
                 }
             }
             for section in &sections[ss..es] {
                 if section.global_bones && section.rigid_bone_index >= 0 {
-                    let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
-                    used_bones.insert(bone_idx_1based);
+                    used_bones.insert(section.rigid_bone_index as u16);
                 }
                 if (section.global_bones || section.rigid_only) && section.rigid_bone_index >= 0 {
-                    let bone_idx_1based = (section.rigid_bone_index as u16) + 1;
-                    rigid_bone_indices.insert(bone_idx_1based);
+                    rigid_bone_indices.insert(section.rigid_bone_index as u16);
                 }
             }
         }
@@ -97,7 +95,7 @@ pub(super) fn generate_granny_meshes_from_vertices(
         let bone_bindings: Vec<GrannyBoneBinding> = used_bones
             .iter()
             .filter_map(|&idx| {
-                let idx_0based = (idx as usize).saturating_sub(1);
+                let idx_0based = idx as usize;
                 granny_bones.get(idx_0based).map(|b| {
                     let owns_all = rigid_bone_indices.contains(&idx);
                     let (obb_min, obb_max) =
@@ -125,7 +123,7 @@ pub(super) fn generate_granny_meshes_from_vertices(
 
 /// Compute the OBB (oriented bounding box) for a bone from vertex data.
 ///
-/// Finds all vertices weighted to `bone_idx_1based`, transforms their positions
+/// Finds all vertices weighted to `bone_idx`, transforms their positions
 /// into bone-local space using the bone's `inverse_world_matrix`, and returns
 /// the axis-aligned min/max in that space.
 ///
@@ -135,7 +133,7 @@ pub(super) fn generate_granny_meshes_from_vertices(
 /// If no vertices reference this bone, returns zeroed min/max.
 fn compute_bone_obb(
     vertices: &[&UnpackedVertex],
-    bone_idx_1based: u16,
+    bone_idx: u16,
     inverse_world_matrix: &ugx::Matrix4x4,
     owns_all: bool,
 ) -> ([f32; 3], [f32; 3]) {
@@ -149,7 +147,7 @@ fn compute_bone_obb(
         let weighted = if owns_all {
             true
         } else {
-            (0..4).any(|k| v.bone_indices[k] == bone_idx_1based && v.bone_weights[k] > 0.0)
+            (0..4).any(|k| v.bone_indices[k] == bone_idx && v.bone_weights[k] > 0.0)
         };
         if !weighted {
             continue;
@@ -233,7 +231,8 @@ pub(super) fn detect_global_bones(
         // The original format uses rigid_only=true, global_bones=false for
         // this case (the vertex buffer has no skin element, and the section
         // is bound to rigid_bone_index).
-        (false, true, (bone as i32) - 1, 1)
+        // bone_indices are 0-based global, same as rigid_bone_index.
+        (false, true, bone as i32, 1)
     } else {
         (false, false, i32::MAX, max_bones)
     }

@@ -149,15 +149,15 @@ impl UgxGeom {
                         if v.bone_weights[j] > 0.0 {
                             let raw_idx = v.bone_indices[j] as usize;
                             let global_idx = if !bone_remap.is_empty() {
+                                // Section-local 0-based → remap to global 0-based.
                                 if raw_idx < bone_remap.len() {
                                     bone_remap[raw_idx] as usize
                                 } else {
                                     continue;
                                 }
-                            } else if raw_idx > 0 {
-                                raw_idx - 1
                             } else {
-                                continue;
+                                // Already 0-based global.
+                                raw_idx
                             };
                             if global_idx < bone_count {
                                 bmin = bmin.min(global_idx);
