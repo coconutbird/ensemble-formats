@@ -128,7 +128,20 @@ use material::read_materials as parse_materials;
 impl UgxGeom {
     /// Parse UGX geometry from a byte slice (ECF container).
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let ecf = ecf::Reader::new(data)?;
+        Self::from_bytes_impl(data, true)
+    }
+
+    /// Parse UGX geometry from a byte slice, skipping ECF checksum validation.
+    pub fn from_bytes_unchecked(data: &[u8]) -> Result<Self> {
+        Self::from_bytes_impl(data, false)
+    }
+
+    fn from_bytes_impl(data: &[u8], validate: bool) -> Result<Self> {
+        let ecf = if validate {
+            ecf::Reader::new(data)?
+        } else {
+            ecf::Reader::new_unchecked(data)?
+        };
 
         let cached_data = ecf
             .chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID)

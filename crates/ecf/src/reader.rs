@@ -28,17 +28,28 @@ pub struct Reader<'a> {
 impl<'a> Reader<'a> {
     /// Parse an ECF container from a byte slice, validating checksums.
     pub fn new(data: &'a [u8]) -> Result<Self> {
+        Self::parse(data, true)
+    }
+
+    /// Parse an ECF container from a byte slice, skipping checksum validation.
+    pub fn new_unchecked(data: &'a [u8]) -> Result<Self> {
+        Self::parse(data, false)
+    }
+
+    fn parse(data: &'a [u8], validate_checksums: bool) -> Result<Self> {
         let header = EcfHeader::from_bytes(data)?;
 
         // Validate header adler32 (bytes 12..header_size, matching HW2 ECF::validateHeader)
-        let hdr_end = (header.header_size as usize).min(data.len());
-        if hdr_end > 12 {
-            let computed = adler32(&data[12..hdr_end]);
-            if computed != header.adler32 {
-                return Err(Error::HeaderChecksumMismatch {
-                    expected: header.adler32,
-                    computed,
-                });
+        if validate_checksums {
+            let hdr_end = (header.header_size as usize).min(data.len());
+            if hdr_end > 12 {
+                let computed = adler32(&data[12..hdr_end]);
+                if computed != header.adler32 {
+                    return Err(Error::HeaderChecksumMismatch {
+                        expected: header.adler32,
+                        computed,
+                    });
+                }
             }
         }
 
@@ -55,7 +66,7 @@ impl<'a> Reader<'a> {
             let chunk = EcfChunkHeader::from_bytes(&data[offset..])?;
 
             // Validate per-chunk adler32 (matching HW2 ECF::validateChunks)
-            if chunk.size > 0 {
+            if validate_checksums && chunk.size > 0 {
                 let cstart = chunk.offset as usize;
                 let cend = cstart + chunk.size as usize;
 

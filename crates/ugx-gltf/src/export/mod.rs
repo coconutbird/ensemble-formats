@@ -141,11 +141,21 @@ pub fn export_to_gltf_with_buffer_name(
         };
 
         // Store mesh extras for data that can't be recalculated from vertex data.
-        // Section flags (global_bones, rigid_only, rigid_bone_index) and
-        // granny_mesh_index are NOT stored — the import side accurately infers
-        // them from vertex bone weights via detect_global_bones().
         let mesh_extras = {
             let mut ext = MeshExtrasJson::default();
+
+            // Store section flags — the detect_global_bones() heuristic can
+            // incorrectly convert single-bone skinned meshes to rigid, which
+            // changes in-game rendering (rigid applies the bone's world transform
+            // without the IBM cancellation that skinning provides).
+            ext.ugx_global_bones = Some(section.global_bones);
+            ext.ugx_rigid_only = Some(section.rigid_only);
+            ext.ugx_rigid_bone_index = Some(section.rigid_bone_index);
+
+            // Store granny mesh index for multi-section-per-mesh merging.
+            if mesh_idx < geom.granny_meshes.len() {
+                ext.ugx_granny_mesh_index = Some(mesh_idx);
+            }
 
             // Store triangle_indices from bone bindings (when non-empty).
             // These can't be recalculated from vertex data.
