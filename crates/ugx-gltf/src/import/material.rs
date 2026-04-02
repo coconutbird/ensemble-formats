@@ -78,17 +78,32 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
             // Read UGX extras (all material properties + maps)
             let mat_extras = read_material_extras(&mat.extras, &maps);
 
-            // Use blend_type from extras if present, otherwise infer from alpha mode
+            // Use blend_type from extras if present, otherwise infer from glTF alpha mode.
+            // Mapping: Blend → Over (2), Mask → AlphaTest (3), Opaque → AlphaToCoverage (0).
             let blend_type = mat_extras.blend_type.unwrap_or({
-                if let gltf_json::validation::Checked::Valid(
-                    gltf_json::material::AlphaMode::Blend,
-                ) = mat.alpha_mode
-                {
-                    1
-                } else {
-                    0
+                use gltf_json::validation::Checked::Valid;
+                match mat.alpha_mode {
+                    Valid(gltf_json::material::AlphaMode::Blend) => 2, // Over
+                    Valid(gltf_json::material::AlphaMode::Mask) => 3,  // AlphaTest
+                    _ => 0,                                            // AlphaToCoverage (opaque)
                 }
             });
+
+            // Merge glTF doubleSided into flags when no extras provided the flag.
+            // This ensures round-tripping when a user sets doubleSided in Blender.
+            let flags = if mat_extras.flags_from_extras {
+                mat_extras.flags
+            } else {
+                let mut f = mat_extras.flags;
+                if mat.double_sided {
+                    f |= ugx::types::material::material_flags::TWO_SIDED;
+                }
+                // Infer OPACITY_VALID when glTF signals transparency
+                if blend_type == 2 && base_color[3] < 1.0 {
+                    f |= ugx::types::material::material_flags::OPACITY_VALID;
+                }
+                f
+            };
 
             // Merge extra maps into the maps array (extras override PBR-derived maps)
             let mut final_maps = maps;
@@ -104,7 +119,7 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
                     spec_power: mat_extras.spec_power.unwrap_or((1.0 - roughness) * 100.0),
                     opacity: mat_extras.opacity.unwrap_or(base_color[3]),
                     blend_type,
-                    flags: mat_extras.flags,
+                    flags,
                     uvw_velocity: mat_extras.uvw_velocity,
                     spec_color: mat_extras.spec_color.unwrap_or([1.0, 1.0, 1.0]),
                     env_reflectivity: mat_extras.env_reflectivity.unwrap_or(1.0),
@@ -127,6 +142,9 @@ pub(crate) fn import_materials(root: &gltf_json::Root) -> Vec<Material> {
 /// Parsed material extras from glTF.
 struct MaterialExtras {
     flags: u32,
+    /// True when `ugx_flags` was present in extras (authoritative).
+    /// When false, flags should be inferred from glTF properties.
+    flags_from_extras: bool,
     blend_type: Option<u8>,
     uvw_velocity: [[f32; 3]; MapType::NUM_TYPES],
     extra_maps: Vec<(usize, Vec<Map>)>,
@@ -151,6 +169,7 @@ fn read_material_extras(
 
     let mut result = MaterialExtras {
         flags: 0,
+        flags_from_extras: false,
         blend_type: None,
         uvw_velocity: [[0.0f32; 3]; MapType::NUM_TYPES],
         extra_maps: Vec::new(),
@@ -177,6 +196,7 @@ fn read_material_extras(
     };
 
     result.material_version = Some(ext.ugx_material_version);
+    result.flags_from_extras = ext.ugx_flags.is_some();
     result.flags = ext.ugx_flags.unwrap_or(0);
     result.blend_type = ext.ugx_blend_type;
     result.spec_power = ext.ugx_spec_power;

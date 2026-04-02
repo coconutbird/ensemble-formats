@@ -142,7 +142,6 @@ pub fn export_to_gltf_with_buffer_name(
             && section.rigid_bone_index >= 0
             && (section.rigid_bone_index as usize) < bone_count;
 
-
         // For rigid sections, transform vertices into bone-local space.
         let (export_vertices, export_has_skeleton) = if is_rigid {
             let bone_idx = section.rigid_bone_index as usize;

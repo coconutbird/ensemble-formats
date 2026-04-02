@@ -365,16 +365,64 @@ fn roundtrip_ugx_bytes(label: &str, data: &[u8], version: ugx::UgxVersion) -> Ro
             }
 
             // Bone indices — only check for slots with non-zero weight
-            // (and only when not global_bones, where indices are implicit)
+            // (and only when not global_bones, where indices are implicit).
+            //
+            // The roundtrip may change bone index representation:
+            // - Original: section-local indices + bone_remap table
+            // - Roundtrip: global indices, empty bone_remap
+            // Both are semantically equivalent, so we normalise the original's
+            // section-local indices through the bone_remap before comparing.
             if !section_is_global {
+                let orig_remap = &original.sections[si].bone_remap;
+                let rt_remap = &re_read.sections[si].bone_remap;
                 for c in 0..4 {
-                    if a.bone_weights[c] > 0.0 && a.bone_indices[c] != b.bone_indices[c] {
-                        fail!(
-                            "{label}: sec {si} vert {vi} bone_idx[{c}]: {} vs {} (weight={})",
-                            a.bone_indices[c],
-                            b.bone_indices[c],
-                            a.bone_weights[c]
-                        );
+                    if a.bone_weights[c] > 0.0 {
+                        // Resolve both sides to global bone indices through their
+                        // respective bone_remap tables.
+                        let resolve = |idx: u16, remap: &[u8]| -> u16 {
+                            let i = idx as usize;
+                            if !remap.is_empty() && i < remap.len() {
+                                remap[i] as u16
+                            } else {
+                                idx
+                            }
+                        };
+                        let a_global = resolve(a.bone_indices[c], rt_remap);
+                        let b_global = resolve(b.bone_indices[c], orig_remap);
+
+                        // DEBUG
+                        if vi == 0 && c == 0 && a_global != b_global {
+                            let rt_po = re_read.sections[si]
+                                .base_vert_packer
+                                .as_ref()
+                                .map(|p| p.pack_order.as_str())
+                                .unwrap_or("(none)");
+                            let orig_po = original.sections[si]
+                                .base_vert_packer
+                                .as_ref()
+                                .map(|p| p.pack_order.as_str())
+                                .unwrap_or("(none)");
+                            eprintln!(
+                                "  DEBUG {label} sec {si}: a_idx={} a_remap={:?} a_global={} | b_idx={} b_remap={:?} b_global={} | rt_pack={} orig_pack={}",
+                                a.bone_indices[c],
+                                rt_remap,
+                                a_global,
+                                b.bone_indices[c],
+                                orig_remap,
+                                b_global,
+                                rt_po,
+                                orig_po
+                            );
+                        }
+
+                        if a_global != b_global {
+                            fail!(
+                                "{label}: sec {si} vert {vi} bone_idx[{c}]: {} vs {} (weight={})",
+                                a_global,
+                                b_global,
+                                a.bone_weights[c]
+                            );
+                        }
                     }
                 }
             }
