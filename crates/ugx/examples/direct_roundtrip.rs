@@ -270,6 +270,82 @@ fn main() {
             eprintln!();
         }
 
+        // Dump bone name offsets from original cached data
+        {
+            let bones_hdr_base = 0x50usize; // second packed array header (bones)
+            if bones_hdr_base + 16 <= orig_cd.len() {
+                let bone_count = u32::from_le_bytes(
+                    orig_cd[bones_hdr_base..bones_hdr_base + 4]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                let bone_off = u64::from_le_bytes(
+                    orig_cd[bones_hdr_base + 8..bones_hdr_base + 16]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                eprintln!(
+                    "\n  --- Bone name layout (orig): {} bones at 0x{:X} ---",
+                    bone_count, bone_off
+                );
+                let mut prev_name_off: Option<usize> = None;
+                for b in 0..bone_count {
+                    let bstart = bone_off + b * 80;
+                    if bstart + 8 > orig_cd.len() {
+                        break;
+                    }
+                    let name_off =
+                        u64::from_le_bytes(orig_cd[bstart..bstart + 8].try_into().unwrap())
+                            as usize;
+                    let name = if name_off < orig_cd.len() {
+                        let end = orig_cd[name_off..]
+                            .iter()
+                            .position(|&x| x == 0)
+                            .unwrap_or(0);
+                        String::from_utf8_lossy(&orig_cd[name_off..name_off + end]).to_string()
+                    } else {
+                        "???".into()
+                    };
+                    let slot = if let Some(prev) = prev_name_off {
+                        format!("prev_slot={}", name_off - prev)
+                    } else {
+                        String::new()
+                    };
+                    eprintln!(
+                        "    bone[{:2}] name_off=0x{:04X} len={:2} '{}' {}",
+                        b,
+                        name_off,
+                        name.len() + 1,
+                        name,
+                        slot
+                    );
+                    prev_name_off = Some(name_off);
+                }
+                // Show gap from last name to accessories
+                let acc_hdr_base = 0x60usize;
+                if acc_hdr_base + 16 <= orig_cd.len() {
+                    let acc_off = u64::from_le_bytes(
+                        orig_cd[acc_hdr_base + 8..acc_hdr_base + 16]
+                            .try_into()
+                            .unwrap(),
+                    ) as usize;
+                    if let Some(last) = prev_name_off {
+                        let last_name_end = orig_cd[last..]
+                            .iter()
+                            .position(|&x| x == 0)
+                            .map(|p| last + p + 1)
+                            .unwrap_or(last);
+                        eprintln!(
+                            "    last_name_end=0x{:04X} acc_start=0x{:04X} gap={}",
+                            last_name_end,
+                            acc_off,
+                            acc_off - last_name_end
+                        );
+                    }
+                }
+            }
+        }
+
         // Full hex dump showing ALL diff rows
         eprintln!("\n  --- Full hex diff ---");
         let show = orig_cd.len().max(rt_cd.len());
