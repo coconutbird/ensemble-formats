@@ -215,6 +215,7 @@ pub fn import_from_gltf(
                 continue;
             }
 
+
             // Choose vertex format based on what data is present
             let has_tangents = vertices
                 .iter()

@@ -101,11 +101,10 @@ pub(crate) fn import_primitive(
 
     // Build vertices
     let mut vertices = Vec::with_capacity(vertex_count);
-    let max_bone_idx = if bone_count > 0 {
-        (bone_count - 1) as u16
-    } else {
-        0
-    };
+    // HW1 vertex buffers may store bone indices up to bone_count (not
+    // bone_count-1), so use bone_count as the inclusive upper bound to
+    // avoid clamping valid indices.
+    let max_bone_idx = bone_count as u16;
 
     #[allow(clippy::field_reassign_with_default)]
     for i in 0..vertex_count {

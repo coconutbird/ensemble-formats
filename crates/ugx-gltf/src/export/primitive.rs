@@ -269,7 +269,12 @@ pub(crate) fn create_primitive(
     //   • bone_remap empty → indices are already 0-based global;
     //     use directly for glTF (which also uses 0-based joint indices).
     if has_skeleton && bone_count > 0 {
-        let max_bone_idx = (bone_count - 1) as u16;
+        // HW1 vertex buffers may store bone indices up to bone_count (not
+        // bone_count-1). Whether this is 1-based indexing or an implicit
+        // root bone is unclear, but we must preserve the raw values for
+        // round-trip fidelity. Use bone_count (inclusive) as the upper
+        // bound so that index == bone_count is NOT clamped.
+        let max_bone_idx = bone_count as u16;
         let use_u16_joints = bone_count > 256;
         let has_remap = !bone_remap.is_empty();
         // rigid_bone_index can be INT_MAX (0x7FFFFFFF) meaning "no rigid bone".
@@ -304,8 +309,9 @@ pub(crate) fn create_primitive(
                             0
                         };
                     }
-                    // When bone_remap is empty, indices are already 0-based
-                    // global — no adjustment needed.
+                    // Clamp only truly out-of-range indices (> bone_count).
+                    // Indices equal to bone_count are valid in HW1 vertex
+                    // buffers (the engine may use 1-based bone indexing).
                     if *idx > max_bone_idx {
                         *idx = 0;
                     }
