@@ -69,7 +69,7 @@ pub(super) fn build_cached_data(geom: &UgxGeom, version: UgxVersion) -> Result<V
     cursor.seek(SeekFrom::End(0))?;
 
     // 5. Bone data.
-    let (bones_offset, num_bones, bone_name_fixups) = write_bones(&mut cursor, geom)?;
+    let (bones_offset, num_bones, bone_name_fixups) = write_bones(&mut cursor, geom, version)?;
 
     // 6. Bone name strings inline (32-byte fixed slots after bone structs).
     let _ = cursor;
@@ -331,8 +331,11 @@ fn write_bone_remap_header(
 fn write_bones(
     cursor: &mut MutCursor<'_>,
     geom: &UgxGeom,
+    version: UgxVersion,
 ) -> Result<(u64, u32, Vec<InlineStringFixup>)> {
-    pad_to_alignment(cursor, 8)?;
+    // The engine aligns bone data to 16 bytes (observed in both HW1 and HW2
+    // vanilla files: HW1 bones at 0x140, HW2 bones at 0xF0 — both 16-aligned).
+    pad_to_alignment(cursor, 16)?;
     let offset = cursor.stream_position()?;
     let count = geom.bones.len() as u32;
     let mut name_fixups = Vec::with_capacity(geom.bones.len());
@@ -347,15 +350,12 @@ fn write_bones(
             }
         }
 
-        // The engine writes parent_index as a sign-extended i64, so the
-        // trailing 4 bytes are the upper half: 0xFFFFFFFF for root bones
-        // (parent_index == -1) and 0x00000000 for all others.
-        let parent_i64 = (bone.parent_index as i64).to_le_bytes();
+        let padding = [0u8; 4];
         let packed = crate::types::raw::PackedBoneRaw {
             name_offset: 0u64.to_le_bytes(), // placeholder
             model_to_bone: mtb,
-            parent_index: [parent_i64[0], parent_i64[1], parent_i64[2], parent_i64[3]],
-            _padding: [parent_i64[4], parent_i64[5], parent_i64[6], parent_i64[7]],
+            parent_index: bone.parent_index.to_le_bytes(),
+            _padding: padding,
         };
         cursor.write_all(packed.as_bytes())?;
         name_fixups.push(InlineStringFixup {
