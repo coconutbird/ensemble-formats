@@ -1,7 +1,89 @@
-//! Material types: MapType, Map, Material.
+//! Material types: MapType, Map, Material, MaterialFlags, BlendType.
 
 use alloc::string::String;
 use alloc::vec::Vec;
+
+/// HW1 (`@Ver=4`) legacy material flags bitmask (from `Flags` in BDT NameValues).
+///
+/// Matches the C++ `Unigeom::BMaterial` flags enum. Used by
+/// `BUGXGeomSectionRenderer_initFromMaterial` (`0x1406C93E0`) to
+/// configure per-section rendering state.
+///
+/// These flags only apply to legacy (v4) materials; HW2 Hogan materials
+/// use a separate shader-driven system.
+pub mod material_flags {
+    /// Bit 0 — **Color Gloss**: specular color comes from the gloss map.
+    pub const COLOR_GLOSS: u32 = 1 << 0;
+
+    /// Bit 1 — **Opacity Valid**: gates whether the `Opacity` value from
+    /// BDT is read and applied. When clear, opacity stays at 1.0 (fully
+    /// opaque) regardless of the stored `Opacity` value.
+    pub const OPACITY_VALID: u32 = 1 << 1;
+
+    /// Bit 2 — **Two-Sided**: enables double-sided / backface rendering.
+    /// Maps to `doubleSided: true` in glTF.
+    pub const TWO_SIDED: u32 = 1 << 2;
+
+    /// Bit 3 — **Disable Shadows**: disables shadow casting for this material.
+    pub const DISABLE_SHADOWS: u32 = 1 << 3;
+
+    /// Bit 4 — **Global Env**: forces global environment mapping even when
+    /// no environment map texture is present.
+    pub const GLOBAL_ENV: u32 = 1 << 4;
+
+    /// Bit 5 — **Terrain Conform**: enables terrain conformance rendering.
+    pub const TERRAIN_CONFORM: u32 = 1 << 5;
+
+    /// Bit 6 — **Local Reflection**: enables local reflections
+    /// (shader constant `gLocalReflectionEnabled`).
+    pub const LOCAL_REFLECTION: u32 = 1 << 6;
+
+    /// Bit 7 — **Disable Shadow Reception**: prevents this material from
+    /// receiving shadows cast by other objects.
+    pub const DISABLE_SHADOW_RECEPTION: u32 = 1 << 7;
+}
+
+/// HW1 (`@Ver=4`) legacy blend type values (from `BlendType` byte in BDT NameValues).
+///
+/// Matches the C++ `Unigeom::BMaterial` blend type enum. Used by
+/// `BUGXGeomSectionRenderer_initFromMaterial` (`0x1406c97d2`).
+///
+/// These blend types only apply to legacy (v4) materials; HW2 Hogan
+/// materials have their own `blend_mode` field with different semantics.
+///
+/// Values ≥ 4 are treated identically to 0 by the engine (catch-all default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BlendType {
+    /// Alpha-to-coverage (engine blend mode 0, flag 1).
+    AlphaToCoverage = 0,
+    /// Additive blending (engine blend mode 2, flag 2).
+    Additive = 1,
+    /// Over operator / alpha blend (engine blend mode 1, flag 4).
+    Over = 2,
+    /// Alpha test (engine blend mode 3, flag 1).
+    AlphaTest = 3,
+}
+
+impl BlendType {
+    /// Parse a raw byte into a `BlendType`.
+    ///
+    /// Values ≥ 4 are treated as `AlphaToCoverage` by the engine (catch-all).
+    pub fn from_raw(value: u8) -> Self {
+        match value {
+            1 => Self::Additive,
+            2 => Self::Over,
+            3 => Self::AlphaTest,
+            _ => Self::AlphaToCoverage,
+        }
+    }
+
+    /// Returns `true` if this blend type uses the default alpha-to-coverage
+    /// path (value 0 or ≥ 4).
+    pub fn is_alpha_to_coverage(self) -> bool {
+        matches!(self, Self::AlphaToCoverage)
+    }
+}
 
 /// Unigeom map types (13 types, matching Ensemble's eMapType enum).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

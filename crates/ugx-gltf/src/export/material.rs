@@ -7,6 +7,7 @@ use gltf_json as json;
 use json::validation::Checked::Valid;
 
 use ugx::types::MaterialData;
+use ugx::types::material::{BlendType, material_flags};
 use ugx::{MapType, Material};
 
 use crate::extras::{
@@ -223,20 +224,49 @@ pub(super) fn build_materials(materials: &[Material]) -> MaterialBuildResult {
             json::material::EmissiveFactor([0.0, 0.0, 0.0])
         };
 
-        let (blend_type, opacity, spec_power) = if let Some(legacy) = mat.legacy() {
-            (legacy.blend_type, legacy.opacity, legacy.spec_power)
+        let (blend_type_raw, opacity, flags, spec_power) = if let Some(legacy) = mat.legacy() {
+            (
+                legacy.blend_type,
+                legacy.opacity,
+                legacy.flags,
+                legacy.spec_power,
+            )
         } else {
-            (0u8, 1.0f32, 10.0f32)
+            (0u8, 1.0f32, 0u32, 10.0f32)
         };
 
-        let alpha_mode = if blend_type > 0 || opacity < 1.0 {
-            Valid(json::material::AlphaMode::Blend)
-        } else {
-            Valid(json::material::AlphaMode::Opaque)
+        let blend = BlendType::from_raw(blend_type_raw);
+        let uses_opacity = flags & material_flags::OPACITY_VALID != 0;
+        let two_sided = flags & material_flags::TWO_SIDED != 0;
+
+        // Map blend_type + opacity to glTF alpha mode using engine logic
+        // (BUGXGeomSectionRenderer_initFromMaterial at 0x1406C93E0).
+        let (alpha_mode, alpha_cutoff, visual_alpha) = match blend {
+            BlendType::AlphaTest => {
+                // Alpha test → glTF MASK with cutoff (engine blend mode 3)
+                (
+                    Valid(json::material::AlphaMode::Mask),
+                    Some(json::material::AlphaCutoff(0.5)),
+                    1.0,
+                )
+            }
+            BlendType::Additive | BlendType::Over => {
+                // Additive / Over → glTF BLEND
+                let a = if uses_opacity { opacity } else { 1.0 };
+                (Valid(json::material::AlphaMode::Blend), None, a)
+            }
+            BlendType::AlphaToCoverage => {
+                // A2C: only use BLEND if opacity flag is set and < 1.0
+                if uses_opacity && opacity < 1.0 {
+                    (Valid(json::material::AlphaMode::Blend), None, opacity)
+                } else {
+                    (Valid(json::material::AlphaMode::Opaque), None, 1.0)
+                }
+            }
         };
 
         let pbr = json::material::PbrMetallicRoughness {
-            base_color_factor: json::material::PbrBaseColorFactor([1.0, 1.0, 1.0, opacity]),
+            base_color_factor: json::material::PbrBaseColorFactor([1.0, 1.0, 1.0, visual_alpha]),
             base_color_texture,
             metallic_factor: json::material::StrengthFactor(0.0),
             roughness_factor: json::material::StrengthFactor(
@@ -250,9 +280,9 @@ pub(super) fn build_materials(materials: &[Material]) -> MaterialBuildResult {
         let extras = build_material_extras(mat);
 
         materials_json.push(json::Material {
-            alpha_cutoff: None,
+            alpha_cutoff,
             alpha_mode,
-            double_sided: false,
+            double_sided: two_sided,
             pbr_metallic_roughness: pbr,
             normal_texture,
             occlusion_texture,
