@@ -166,9 +166,18 @@ fn find_best_matching_mesh(
         }
     }
 
-    // If no overlap found at all, return mesh count to create a new mesh
-    if best_score.3 == 0 {
-        mesh_bone_sets.len()
+    // If no overlap found at all, fall back to the least-used mesh rather
+    // than creating an anonymous mesh.  The original granny_mesh often only
+    // binds the root bone while the section's vertices are skinned to many
+    // child bones, leading to zero overlap.
+    if best_score.3 == 0 && !mesh_bone_sets.is_empty() {
+        // Pick the mesh with the lowest usage count (round-robin).
+        mesh_usage_count
+            .iter()
+            .enumerate()
+            .min_by_key(|&(_, c)| *c)
+            .map(|(i, _)| i)
+            .unwrap_or(mesh_bone_sets.len())
     } else {
         best_mesh
     }

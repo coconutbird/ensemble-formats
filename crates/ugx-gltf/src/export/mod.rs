@@ -332,9 +332,11 @@ pub fn export_to_gltf_with_buffer_name(
         // Create mesh nodes (after bone nodes).
         // Rigid sections get NO skin and are parented to their bone node.
         // Skinned sections get a skin reference and go at the scene root.
-        for (i, _mesh) in meshes.iter().enumerate() {
+        for (i, mesh) in meshes.iter().enumerate() {
             let info = section_export_infos.iter().find(|s| s.mesh_idx == i);
             let is_rigid = info.is_some_and(|s| s.rigid_parent_bone.is_some());
+
+            let node_name = mesh.name.clone().unwrap_or_else(|| format!("mesh_{}", i));
 
             nodes.push(json::Node {
                 camera: None,
@@ -343,7 +345,7 @@ pub fn export_to_gltf_with_buffer_name(
                 extras: json::Extras::default(),
                 matrix: None,
                 mesh: Some(json::Index::new(i as u32)),
-                name: Some(format!("mesh_{}", i)),
+                name: Some(node_name),
                 rotation: None,
                 scale: None,
                 translation: None,
@@ -364,7 +366,9 @@ pub fn export_to_gltf_with_buffer_name(
         }
     } else {
         // No skeleton - just create mesh nodes
-        for (i, _mesh) in meshes.iter().enumerate() {
+        for (i, mesh) in meshes.iter().enumerate() {
+            let node_name = mesh.name.clone().unwrap_or_else(|| format!("mesh_{}", i));
+
             nodes.push(json::Node {
                 camera: None,
                 children: None,
@@ -372,7 +376,7 @@ pub fn export_to_gltf_with_buffer_name(
                 extras: json::Extras::default(),
                 matrix: None,
                 mesh: Some(json::Index::new(i as u32)),
-                name: Some(format!("mesh_{}", i)),
+                name: Some(node_name),
                 rotation: None,
                 scale: None,
                 translation: None,
