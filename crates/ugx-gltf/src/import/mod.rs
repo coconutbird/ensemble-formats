@@ -339,8 +339,9 @@ pub fn import_from_gltf(
 
             // Pack vertices into binary buffer
             let vb_offset = all_vertex_buffer.len() as i32;
+            let pos_w = options.version.pos_w();
             for v in &final_vertices {
-                final_packer.pack_vertex(&mut all_vertex_buffer, v);
+                final_packer.pack_vertex(&mut all_vertex_buffer, v, pos_w);
             }
             let vb_bytes = (all_vertex_buffer.len() as i32) - vb_offset;
             let vert_size = final_packer.vertex_size() as i32;

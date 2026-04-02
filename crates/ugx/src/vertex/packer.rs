@@ -289,7 +289,10 @@ impl UnivertPacker {
     }
 
     /// Pack a single vertex into raw bytes (inverse of `unpack_vertex()`).
-    pub fn pack_vertex(&self, out: &mut Vec<u8>, vertex: &UnpackedVertex) {
+    ///
+    /// `pos_w` is the value written for the W component of the position
+    /// (HW1 originals use `0.0`, HW2 originals use `1.0`).
+    pub fn pack_vertex(&self, out: &mut Vec<u8>, vertex: &UnpackedVertex, pos_w: f32) {
         let mut chars = self.pack_order.chars().peekable();
 
         while let Some(c) = chars.next() {
@@ -299,7 +302,7 @@ impl UnivertPacker {
                         vertex.position[0],
                         vertex.position[1],
                         vertex.position[2],
-                        1.0,
+                        pos_w,
                     ];
                     self.pos_type.pack(out, v);
                 }

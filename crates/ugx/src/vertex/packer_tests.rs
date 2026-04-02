@@ -54,7 +54,7 @@ fn test_pack_unpack_vertex_roundtrip() {
     };
 
     let mut buf = Vec::new();
-    packer.pack_vertex(&mut buf, &original);
+    packer.pack_vertex(&mut buf, &original, 0.0);
     assert_eq!(buf.len(), packer.vertex_size());
 
     let mut pos = 0;
@@ -92,7 +92,7 @@ fn test_pack_unpack_vertex_with_skin_roundtrip() {
     };
 
     let mut buf = Vec::new();
-    packer.pack_vertex(&mut buf, &original);
+    packer.pack_vertex(&mut buf, &original, 0.0);
     assert_eq!(buf.len(), packer.vertex_size());
 
     let mut pos = 0;

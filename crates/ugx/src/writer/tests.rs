@@ -73,7 +73,7 @@ fn make_test_geom() -> UgxGeom {
 
     let mut vertex_buffer = Vec::new();
     for v in &vertices {
-        packer.pack_vertex(&mut vertex_buffer, v);
+        packer.pack_vertex(&mut vertex_buffer, v, 1.0);
     }
 
     let vert_size = packer.vertex_size() as i32;

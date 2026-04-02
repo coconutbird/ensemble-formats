@@ -92,4 +92,13 @@ impl UgxVersion {
             Self::Hw2 => VertexElementType::HalfFloat2,
         }
     }
+
+    /// Value to write for the W component of `HalfFloat4` positions.
+    /// HW1 originals use `0.0`; HW2 originals use `1.0`.
+    pub fn pos_w(self) -> f32 {
+        match self {
+            Self::Hw1 => 0.0,
+            Self::Hw2 => 1.0,
+        }
+    }
 }
