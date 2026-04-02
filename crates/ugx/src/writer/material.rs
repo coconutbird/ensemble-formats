@@ -52,7 +52,12 @@ fn build_material_node(mat: &Material) -> bdt::Node {
 
     match &mat.data {
         MaterialData::Hogan(hogan) => {
-            // HW2 Hogan format: <Material> with <HoganMaterial> child, no @Name/@Ver
+            // HW2 Hogan format: <Material> with <HoganMaterial> child.
+            // Some HW2 files carry @Name on the <Material> node — preserve it.
+            if !mat.name.is_empty() {
+                node.attributes
+                    .push(bdt::Attribute::with_string("Name", &mat.name));
+            }
             node.children.push(build_hogan_node(hogan));
         }
         MaterialData::Legacy(legacy) => {

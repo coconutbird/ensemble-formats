@@ -333,9 +333,7 @@ pub fn export_to_gltf_with_buffer_name(
         // Rigid sections get NO skin and are parented to their bone node.
         // Skinned sections get a skin reference and go at the scene root.
         for (i, _mesh) in meshes.iter().enumerate() {
-            let info = section_export_infos
-                .iter()
-                .find(|s| s.mesh_idx == i);
+            let info = section_export_infos.iter().find(|s| s.mesh_idx == i);
             let is_rigid = info.is_some_and(|s| s.rigid_parent_bone.is_some());
 
             nodes.push(json::Node {
@@ -360,9 +358,7 @@ pub fn export_to_gltf_with_buffer_name(
             if let Some(bone_idx) = info.rigid_parent_bone {
                 let mesh_node_idx = mesh_node_start + info.mesh_idx as u32;
                 let bone_node = &mut nodes[bone_idx];
-                let children = bone_node
-                    .children
-                    .get_or_insert_with(Vec::new);
+                let children = bone_node.children.get_or_insert_with(Vec::new);
                 children.push(json::Index::new(mesh_node_idx));
             }
         }
@@ -397,8 +393,7 @@ pub fn export_to_gltf_with_buffer_name(
         let mesh_node_start = bone_count as u32;
         for info in &section_export_infos {
             if info.rigid_parent_bone.is_none() {
-                scene_node_indices
-                    .push(json::Index::new(mesh_node_start + info.mesh_idx as u32));
+                scene_node_indices.push(json::Index::new(mesh_node_start + info.mesh_idx as u32));
             }
         }
     } else {
