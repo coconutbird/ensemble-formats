@@ -25,6 +25,9 @@ enum Commands {
         /// Input UGX file
         #[arg(short, long)]
         input: PathBuf,
+        /// Skip ECF checksum validation
+        #[arg(long)]
+        no_verify: bool,
     },
     /// Convert UGX to glTF format
     ToGltf {
@@ -40,6 +43,9 @@ enum Commands {
         /// Exclude skeleton/bones from the export
         #[arg(long)]
         no_skeleton: bool,
+        /// Skip ECF checksum validation
+        #[arg(long)]
+        no_verify: bool,
     },
     /// Convert glTF/GLB to UGX format
     FromGltf {
@@ -83,13 +89,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Info { input } => cmd_info(&input)?,
+        Commands::Info { input, no_verify } => cmd_info(&input, no_verify)?,
         Commands::ToGltf {
             input,
             output,
             external_buffer,
             no_skeleton,
-        } => cmd_to_gltf(&input, &output, external_buffer, no_skeleton)?,
+            no_verify,
+        } => cmd_to_gltf(&input, &output, external_buffer, no_skeleton, no_verify)?,
         Commands::FromGltf {
             input,
             output,
@@ -117,9 +124,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_info(input: &PathBuf, no_verify: bool) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
-    let geom = UgxReader::read(&data)?;
+    let geom = if no_verify {
+        ugx::UgxGeom::from_bytes_unchecked(&data)?
+    } else {
+        UgxReader::read(&data)?
+    };
 
     println!("UGX File: {}", input.display());
     println!();
@@ -310,9 +321,14 @@ fn cmd_to_gltf(
     output: &PathBuf,
     external_buffer: bool,
     no_skeleton: bool,
+    no_verify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
-    let geom = UgxReader::read(&data)?;
+    let geom = if no_verify {
+        ugx::UgxGeom::from_bytes_unchecked(&data)?
+    } else {
+        UgxReader::read(&data)?
+    };
 
     let options = GltfExportOptions {
         embed_buffers: !external_buffer,
