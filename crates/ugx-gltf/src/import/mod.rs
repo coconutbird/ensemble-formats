@@ -141,9 +141,7 @@ pub fn import_from_gltf(
                     if joint_node_set.contains(&parent_idx) {
                         // The parent node is a joint. Find which bone index it maps to.
                         root.skins.first().and_then(|skin| {
-                            skin.joints
-                                .iter()
-                                .position(|j| j.value() == parent_idx)
+                            skin.joints.iter().position(|j| j.value() == parent_idx)
                         })
                     } else {
                         None
@@ -152,11 +150,14 @@ pub fn import_from_gltf(
             } else {
                 None
             };
-            mesh_node_map.insert(mi, MeshNodeInfo {
-                node_idx,
-                has_skin,
-                parent_bone_idx: parent_bone,
-            });
+            mesh_node_map.insert(
+                mi,
+                MeshNodeInfo {
+                    node_idx,
+                    has_skin,
+                    parent_bone_idx: parent_bone,
+                },
+            );
         }
     }
 
@@ -198,15 +199,13 @@ pub fn import_from_gltf(
         // - Mesh node has no skin AND is parented to a bone node → rigid
         // - Mesh node has skin → skinned
         // - No node info (shouldn't happen) → fall back to heuristic
-        let struct_rigid_bone: Option<usize> = mesh_node_map
-            .get(&mesh_idx)
-            .and_then(|info| {
-                if !info.has_skin {
-                    info.parent_bone_idx
-                } else {
-                    None
-                }
-            });
+        let struct_rigid_bone: Option<usize> = mesh_node_map.get(&mesh_idx).and_then(|info| {
+            if !info.has_skin {
+                info.parent_bone_idx
+            } else {
+                None
+            }
+        });
 
         for primitive in &mesh.primitives {
             let (vertices, indices, material_index) =
@@ -256,7 +255,10 @@ pub fn import_from_gltf(
                 if let Some(bone_idx) = struct_rigid_bone {
                     // Structurally rigid: mesh is parented to a bone, no skin.
                     (true, true, bone_idx as i32, 1)
-                } else if mesh_node_map.get(&mesh_idx).is_some_and(|info| info.has_skin) {
+                } else if mesh_node_map
+                    .get(&mesh_idx)
+                    .is_some_and(|info| info.has_skin)
+                {
                     // Structurally skinned: mesh has a skin reference.
                     let max_inf = if has_skin {
                         vertices
