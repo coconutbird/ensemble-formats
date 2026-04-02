@@ -66,16 +66,29 @@ fn get_section_bone_names(
     granny_bones: &[GrannyBone],
 ) -> std::collections::HashSet<String> {
     let mut used_bones = std::collections::HashSet::new();
+    let section = &geom.sections[section_idx];
+    let has_remap = !section.bone_remap.is_empty();
 
     // Try to unpack vertices; if that fails, fall back to rigid_bone_index
     if let Ok(vertices) = geom.unpack_section_vertices(section_idx) {
         for v in &vertices {
             for k in 0..4 {
                 if v.bone_weights[k] > 0.0 {
-                    let bone_idx = v.bone_indices[k] as usize;
-                    if bone_idx > 0 && bone_idx <= granny_bones.len() {
-                        // bone_indices are 1-based
-                        used_bones.insert(granny_bones[bone_idx - 1].name.clone());
+                    let raw_idx = v.bone_indices[k] as usize;
+                    // Resolve to global 0-based bone index.
+                    let global_idx = if has_remap {
+                        // Section-local 0-based → remap to global 0-based.
+                        if raw_idx < section.bone_remap.len() {
+                            section.bone_remap[raw_idx] as usize
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        // Already 0-based global.
+                        raw_idx
+                    };
+                    if global_idx < granny_bones.len() {
+                        used_bones.insert(granny_bones[global_idx].name.clone());
                     }
                 }
             }

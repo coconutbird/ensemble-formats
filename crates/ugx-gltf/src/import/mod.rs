@@ -181,7 +181,7 @@ pub fn import_from_gltf(
                             vertices
                                 .iter()
                                 .find(|v| v.bone_weights[0] > 0.0)
-                                .map(|v| (v.bone_indices[0] as i32) - 1)
+                                .map(|v| v.bone_indices[0] as i32)
                                 .unwrap_or(0)
                         });
                         (gb, ro, bone_idx, 1)

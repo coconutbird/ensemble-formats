@@ -626,17 +626,17 @@ mod tests {
     }
 
     #[test]
-    fn test_joints_1based_to_0based() {
-        // UGX uses 1-based bone indices; glTF expects 0-based
+    fn test_joints_0based_passthrough() {
+        // UGX uses 0-based bone indices; glTF also uses 0-based — no conversion needed
         let mut verts = vec![vertex([0.0, 0.0, 0.0])];
-        verts[0].bone_indices = [3, 1, 0, 0]; // 1-based: bone 2, bone 0, none, none
+        verts[0].bone_indices = [3, 1, 0, 0]; // 0-based: bone 3, bone 1, pad, pad
         verts[0].bone_weights = [0.8, 0.2, 0.0, 0.0];
         let (prim, buf, accessors, views) = make_prim(&verts, true, 10, -1);
 
         let off = accessor_offset(&prim, &accessors, &views, json::mesh::Semantic::Joints(0));
         assert_eq!(
             [buf[off], buf[off + 1], buf[off + 2], buf[off + 3]],
-            [2, 0, 0, 0]
+            [3, 1, 0, 0]
         );
     }
 

@@ -266,8 +266,8 @@ pub(crate) fn create_primitive(
     // Bone index conventions in UGX vertex buffers:
     //   • bone_remap non-empty → indices are 0-based section-local;
     //     look up `bone_remap[local_idx]` to get the 0-based global index.
-    //   • bone_remap empty → indices are 1-based global (0 = no bone);
-    //     subtract 1 to get the 0-based global index for glTF.
+    //   • bone_remap empty → indices are already 0-based global;
+    //     use directly for glTF (which also uses 0-based joint indices).
     if has_skeleton && bone_count > 0 {
         let max_bone_idx = (bone_count - 1) as u16;
         let use_u16_joints = bone_count > 256;
@@ -303,12 +303,9 @@ pub(crate) fn create_primitive(
                         } else {
                             0
                         };
-                    } else {
-                        // Global 1-based index → 0-based for glTF.
-                        if *idx > 0 {
-                            *idx -= 1;
-                        }
                     }
+                    // When bone_remap is empty, indices are already 0-based
+                    // global — no adjustment needed.
                     if *idx > max_bone_idx {
                         *idx = 0;
                     }

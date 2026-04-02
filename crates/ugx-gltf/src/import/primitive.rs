@@ -131,30 +131,28 @@ pub(crate) fn import_primitive(
         }
 
         // Joints and weights
+        // glTF JOINTS_0 are 0-based, and UGX also uses 0-based global
+        // bone indices (both with bone_remap and without).
         if let (Some(j), Some(w)) = (&joints, &weights) {
             let mut bone_indices = [0u16; 4];
             let mut bone_weights = [0.0f32; 4];
 
             // First pass: find the first valid bone index for padding
-            let mut first_valid_bone: u16 = 1; // Default to bone 1 if no valid bones
+            let mut first_valid_bone: u16 = 0;
             for k in 0..4 {
                 if w[i * 4 + k] > 0.0 {
-                    let joint_0based = j[i * 4 + k] as u16;
-                    // Clamp to valid range and convert to 1-based
-                    first_valid_bone = (joint_0based.min(max_bone_idx) + 1).max(1);
+                    first_valid_bone = (j[i * 4 + k] as u16).min(max_bone_idx);
                     break;
                 }
             }
 
             // Second pass: set bone indices and weights
             for k in 0..4 {
-                let joint_0based = j[i * 4 + k] as u16;
+                let joint = (j[i * 4 + k] as u16).min(max_bone_idx);
                 bone_weights[k] = w[i * 4 + k];
 
                 if bone_weights[k] > 0.0 {
-                    // Convert 0-based glTF joint to 1-based UGX bone index
-                    // Clamp to valid range to prevent out-of-bounds
-                    bone_indices[k] = (joint_0based.min(max_bone_idx) + 1).max(1);
+                    bone_indices[k] = joint;
                 } else {
                     // Use first valid bone for padding (game expects valid indices)
                     bone_indices[k] = first_valid_bone;

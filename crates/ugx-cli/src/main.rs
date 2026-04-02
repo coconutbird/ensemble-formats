@@ -246,6 +246,15 @@ fn cmd_info(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             "       MaxBones={}, RigidBoneIdx={}, RigidOnly={}, GlobalBones={}",
             section.max_bones, section.rigid_bone_index, section.rigid_only, section.global_bones
         );
+        if !section.bone_remap.is_empty() {
+            println!(
+                "       BoneRemap[{}]: {:?}",
+                section.bone_remap.len(),
+                section.bone_remap
+            );
+        } else {
+            println!("       BoneRemap: (empty)");
+        }
         if let Some(ref packer) = section.base_vert_packer {
             println!("       PackOrder: {}", packer.pack_order);
             println!("       PosType: {:?}", packer.pos_type);
