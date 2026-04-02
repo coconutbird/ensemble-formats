@@ -15,25 +15,32 @@ pub(crate) struct MaterialExtrasJson {
     pub ugx_material_version: u32,
 
     // --- Legacy fields (present when material is Legacy) ---
-    #[serde(default)]
+    /// Material flags *without* TWO_SIDED (bit 2), which lives in glTF
+    /// `doubleSided`.  Only present when non-zero remaining bits exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_flags: Option<u32>,
-    #[serde(default)]
+    /// Raw blend type byte — only stored when ≥ 4 (no glTF equivalent).
+    /// Values 0–3 are reconstructed from `alphaMode` on import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_blend_type: Option<u8>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_spec_power: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_spec_color: Option<[f32; 3]>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_env_reflectivity: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_env_sharpness: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_env_fresnel: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_env_fresnel_power: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_accessory_index: Option<u32>,
-    #[serde(default)]
+    /// Raw opacity — only stored when OPACITY_VALID is *not* set (dead
+    /// data the engine ignores, needed for byte-exact round-trip).
+    /// When OPACITY_VALID is set, opacity lives in `baseColorFactor[3]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ugx_opacity: Option<f32>,
 
     /// UVW velocity per map type (only present if any non-zero).
