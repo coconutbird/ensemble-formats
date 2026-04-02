@@ -467,17 +467,27 @@ pub fn import_from_gltf(
     // bone bounds, accessories, metadata flags, and AABB tree.
     geom.rebuild_derived_data();
 
-    // When targeting HW2, ensure all materials are Hogan format.
-    // glTF files edited in third-party tools (Blender etc.) lose the
-    // ugx_hogan extras, so the importer produces Legacy materials.
-    // The engine requires Hogan shader permutations to render HW2 models.
-    if options.version == UgxVersion::Hw2
-        && geom
-            .materials
-            .iter()
-            .any(|m| matches!(&m.data, MaterialData::Legacy(_)))
-    {
-        geom.materials = convert_geom_materials(&geom, true);
+    // Ensure materials match the target version format:
+    // - HW2 needs Hogan materials (Legacy → Hogan conversion)
+    // - HW1 needs Legacy materials (Hogan → Legacy conversion)
+    match options.version {
+        UgxVersion::Hw2
+            if geom
+                .materials
+                .iter()
+                .any(|m| matches!(&m.data, MaterialData::Legacy(_))) =>
+        {
+            geom.materials = convert_geom_materials(&geom, true);
+        }
+        UgxVersion::Hw1
+            if geom
+                .materials
+                .iter()
+                .any(|m| matches!(&m.data, MaterialData::Hogan(_))) =>
+        {
+            geom.materials = convert_geom_materials(&geom, false);
+        }
+        _ => {}
     }
 
     Ok(geom)
