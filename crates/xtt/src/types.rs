@@ -255,6 +255,24 @@ pub struct FoliageQNChunk {
     pub index_buffers: Vec<Vec<u8>>,
 }
 
+impl FoliageQNChunk {
+    /// Decode raw index buffer bytes into `u16` indices for a given set.
+    ///
+    /// The raw bytes are big-endian u16 values (Xbox 360 authoring).
+    /// Returns `None` if `set` is out of range.
+    pub fn decode_indices(&self, set: usize) -> Option<Vec<u16>> {
+        let buf = self.index_buffers.get(set)?;
+        let count = buf.len() / 2;
+        let mut indices = Vec::with_capacity(count);
+        for i in 0..count {
+            let hi = buf[i * 2] as u16;
+            let lo = buf[i * 2 + 1] as u16;
+            indices.push((hi << 8) | lo);
+        }
+        Some(indices)
+    }
+}
+
 /// Foliage data.
 #[derive(Debug, Clone, Default)]
 pub struct XttFoliage {
@@ -309,6 +327,42 @@ impl Default for XttFile {
             road_data: Vec::new(),
             foliage: XttFoliage::default(),
         }
+    }
+}
+
+impl XttFile {
+    /// Resolve a splat layer ID from a linker to its [`ActiveTextureInfo`].
+    ///
+    /// `layer_id` is an entry from [`XttLinker::splat_layer_ids`] which indexes
+    /// into [`XttFile::active_textures`].
+    pub fn resolve_splat_texture(&self, layer_id: i32) -> Option<&ActiveTextureInfo> {
+        if layer_id < 0 {
+            return None;
+        }
+        self.active_textures.get(layer_id as usize)
+    }
+
+    /// Resolve a decal layer ID from a linker to its [`ActiveDecalInstance`].
+    ///
+    /// `layer_id` is an entry from [`XttLinker::decal_layer_ids`] which indexes
+    /// into [`XttFile::decal_instances`].
+    pub fn resolve_decal_instance(&self, layer_id: i32) -> Option<&ActiveDecalInstance> {
+        if layer_id < 0 {
+            return None;
+        }
+        self.decal_instances.get(layer_id as usize)
+    }
+
+    /// Resolve a decal layer ID all the way to its [`ActiveDecalInfo`] (texture filename).
+    ///
+    /// Follows the chain: `decal_layer_ids[i]` → `decal_instances[idx]` →
+    /// `active_decals[active_decal_index]`.
+    pub fn resolve_decal_info(&self, layer_id: i32) -> Option<&ActiveDecalInfo> {
+        let instance = self.resolve_decal_instance(layer_id)?;
+        if instance.active_decal_index < 0 {
+            return None;
+        }
+        self.active_decals.get(instance.active_decal_index as usize)
     }
 }
 
