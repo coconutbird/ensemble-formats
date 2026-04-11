@@ -935,10 +935,11 @@ impl XtdFile {
             self.lighting_data[4..].to_vec()
         };
 
-        // Full resolution: num_x_verts × num_x_verts
-        let dim = self.header.num_x_verts as usize;
-        let width = dim;
-        let height = dim;
+        // Width is always num_x_verts; height is derived from actual data length.
+        // Some maps store lighting at half height (num_x_verts × num_x_verts/2),
+        // others at full resolution (num_x_verts × num_x_verts).
+        let width = self.header.num_x_verts as usize;
+        let height = texels.len().checked_div(width).unwrap_or(0);
 
         Ok(LightingData {
             values: texels,
@@ -955,6 +956,6 @@ pub struct LightingData {
     pub values: Vec<u8>,
     /// Texture width (== `num_x_verts`).
     pub width: usize,
-    /// Texture height (== `num_x_verts`).
+    /// Texture height (derived from data length; may be `num_x_verts` or `num_x_verts / 2`).
     pub height: usize,
 }
