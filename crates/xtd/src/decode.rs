@@ -880,13 +880,16 @@ impl XtdFile {
             }
         }
 
-        // Use decompressed bytes directly as R8 values
-        let mut values = decompressed;
-        if values.len() < expected_size {
-            values.resize(expected_size, 255);
-        } else if values.len() > expected_size {
-            values.truncate(expected_size);
+        // Resize to expected size
+        let mut tiled_data = decompressed;
+        if tiled_data.len() < expected_size {
+            tiled_data.resize(expected_size, 255);
+        } else if tiled_data.len() > expected_size {
+            tiled_data.truncate(expected_size);
         }
+
+        // Xbox 360 R8 textures are stored in tiled format (same as AO)
+        let values = untile_r8_texture(&tiled_data, width, height);
 
         Ok(AlphaData {
             values,
@@ -894,4 +897,65 @@ impl XtdFile {
             height,
         })
     }
+
+    /// Decode lighting data from the Lighting chunk (0xBBBB).
+    ///
+    /// The lighting chunk stores a size-prefixed raw L8 (R8) texture at
+    /// **full resolution** (`num_x_verts × num_x_verts`).
+    ///
+    /// Unlike AO/Alpha, the binary does **not** run `decompressToPhysical` on
+    /// this data — it is passed directly to `BTerrainVisual::initLightingData`
+    /// which creates a D3DFMT_L8 texture.
+    ///
+    /// The first 4 bytes are a big-endian i32 size, followed by the raw texels.
+    pub fn decode_lighting(&self) -> Result<LightingData> {
+        if self.lighting_data.is_empty() {
+            return Err(Error::InvalidChunkData(
+                "Lighting chunk is empty".to_string(),
+            ));
+        }
+
+        if self.lighting_data.len() < 4 {
+            return Err(Error::InvalidChunkData(
+                "Lighting chunk too short for size prefix".to_string(),
+            ));
+        }
+
+        // Read big-endian i32 size prefix
+        let size = i32::from_be_bytes(
+            self.lighting_data[0..4]
+                .try_into()
+                .map_err(|_| Error::InvalidChunkData("Bad lighting size".to_string()))?,
+        ) as usize;
+
+        let texels = if size > 0 && self.lighting_data.len() >= 4 + size {
+            self.lighting_data[4..4 + size].to_vec()
+        } else {
+            // Fall back to everything after the size prefix
+            self.lighting_data[4..].to_vec()
+        };
+
+        // Width is always num_x_verts; height is derived from actual data length.
+        // Some maps store lighting at half height (num_x_verts × num_x_verts/2),
+        // others at full resolution (num_x_verts × num_x_verts).
+        let width = self.header.num_x_verts as usize;
+        let height = texels.len().checked_div(width).unwrap_or(0);
+
+        Ok(LightingData {
+            values: texels,
+            width,
+            height,
+        })
+    }
+}
+
+/// Decoded lighting data (L8/R8 texture).
+#[derive(Debug, Clone)]
+pub struct LightingData {
+    /// Raw L8 luminance values.
+    pub values: Vec<u8>,
+    /// Texture width (== `num_x_verts`).
+    pub width: usize,
+    /// Texture height (derived from data length; may be `num_x_verts` or `num_x_verts / 2`).
+    pub height: usize,
 }

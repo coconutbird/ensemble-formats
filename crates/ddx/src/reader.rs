@@ -134,7 +134,7 @@ impl DdxTexture {
                 77 | 78 => DataFormat::Dxt5, // BC3
                 80 | 81 => DataFormat::A8,   // BC4
                 83 | 84 => DataFormat::Dxn,  // BC5
-                98 | 99 => DataFormat::Dxt5, // BC7
+                98 | 99 => DataFormat::Bc7,  // BC7 UNORM / UNORM_SRGB
                 28 => DataFormat::A8R8G8B8,  // R8G8B8A8_UNORM
                 87 => DataFormat::A8R8G8B8,  // B8G8R8A8_UNORM
                 _ => {
@@ -146,7 +146,7 @@ impl DdxTexture {
             };
             let has_alpha = matches!(
                 format,
-                DataFormat::Dxt3 | DataFormat::Dxt5 | DataFormat::A8R8G8B8
+                DataFormat::Dxt3 | DataFormat::Dxt5 | DataFormat::Bc7 | DataFormat::A8R8G8B8
             );
             (format, 4 + 124 + 20, has_alpha)
         } else if pf_flags & 0x4 != 0 {

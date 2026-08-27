@@ -30,8 +30,8 @@ pub use writer::Writer;
 
 mod decode;
 pub use decode::{
-    AlphaData, AmbientOcclusionData, AtlasHeader, RawTerrainData, TerrainVertices, TessellatedMesh,
-    unpack_normal, unpack_position,
+    AlphaData, AmbientOcclusionData, AtlasHeader, LightingData, RawTerrainData, TerrainVertices,
+    TessellatedMesh, unpack_normal, unpack_position,
 };
 
 // ============================================================================
@@ -327,5 +327,291 @@ mod tests {
                 tessellated.positions.len()
             );
         }
+    }
+
+    /// Build a minimal but complete XtdFile for round-trip testing.
+    fn make_test_xtd() -> XtdFile {
+        let header = XtdHeader {
+            version: XTD_VERSION,
+            num_x_verts: 65,
+            num_x_chunks: 4,
+            tile_scale: 2.0,
+            world_min: [-128.0, -10.0, -128.0],
+            world_max: [128.0, 50.0, 128.0],
+        };
+
+        let chunks = alloc::vec![
+            XtdVisualChunk {
+                grid_x: 0,
+                grid_z: 0,
+                max_v_stride: 17,
+                min: [-128.0, -10.0, -128.0],
+                max: [-64.0, 50.0, -64.0],
+                can_cast_shadows: true,
+            },
+            XtdVisualChunk {
+                grid_x: 1,
+                grid_z: 0,
+                max_v_stride: 17,
+                min: [-64.0, -5.0, -128.0],
+                max: [0.0, 30.0, -64.0],
+                can_cast_shadows: false,
+            },
+        ];
+
+        // Fake atlas data (32-byte header + some packed vertices)
+        let atlas_data = alloc::vec![0xAA; 64];
+        // Fake tessellation data: 2 i32 BE (numX=2, numZ=2) + 4 tess levels + 4*32 bboxes
+        let mut tess_data = Vec::new();
+        tess_data.extend_from_slice(&2i32.to_be_bytes());
+        tess_data.extend_from_slice(&2i32.to_be_bytes());
+        tess_data.extend_from_slice(&[3, 5, 7, 2]); // patch tess levels
+        // 4 bounding boxes, 32 bytes each
+        for i in 0..4u8 {
+            for _ in 0..8 {
+                tess_data.extend_from_slice(&(i as f32).to_be_bytes());
+            }
+        }
+        let lighting_data = alloc::vec![0xBB; 128];
+        let ao_data = alloc::vec![0xCC; 256];
+        let alpha_data = alloc::vec![0xDD; 256];
+
+        // Build chunk_order matching the standard layout
+        let chunk_order = alloc::vec![
+            ChunkMeta {
+                id: CHUNK_XTD_HEADER,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+            ChunkMeta {
+                id: CHUNK_TERRAIN,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+            ChunkMeta {
+                id: CHUNK_TERRAIN,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+            ChunkMeta {
+                id: CHUNK_ATLAS,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+            ChunkMeta {
+                id: CHUNK_TESS,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+            ChunkMeta {
+                id: CHUNK_LIGHTING,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+            ChunkMeta {
+                id: CHUNK_AO,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+            ChunkMeta {
+                id: CHUNK_ALPHA,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0
+            },
+        ];
+
+        XtdFile {
+            ecf_file_id: 0x00077826,
+            ecf_flags: 0,
+            chunk_order,
+            header,
+            visual_chunks: chunks,
+            atlas_data,
+            tess_data,
+            lighting_data,
+            ao_data,
+            alpha_data,
+        }
+    }
+
+    #[test]
+    fn roundtrip_header_fields() {
+        let original = make_test_xtd();
+        let bytes = Writer::write(&original).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert_eq!(read.header.version, original.header.version);
+        assert_eq!(read.header.num_x_verts, original.header.num_x_verts);
+        assert_eq!(read.header.num_x_chunks, original.header.num_x_chunks);
+        assert_eq!(read.header.tile_scale, original.header.tile_scale);
+        assert_eq!(read.header.world_min, original.header.world_min);
+        assert_eq!(read.header.world_max, original.header.world_max);
+    }
+
+    #[test]
+    fn roundtrip_visual_chunks() {
+        let original = make_test_xtd();
+        let bytes = Writer::write(&original).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert_eq!(read.visual_chunks.len(), original.visual_chunks.len());
+        for (r, o) in read.visual_chunks.iter().zip(&original.visual_chunks) {
+            assert_eq!(r.grid_x, o.grid_x);
+            assert_eq!(r.grid_z, o.grid_z);
+            assert_eq!(r.max_v_stride, o.max_v_stride);
+            assert_eq!(r.min, o.min);
+            assert_eq!(r.max, o.max);
+            assert_eq!(r.can_cast_shadows, o.can_cast_shadows);
+        }
+    }
+
+    #[test]
+    fn roundtrip_raw_data_chunks() {
+        let original = make_test_xtd();
+        let bytes = Writer::write(&original).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert_eq!(read.atlas_data, original.atlas_data, "atlas mismatch");
+        assert_eq!(read.tess_data, original.tess_data, "tess mismatch");
+        assert_eq!(
+            read.lighting_data, original.lighting_data,
+            "lighting mismatch"
+        );
+        assert_eq!(read.ao_data, original.ao_data, "ao mismatch");
+        assert_eq!(read.alpha_data, original.alpha_data, "alpha mismatch");
+    }
+
+    #[test]
+    fn roundtrip_chunk_order() {
+        let original = make_test_xtd();
+        let bytes = Writer::write(&original).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert_eq!(read.chunk_order.len(), original.chunk_order.len());
+        for (r, o) in read.chunk_order.iter().zip(&original.chunk_order) {
+            assert_eq!(r.id, o.id, "chunk id mismatch");
+            assert_eq!(
+                r.alignment_log2, o.alignment_log2,
+                "alignment mismatch for chunk {:#X}",
+                o.id
+            );
+        }
+    }
+
+    #[test]
+    fn roundtrip_ecf_file_id() {
+        let original = make_test_xtd();
+        let bytes = Writer::write(&original).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert_eq!(read.ecf_file_id, original.ecf_file_id);
+    }
+
+    #[test]
+    fn double_roundtrip_identical_bytes() {
+        let original = make_test_xtd();
+        let bytes1 = Writer::write(&original).expect("write 1 failed");
+        let read1 = Reader::read(&bytes1).expect("read 1 failed");
+        let bytes2 = Writer::write(&read1).expect("write 2 failed");
+
+        assert_eq!(
+            bytes1,
+            bytes2,
+            "second write produced different bytes (len {} vs {})",
+            bytes1.len(),
+            bytes2.len()
+        );
+    }
+
+    #[test]
+    fn roundtrip_shadow_bool_values() {
+        // Specifically test both true and false for can_cast_shadows
+        let mut file = make_test_xtd();
+        file.visual_chunks[0].can_cast_shadows = true;
+        file.visual_chunks[1].can_cast_shadows = false;
+
+        let bytes = Writer::write(&file).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert!(read.visual_chunks[0].can_cast_shadows);
+        assert!(!read.visual_chunks[1].can_cast_shadows);
+    }
+
+    #[test]
+    fn roundtrip_negative_coords() {
+        let mut file = make_test_xtd();
+        file.header.world_min = [-999.5, -0.001, -12345.0];
+        file.header.world_max = [999.5, 0.001, 12345.0];
+        file.visual_chunks[0].min = [-999.5, -0.001, -12345.0];
+        file.visual_chunks[0].max = [0.0, 0.0, 0.0];
+
+        let bytes = Writer::write(&file).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert_eq!(read.header.world_min, file.header.world_min);
+        assert_eq!(read.header.world_max, file.header.world_max);
+        assert_eq!(read.visual_chunks[0].min, file.visual_chunks[0].min);
+        assert_eq!(read.visual_chunks[0].max, file.visual_chunks[0].max);
+    }
+
+    #[test]
+    fn roundtrip_tessellation_decode() {
+        let original = make_test_xtd();
+        let bytes = Writer::write(&original).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        let tess_orig = original
+            .decode_tessellation()
+            .expect("original tess decode failed");
+        let tess_read = read
+            .decode_tessellation()
+            .expect("roundtrip tess decode failed");
+
+        assert_eq!(tess_read.num_x_patches, tess_orig.num_x_patches);
+        assert_eq!(tess_read.num_z_patches, tess_orig.num_z_patches);
+        assert_eq!(tess_read.max_tess_level, tess_orig.max_tess_level);
+        assert_eq!(tess_read.patch_tess_levels, tess_orig.patch_tess_levels);
+        assert_eq!(
+            tess_read.patch_bounding_boxes.len(),
+            tess_orig.patch_bounding_boxes.len()
+        );
+        for (r, o) in tess_read
+            .patch_bounding_boxes
+            .iter()
+            .zip(&tess_orig.patch_bounding_boxes)
+        {
+            assert_eq!(r.min, o.min);
+            assert_eq!(r.max, o.max);
+        }
+    }
+
+    #[test]
+    fn roundtrip_empty_optional_data() {
+        let mut file = make_test_xtd();
+        // Clear optional data blobs
+        file.ao_data.clear();
+        file.alpha_data.clear();
+        file.lighting_data.clear();
+        // Remove their chunk_order entries too
+        file.chunk_order
+            .retain(|m| m.id != CHUNK_AO && m.id != CHUNK_ALPHA && m.id != CHUNK_LIGHTING);
+
+        let bytes = Writer::write(&file).expect("write failed");
+        let read = Reader::read(&bytes).expect("read failed");
+
+        assert!(read.ao_data.is_empty());
+        assert!(read.alpha_data.is_empty());
+        assert!(read.lighting_data.is_empty());
+        // Header and visual chunks should still survive
+        assert_eq!(read.header.version, XTD_VERSION);
+        assert_eq!(read.visual_chunks.len(), 2);
     }
 }

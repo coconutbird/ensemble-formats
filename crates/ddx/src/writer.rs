@@ -102,6 +102,16 @@ impl DdxTexture {
         out.write_u32_le(0).unwrap(); // dwCaps4
         out.write_u32_le(0).unwrap(); // dwReserved2
 
+        if self.info.data_format == DataFormat::Bc7 {
+            // DDS_HEADER_DXT10. DDX doesn't preserve the sRGB variant, so
+            // serialize as BC7_UNORM and let the consumer choose color space.
+            out.write_u32_le(98).unwrap(); // dxgiFormat = BC7_UNORM
+            out.write_u32_le(3).unwrap(); // resourceDimension = TEXTURE2D
+            out.write_u32_le(0).unwrap(); // miscFlag
+            out.write_u32_le(1).unwrap(); // arraySize
+            out.write_u32_le(0).unwrap(); // miscFlags2
+        }
+
         // Texture data
         out.extend_from_slice(&self.data);
 
@@ -147,6 +157,11 @@ fn write_pixel_format(out: &mut Vec<u8>, info: &TextureInfo) -> Result<()> {
         DataFormat::Dxn => {
             out.write_u32_le(DDPF_FOURCC).unwrap();
             out.extend_from_slice(b"ATI2");
+            out.extend_from_slice(&[0u8; 20]);
+        }
+        DataFormat::Bc7 => {
+            out.write_u32_le(DDPF_FOURCC).unwrap();
+            out.extend_from_slice(b"DX10");
             out.extend_from_slice(&[0u8; 20]);
         }
         _ => {

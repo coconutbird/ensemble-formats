@@ -37,6 +37,8 @@ pub enum DataFormat {
     DxnQ = 17,
     /// Custom quantized DXT5Y
     Dxt5YQ = 18,
+    /// BC7 (DDS/DX10 only; not a legacy DDX header value).
+    Bc7 = 19,
 }
 
 impl DataFormat {
@@ -80,6 +82,7 @@ impl DataFormat {
                 | Self::Dxt5HQ
                 | Self::DxnQ
                 | Self::Dxt5YQ
+                | Self::Bc7
         )
     }
 
@@ -101,6 +104,7 @@ impl DataFormat {
             | Self::Dxt5N
             | Self::Dxt5H
             | Self::Dxn
+            | Self::Bc7
             | Self::Dxt5Q
             | Self::Dxt5HQ
             | Self::Dxt5YQ
@@ -116,7 +120,13 @@ impl DataFormat {
             Self::A8R8G8B8 | Self::A8B8G8R8 => 32,
             Self::A8 => 8,
             Self::Dxt1 => 4,
-            Self::Dxt3 | Self::Dxt5 | Self::Dxt5Y | Self::Dxt5N | Self::Dxt5H | Self::Dxn => 8,
+            Self::Dxt3
+            | Self::Dxt5
+            | Self::Dxt5Y
+            | Self::Dxt5N
+            | Self::Dxt5H
+            | Self::Dxn
+            | Self::Bc7 => 8,
             _ => 0,
         }
     }
@@ -133,6 +143,7 @@ impl DataFormat {
                 | Self::Dxt5
                 | Self::Dxt5Q
                 | Self::Dxt5YQ
+                | Self::Bc7
         )
     }
 

@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 
 use zerocopy::Ref;
 
+use crate::types::RoadData;
 use crate::{AlbedoHeaderRaw, Error, Result, XttFile, XttLinker};
 
 /// Decoded albedo atlas information.
@@ -107,6 +108,17 @@ impl XttFile {
             num_mips: header.num_mips as u32,
             pixels,
         })
+    }
+
+    /// Decode road data from the raw road chunk (0x8888).
+    ///
+    /// Convenience method that delegates to [`decode_road_data`].
+    /// Returns `None` if no road data is present.
+    pub fn decode_road(&self) -> Result<Option<RoadData>> {
+        if self.road_data.is_empty() {
+            return Ok(None);
+        }
+        decode_road_data(&self.road_data).map(Some)
     }
 }
 
@@ -403,7 +415,7 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
 
 use alloc::string::String;
 
-use crate::types::{RoadData, RoadQNChunk, RoadVertex};
+use crate::types::{RoadQNChunk, RoadVertex};
 use half::f16;
 
 /// Helper: read a big-endian i32 from a slice at the given offset.
