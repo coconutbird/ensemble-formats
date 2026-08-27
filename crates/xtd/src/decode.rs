@@ -171,45 +171,65 @@ impl AtlasHeader {
 
 /// Unpack a 32-bit R10G10B10A2 packed position into a displacement vector.
 ///
-/// DE/PC data format (DXGI_FORMAT_R10G10B10A2_UNORM):
-/// - R: bits 0-9   (10 bits) → X displacement
+/// DE/PC data format (DXGI_FORMAT_R10G10B10A2_UNORM), consumed as `.zyx` by
+/// the PC terrain shaders:
+/// - R: bits 0-9   (10 bits) → Z displacement
 /// - G: bits 10-19 (10 bits) → Y displacement (height)
-/// - B: bits 20-29 (10 bits) → Z displacement
+/// - B: bits 20-29 (10 bits) → X displacement
 /// - A: bits 30-31 (2 bits)  → unused
 ///
 /// Data is stored as LittleEndian in the DE PC files.
 ///
 /// The unpacked value represents a displacement from the base grid position.
-/// Formula: displacement = (bits / 1023) * range - mid
+/// Formula: `displacement = (sample.zyx - [0, 1/2048, 0]) * range - mid`.
+/// The normalized Y bias is the exact `g_yOffset` default in the PC terrain
+/// vertex and domain shaders.
 #[inline]
 pub fn unpack_position(packed: u32, mid: &[f32; 3], range: &[f32; 3]) -> [f32; 3] {
     const BIT_MAX_10: f32 = 1023.0;
+    const NORMALIZED_Y_OFFSET: f32 = 1.0 / 2048.0;
 
-    // Extract 10-bit components - PC R10G10B10A2 format
-    // R = bits 0-9 (X), G = bits 10-19 (Y), B = bits 20-29 (Z)
-    let x_bits = (packed & 0x3FF) as f32;
+    // The texture's R/G/B components occupy low/middle/high bits. The shader's
+    // `.zyx` swizzle makes the high component world X and the low component Z.
+    let z_bits = (packed & 0x3FF) as f32;
     let y_bits = ((packed >> 10) & 0x3FF) as f32;
-    let z_bits = ((packed >> 20) & 0x3FF) as f32;
+    let x_bits = ((packed >> 20) & 0x3FF) as f32;
 
     // Convert to normalized [0, 1] range, then apply range and offset
     [
         (x_bits / BIT_MAX_10) * range[0] - mid[0],
-        (y_bits / BIT_MAX_10) * range[1] - mid[1],
+        (y_bits / BIT_MAX_10 - NORMALIZED_Y_OFFSET) * range[1] - mid[1],
         (z_bits / BIT_MAX_10) * range[2] - mid[2],
     ]
 }
 
+#[cfg(test)]
+mod position_tests {
+    use super::unpack_position;
+
+    #[test]
+    fn packed_position_matches_pc_shader_swizzle_and_y_bias() {
+        let packed = (1023_u32 << 20) | (512_u32 << 10) | 1_u32;
+        let decoded = unpack_position(packed, &[0.0; 3], &[10.0, 20.0, 30.0]);
+        let expected_y = (512.0 / 1023.0 - 1.0 / 2048.0) * 20.0;
+
+        assert_eq!(decoded[0], 10.0);
+        assert!((decoded[1] - expected_y).abs() < f32::EPSILON * 16.0);
+        assert!((decoded[2] - 30.0 / 1023.0).abs() < f32::EPSILON * 16.0);
+    }
+}
+
 /// Unpack a 32-bit packed normal value.
 ///
-/// Normals are packed as: ((norm + 1) * 0.5) * 1023
-/// So unpacking is: (bits / 1023) * 2 - 1
+/// The PC basis texture uses `DXGI_FORMAT_R10G10B10A2_UNORM`, and the terrain
+/// shaders consume it as `.zyx * 2 - 1`. Consequently the high ten bits are
+/// world X, the middle ten bits are world Y, and the low ten bits are world Z.
 #[inline]
 pub fn unpack_normal(packed: u32) -> [f32; 3] {
     const BIT_MAX_10: f32 = 1023.0;
 
-    // All three use 10-bit values (0-1023)
-    let x_bits = ((packed >> 22) & 0x3FF) as f32;
-    let y_bits = ((packed >> 11) & 0x3FF) as f32;
+    let x_bits = ((packed >> 20) & 0x3FF) as f32;
+    let y_bits = ((packed >> 10) & 0x3FF) as f32;
     let z_bits = (packed & 0x3FF) as f32;
 
     [
@@ -217,6 +237,21 @@ pub fn unpack_normal(packed: u32) -> [f32; 3] {
         (y_bits / BIT_MAX_10) * 2.0 - 1.0,
         (z_bits / BIT_MAX_10) * 2.0 - 1.0,
     ]
+}
+
+#[cfg(test)]
+mod normal_tests {
+    use super::unpack_normal;
+
+    #[test]
+    fn packed_normal_matches_pc_shader_swizzle() {
+        let packed = (1023_u32 << 20) | (512_u32 << 10);
+        let decoded = unpack_normal(packed);
+
+        assert_eq!(decoded[0], 1.0);
+        assert!((decoded[1] - (512.0 / 1023.0 * 2.0 - 1.0)).abs() < f32::EPSILON * 4.0);
+        assert_eq!(decoded[2], -1.0);
+    }
 }
 
 /// Decoded terrain vertex data.
@@ -373,38 +408,45 @@ impl XtdFile {
         let mut uvs = Vec::with_capacity(num_verts);
         let width_f = (width - 1) as f32;
 
-        for i in 0..num_verts {
-            // Standard grid mapping: row-major order
-            // i % width = column = X position
-            // i / width = row = Z position
-            let grid_x = (i % width) as f32;
-            let grid_z = (i / width) as f32;
+        for world_z_index in 0..width {
+            for world_x_index in 0..width {
+                // The XTD source axes are diagonally mirrored relative to the
+                // XTT material world: viewer (x, z) is source (z, x). The PC
+                // byte stream stores source (x, z) at x * width + z, so this
+                // conversion reads source (world_z, world_x).
+                let source_index = world_z_index * width + world_x_index;
+                let world_x = world_x_index as f32;
+                let world_z = world_z_index as f32;
 
-            // The packed data contains position data that needs to be combined with grid position.
-            // X/Z: grid position provides the base, packed data adds displacement
-            // Y: comes entirely from the packed data (height)
-            let unpacked = unpack_position(packed_positions[i], &header.mid, &header.range);
+                // The packed data contains position data that needs to be combined with grid position.
+                // X/Z: grid position provides the base, packed data adds displacement
+                // Y: comes entirely from the packed data (height)
+                let unpacked =
+                    unpack_position(packed_positions[source_index], &header.mid, &header.range);
 
-            // Use grid position for X/Z base, unpacked Y for height
-            // The unpacked X/Z may be small displacements (detail offsets)
-            positions.push([
-                grid_x * tile_scale + unpacked[0],
-                unpacked[1],
-                grid_z * tile_scale + unpacked[2],
-            ]);
+                // Mirror the complete position, including the packed X/Z
+                // displacement. Moving only the height texel applies lateral
+                // displacement in the wrong orientation and can fold terrain.
+                positions.push([
+                    world_x * tile_scale + unpacked[2],
+                    unpacked[1],
+                    world_z * tile_scale + unpacked[0],
+                ]);
 
-            normals.push(unpack_normal(packed_normals[i]));
+                let source_normal = unpack_normal(packed_normals[source_index]);
+                normals.push([source_normal[2], source_normal[1], source_normal[0]]);
 
-            // UV coordinates: Z→U, X→V (matching the game's convention).
-            //
-            // The original Halo Wars shaders consistently use world Z for the U axis
-            // and world X for the V axis (e.g. the roads shader samples `gPos.zx`).
-            // All terrain textures — splat alpha, albedo, AO — are authored for this
-            // convention, so we adopt it here at the source rather than compensating
-            // with rotation/transpose hacks downstream.
-            let u = grid_z / width_f;
-            let v = grid_x / width_f;
-            uvs.push([u, v]);
+                // UV coordinates: Z→U, X→V (matching the game's convention).
+                //
+                // The original Halo Wars shaders consistently use world Z for the U axis
+                // and world X for the V axis (e.g. the roads shader samples `gPos.zx`).
+                // All terrain textures — splat alpha, albedo, AO — are authored for this
+                // convention, so we adopt it here at the source rather than compensating
+                // with rotation/transpose hacks downstream.
+                let u = world_z / width_f;
+                let v = world_x / width_f;
+                uvs.push([u, v]);
+            }
         }
 
         Ok(TerrainVertices {

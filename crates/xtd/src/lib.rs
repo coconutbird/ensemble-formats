@@ -213,6 +213,32 @@ mod tests {
             vertices.num_verts_per_axis * vertices.num_verts_per_axis
         );
 
+        // A non-diagonal source patch independently verifies the atlas layout,
+        // the `.zyx` position swizzle, and the complete source-to-world X/Z
+        // conversion. Source patch (1, 0) becomes viewer patch (0, 1).
+        let tessellation = file
+            .decode_tessellation()
+            .expect("Failed to decode tessellation");
+        let bbox = tessellation
+            .get_patch_bbox(1, 0)
+            .expect("Missing source patch bounding box");
+        let mut decoded_min = [f32::INFINITY; 3];
+        let mut decoded_max = [f32::NEG_INFINITY; 3];
+        for z in 16..=32 {
+            for x in 0..=16 {
+                let position = vertices.positions[z * vertices.num_verts_per_axis + x];
+                for axis in 0..3 {
+                    decoded_min[axis] = decoded_min[axis].min(position[axis]);
+                    decoded_max[axis] = decoded_max[axis].max(position[axis]);
+                }
+            }
+        }
+        let source_axis_for_world = [2, 1, 0];
+        for (world_axis, &source_axis) in source_axis_for_world.iter().enumerate() {
+            assert!((decoded_min[world_axis] - bbox.min[source_axis]).abs() < 0.5);
+            assert!((decoded_max[world_axis] - bbox.max[source_axis]).abs() < 0.5);
+        }
+
         // Check normals are normalized (approximately)
         for (i, norm) in vertices.normals.iter().take(100).enumerate() {
             let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();

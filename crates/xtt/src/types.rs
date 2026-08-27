@@ -256,20 +256,44 @@ pub struct FoliageQNChunk {
 }
 
 impl FoliageQNChunk {
-    /// Decode raw index buffer bytes into `u16` indices for a given set.
+    /// Decode raw index buffer bytes into the packed `u32` vertex IDs consumed
+    /// by the PC foliage shader.
     ///
-    /// The raw bytes are big-endian u16 values (Xbox 360 authoring).
+    /// Each big-endian word stores the blade geometry type in its upper 16 bits
+    /// and `local_blade_index * 10 + vertex_in_blade` in its lower 16 bits.
+    /// `0x0000_FFFF` is the triangle-strip restart value.
     /// Returns `None` if `set` is out of range.
-    pub fn decode_indices(&self, set: usize) -> Option<Vec<u16>> {
+    pub fn decode_indices(&self, set: usize) -> Option<Vec<u32>> {
         let buf = self.index_buffers.get(set)?;
-        let count = buf.len() / 2;
+        let count = buf.len() / 4;
         let mut indices = Vec::with_capacity(count);
-        for i in 0..count {
-            let hi = buf[i * 2] as u16;
-            let lo = buf[i * 2 + 1] as u16;
-            indices.push((hi << 8) | lo);
+        let (words, _) = buf.as_chunks::<4>();
+        for &bytes in words {
+            indices.push(u32::from_be_bytes(bytes));
         }
         Some(indices)
+    }
+}
+
+#[cfg(test)]
+mod foliage_index_tests {
+    use super::FoliageQNChunk;
+    use alloc::vec;
+
+    #[test]
+    fn decodes_pc_foliage_indices_as_big_endian_words() {
+        let chunk = FoliageQNChunk {
+            qn_parent_index: 0,
+            num_sets: 1,
+            set_indices: vec![0],
+            set_poly_counts: vec![1],
+            index_buffers: vec![vec![0x00, 0x03, 0x88, 0xEA, 0x00, 0x00, 0xFF, 0xFF]],
+        };
+
+        assert_eq!(
+            chunk.decode_indices(0),
+            Some(vec![0x0003_88EA, 0x0000_FFFF])
+        );
     }
 }
 
