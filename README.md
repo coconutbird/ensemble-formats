@@ -34,7 +34,7 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 | Format  | Extension | ECF File ID  | Description                                                                                           | Status                    |
 | ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------------- |
 | **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented            |
-| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ⚠️ Untested (see below)  |
+| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ HW1 DE validated       |
 | **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented            |
 | **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ⚠️ Untested (see below)  |
 | **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented            |
@@ -60,7 +60,7 @@ Most game data files are XML stored as XMB with specific schemas:
 
 ### HW2 Compatibility Notes
 
-The **UAX** and **XTD** crates have been implemented but never tested against real game data from either Halo Wars 1 or Halo Wars 2. They may not work correctly and should be considered experimental.
+The **UAX** crate has been checked against the Halo Wars DE loader in IDA and exhaustively tested against all 2,301 UAX files in a complete HW1 DE installation. HW2 UAX data has not yet received the same corpus-level verification. The **XTD** crate remains experimental and untested against real game data.
 
 All other formats (ECF, ERA, PKG, XMB, UGX, DDX, XTT, BDT) have been tested and confirmed working with both HW1 DE and HW2 data where applicable.
 
@@ -118,9 +118,9 @@ ECF-based 3D model format containing:
 
 ECF-based animation format using RAD Game Tools' Granny SDK internally.
 
-- **Chunk 0x700**: Granny file_info data with animation metadata
+- **Chunk 0x700**: packed x64 Granny `file_info` object graph
 
-The chunk contains a 32-byte header followed by a Granny `file_info` structure. Pointers within the structure are stored with a +0x10 offset that must be subtracted. The format uses 32-bit pointers in the file_info but 64-bit pointers inside animation structs.
+The chunk begins directly with the 0x94-byte packed `file_info`; there is no separate Granny section header. All pointers in the graph are 64-bit little-endian offsets from the start of the chunk until the engine rebases them. The semantic reader and writer support all 19 curve formats defined by the game, along with vector, transform, text, and loop data.
 
 Key animation fields:
 

@@ -6,6 +6,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::{Error, Result};
+
 /// A deferred string offset that will be patched once the string table is built.
 struct StringFixup {
     /// Byte position in the output buffer where a u64 LE offset should be written.
@@ -34,7 +36,7 @@ impl StringTable {
     /// with the final u64 LE offsets.
     ///
     /// Strings are null-terminated and tightly packed (no alignment padding).
-    pub fn write(self, buf: &mut Vec<u8>) {
+    pub fn write(self, buf: &mut Vec<u8>) -> Result<()> {
         let mut offsets: Vec<(String, usize)> = Vec::new();
 
         for fixup in &self.fixups {
@@ -47,8 +49,22 @@ impl StringTable {
         }
 
         for fixup in &self.fixups {
-            let offset = offsets.iter().find(|(s, _)| s == &fixup.string).unwrap().1 as u64;
-            buf[fixup.position..fixup.position + 8].copy_from_slice(&offset.to_le_bytes());
+            let offset = offsets
+                .iter()
+                .find(|(string, _)| string == &fixup.string)
+                .map(|(_, offset)| *offset)
+                .ok_or(Error::SizeOverflow("string table lookup"))?;
+            let end = fixup
+                .position
+                .checked_add(8)
+                .ok_or(Error::SizeOverflow("string pointer fixup"))?;
+            let destination = buf
+                .get_mut(fixup.position..end)
+                .ok_or(Error::SizeOverflow("string pointer fixup"))?;
+            let pointer =
+                u64::try_from(offset).map_err(|_| Error::SizeOverflow("string table offset"))?;
+            destination.copy_from_slice(&pointer.to_le_bytes());
         }
+        Ok(())
     }
 }

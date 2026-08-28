@@ -1,676 +1,878 @@
-//! UAX writer implementation.
-//!
-//! Serializes a parsed [`Animation`] back into Granny `file_info` format
-//! wrapped in an ECF container, producing bytes that the game engine can load.
-//!
-//! The writer follows the same structure layout as the original game files:
-//! 1. `file_info` header (0x94 bytes)
-//! 2. `TrackGroup` pointer array + structs
-//! 3. `TransformTrack` arrays
-//! 4. Curve type trees (one per unique format)
-//! 5. Animation pointer array + struct
-//! 6. Curve data objects
-//! 7. File-info type tree
-//! 8. String table (names, `FromFileName`)
-//!
-//! Uses [`nostdio::Cursor`] and [`nostdio::WriteLe`] for all binary writes.
+//! UAX writer for the packed x64 Granny animation graph.
 
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::types::{
-    Animation, CurveData, CurvePayload, Transform, TransformTrack, animation, curve_data_header,
-    curve2, track_group, transform, transform_track,
+    Animation, CurveData, PeriodicLoop, TextTrack, TrackGroup, Transform, TransformTrack,
+    VectorTrack, animation, curve2, file_info, periodic_loop, text_track, text_track_entry,
+    track_group, transform, transform_track, vector_track,
 };
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID, UAX_FROM_FILENAME};
 
+mod curve;
 mod string_table;
 mod type_tree;
 
+use curve::CurveLayout;
 use string_table::StringTable;
 
 /// UAX file writer.
 pub struct Writer;
 
 impl Writer {
-    /// Write an [`Animation`] to UAX file bytes (ECF container).
+    /// Serialize one animation as a loadable UAX ECF file.
+    ///
+    /// The result contains the animation and its referenced track groups, but
+    /// no ancillary Granny model or skeleton roots.
     ///
     /// # Errors
     ///
-    /// Returns an error if a collection is too large for Granny's signed
-    /// 32-bit count fields or the ECF container exceeds its format limits.
-    pub fn write(anim: &Animation) -> Result<Vec<u8>> {
-        let fi_data = build_file_info(anim)?;
-
+    /// Returns an error for oversized collections, embedded NUL characters,
+    /// unknown curves, or a curve whose format byte does not match its typed
+    /// payload.
+    pub fn write(animation: &Animation) -> Result<Vec<u8>> {
+        let file_info = build_file_info(animation)?;
         let mut ecf = ecf::Writer::new(UAX_FILE_ID);
-        ecf.add_chunk(UAX_CHUNK_ID, fi_data);
+        ecf.add_chunk_with_metadata(UAX_CHUNK_ID, file_info, 4, 0, 0)?;
         Ok(ecf.finalize()?)
     }
 }
 
-/// Align to 16-byte boundary.
-fn align16(n: usize) -> usize {
-    (n + 15) & !15
+struct Planner {
+    cursor: usize,
+}
+
+impl Planner {
+    fn new(cursor: usize) -> Self {
+        Self { cursor }
+    }
+
+    fn allocate_aligned(
+        &mut self,
+        size: usize,
+        alignment: usize,
+        field: &'static str,
+    ) -> Result<usize> {
+        if size == 0 {
+            return Ok(0);
+        }
+        let mask = alignment.checked_sub(1).ok_or(Error::SizeOverflow(field))?;
+        let start = self
+            .cursor
+            .checked_add(mask)
+            .ok_or(Error::SizeOverflow(field))?
+            & !mask;
+        self.cursor = start.checked_add(size).ok_or(Error::SizeOverflow(field))?;
+        Ok(start)
+    }
+
+    fn array(&mut self, count: usize, element_size: usize, field: &'static str) -> Result<usize> {
+        let size = count
+            .checked_mul(element_size)
+            .ok_or(Error::SizeOverflow(field))?;
+        self.allocate_aligned(size, 16, field)
+    }
+}
+
+struct GroupLayout {
+    vector_tracks: usize,
+    transform_tracks: usize,
+    lod_errors: usize,
+    text_tracks: usize,
+    text_entries: Vec<usize>,
+    periodic_loop: usize,
+    vector_curves: Vec<CurveLayout>,
+    transform_curves: Vec<[CurveLayout; 3]>,
+}
+
+struct FileLayout {
+    group_pointer_array: usize,
+    group_structures: usize,
+    groups: Vec<GroupLayout>,
+    animation_pointer_array: usize,
+    animation_structure: usize,
+    animation_group_pointer_array: usize,
+    type_trees: Vec<(u8, usize)>,
+    size: usize,
 }
 
 fn checked_i32(value: usize, field: &'static str) -> Result<i32> {
     i32::try_from(value).map_err(|_| Error::SizeOverflow(field))
 }
 
-/// Write a u64 LE at offset in buf.
-fn put_u64(buf: &mut [u8], off: usize, val: u64) {
-    buf[off..off + 8].copy_from_slice(&val.to_le_bytes());
+fn checked_u64(value: usize, field: &'static str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| Error::SizeOverflow(field))
 }
 
-/// Write a u32 LE at offset in buf.
-fn put_u32(buf: &mut [u8], off: usize, val: u32) {
-    buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
+fn write_bytes(output: &mut [u8], offset: usize, bytes: &[u8], field: &'static str) -> Result<()> {
+    let end = offset
+        .checked_add(bytes.len())
+        .ok_or(Error::SizeOverflow(field))?;
+    output
+        .get_mut(offset..end)
+        .ok_or(Error::SizeOverflow(field))?
+        .copy_from_slice(bytes);
+    Ok(())
 }
 
-/// Write an i32 LE at offset in buf.
-fn put_i32(buf: &mut [u8], off: usize, val: i32) {
-    buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
+fn put_u64(output: &mut [u8], offset: usize, value: u64) -> Result<()> {
+    write_bytes(output, offset, &value.to_le_bytes(), "u64 field")
 }
 
-/// Write an f32 LE at offset in buf.
-fn put_f32(buf: &mut [u8], off: usize, val: f32) {
-    buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
+fn put_u32(output: &mut [u8], offset: usize, value: u32) -> Result<()> {
+    write_bytes(output, offset, &value.to_le_bytes(), "u32 field")
 }
 
-/// Write a u16 LE at offset in buf.
-fn put_u16(buf: &mut [u8], off: usize, val: u16) {
-    buf[off..off + 2].copy_from_slice(&val.to_le_bytes());
+fn put_i32(output: &mut [u8], offset: usize, value: i32) -> Result<()> {
+    write_bytes(output, offset, &value.to_le_bytes(), "i32 field")
 }
 
-/// Build the Granny `file_info` chunk data from an Animation.
-fn build_file_info(anim: &Animation) -> Result<Vec<u8>> {
-    let tg_count = anim.track_groups.len();
-    let mut strings = StringTable::new();
+fn put_u16(output: &mut [u8], offset: usize, value: u16) -> Result<()> {
+    write_bytes(output, offset, &value.to_le_bytes(), "u16 field")
+}
 
-    // ---- Phase 1: Compute layout offsets ----
-    let header_size: usize = 0x94;
+fn put_i16(output: &mut [u8], offset: usize, value: i16) -> Result<()> {
+    write_bytes(output, offset, &value.to_le_bytes(), "i16 field")
+}
 
-    // TrackGroup pointer array
-    let tg_ptr_array = align16(header_size);
-    // TrackGroup structs
-    let tg_structs_start = align16(tg_ptr_array + tg_count * 8);
+fn put_f32(output: &mut [u8], offset: usize, value: f32) -> Result<()> {
+    write_bytes(output, offset, &value.to_bits().to_le_bytes(), "f32 field")
+}
 
-    // Compute transform track counts and offsets
-    let mut tt_offsets = Vec::with_capacity(tg_count);
-    let mut cursor = tg_structs_start + tg_count * track_group::SIZE;
+fn put_pointer(
+    output: &mut [u8],
+    field_offset: usize,
+    target_offset: usize,
+    field: &'static str,
+) -> Result<()> {
+    put_u64(output, field_offset, checked_u64(target_offset, field)?)
+}
 
-    for tg in &anim.track_groups {
-        let tt_start = align16(cursor);
-        tt_offsets.push(tt_start);
-        cursor = tt_start + tg.transform_tracks.len() * transform_track::SIZE;
+fn add(base: usize, relative: usize, field: &'static str) -> Result<usize> {
+    base.checked_add(relative).ok_or(Error::SizeOverflow(field))
+}
+
+fn element_offset(
+    base: usize,
+    index: usize,
+    element_size: usize,
+    field: &'static str,
+) -> Result<usize> {
+    let relative = index
+        .checked_mul(element_size)
+        .ok_or(Error::SizeOverflow(field))?;
+    add(base, relative, field)
+}
+
+fn validate_string(value: &str, field: &'static str) -> Result<()> {
+    if value.as_bytes().contains(&0) {
+        return Err(Error::EmbeddedNul(field));
     }
+    Ok(())
+}
 
-    // LOD error arrays (one per track group, only if non-empty)
-    let mut lod_offsets = Vec::with_capacity(tg_count);
-    for tg in &anim.track_groups {
-        if tg.transform_lod_errors.is_empty() {
-            lod_offsets.push(None);
-        } else {
-            let lod_start = align16(cursor);
-            lod_offsets.push(Some(lod_start));
-            cursor = lod_start + tg.transform_lod_errors.len() * 4;
+fn validate_strings(animation: &Animation) -> Result<()> {
+    if let Some(name) = &animation.name {
+        validate_string(name, "animation name")?;
+    }
+    for group in &animation.track_groups {
+        if let Some(name) = &group.name {
+            validate_string(name, "track-group name")?;
+        }
+        for track in &group.vector_tracks {
+            if let Some(name) = &track.name {
+                validate_string(name, "vector-track name")?;
+            }
+        }
+        for track in &group.transform_tracks {
+            if let Some(name) = &track.name {
+                validate_string(name, "transform-track name")?;
+            }
+        }
+        for track in &group.text_tracks {
+            if let Some(name) = &track.name {
+                validate_string(name, "text-track name")?;
+            }
+            for entry in &track.entries {
+                if let Some(text) = &entry.text {
+                    validate_string(text, "text-track entry")?;
+                }
+            }
         }
     }
+    Ok(())
+}
 
-    // Phase 2: Curve type trees
-    // Collect unique curve formats used
-    let unique_formats = collect_unique_formats(anim);
-    let mut type_tree_offsets: Vec<(u8, usize)> = Vec::new(); // (format, offset)
-    for &fmt in &unique_formats {
-        let tt_off = align16(cursor);
-        type_tree_offsets.push((fmt, tt_off));
-        cursor = tt_off + type_tree::curve_type_tree_size(fmt);
+fn add_curve_format(formats: &mut Vec<u8>, curve: &CurveData) -> Result<()> {
+    curve::validate(curve)?;
+    if !formats.contains(&curve.format) {
+        formats.push(curve.format);
     }
+    Ok(())
+}
 
-    // Animation pointer array + struct
-    let anim_ptr_array = align16(cursor);
-    cursor = anim_ptr_array + 8; // single animation pointer
-    let anim_struct = align16(cursor);
-    cursor = anim_struct + animation::SIZE;
-
-    // Animation's own track group ptr array
-    let anim_tg_ptr_array = align16(cursor);
-    cursor = anim_tg_ptr_array + tg_count * 8;
-
-    // Phase 3: Curve data objects - placed after animation structs
-    // We need to emit curve objects for each transform track
-    let curve_layout = plan_curve_data(anim, &mut cursor);
-
-    // Phase 4: File info type tree
-    let fi_type_tree_start = align16(cursor);
-    cursor = fi_type_tree_start + type_tree::FILE_INFO_TYPE_TREE_SIZE;
-
-    // Now allocate the buffer (strings will be appended later)
-    let mut buf = vec![0u8; cursor];
-
-    // ---- Write file_info header ----
-    strings.add(0x10, UAX_FROM_FILENAME.to_string());
-
-    // TrackGroups RTA at 0x6C
-    put_i32(&mut buf, 0x6C, checked_i32(tg_count, "track group count")?);
-    put_u64(&mut buf, 0x70, tg_ptr_array as u64);
-
-    // Animations RTA at 0x78
-    put_i32(&mut buf, 0x78, 1); // always 1 animation
-    put_u64(&mut buf, 0x7C, anim_ptr_array as u64);
-
-    // ---- Write TrackGroup pointer array ----
-    for (i, _) in anim.track_groups.iter().enumerate() {
-        let tg_struct_off = tg_structs_start + i * track_group::SIZE;
-        put_u64(&mut buf, tg_ptr_array + i * 8, tg_struct_off as u64);
+fn collect_formats(animation: &Animation) -> Result<Vec<u8>> {
+    let mut formats = Vec::new();
+    for group in &animation.track_groups {
+        for track in &group.vector_tracks {
+            add_curve_format(&mut formats, &track.value)?;
+        }
+        for track in &group.transform_tracks {
+            add_curve_format(&mut formats, &track.orientation)?;
+            add_curve_format(&mut formats, &track.position)?;
+            add_curve_format(&mut formats, &track.scale_shear)?;
+        }
     }
+    Ok(formats)
+}
 
-    // ---- Write TrackGroup structs ----
-    write_track_groups(
-        &mut buf,
-        &mut strings,
-        anim,
-        &TrackGroupLayout {
-            start: tg_structs_start,
-            track_offsets: &tt_offsets,
-            lod_offsets: &lod_offsets,
-            type_tree_offsets: &type_tree_offsets,
-            curves: &curve_layout,
-        },
+fn plan_curve(planner: &mut Planner, value: &CurveData) -> Result<CurveLayout> {
+    let (object_size, array_sizes) = curve::sizes(value)?;
+    let object_offset = planner.allocate_aligned(object_size, 16, "curve object")?;
+    let mut array_offsets = Vec::with_capacity(array_sizes.len());
+    for size in array_sizes {
+        array_offsets.push(planner.allocate_aligned(size, 4, "curve referenced array")?);
+    }
+    Ok(CurveLayout {
+        object_offset,
+        array_offsets,
+    })
+}
+
+fn plan_layout(animation: &Animation) -> Result<FileLayout> {
+    validate_strings(animation)?;
+    checked_i32(animation.track_groups.len(), "track-group count")?;
+
+    let formats = collect_formats(animation)?;
+    let mut planner = Planner::new(file_info::SIZE);
+    let group_pointer_array =
+        planner.array(animation.track_groups.len(), 8, "group pointer array")?;
+    let group_structures = planner.array(
+        animation.track_groups.len(),
+        track_group::SIZE,
+        "track-group structures",
     )?;
 
-    // ---- Write Animation pointer array + struct ----
-    put_u64(&mut buf, anim_ptr_array, anim_struct as u64);
-    write_animation(&mut buf, &mut strings, anim, anim_struct, anim_tg_ptr_array)?;
-
-    // ---- Write Animation's TG ptr array (points to same TG structs) ----
-    for i in 0..tg_count {
-        let tg_struct_off = tg_structs_start + i * track_group::SIZE;
-        put_u64(&mut buf, anim_tg_ptr_array + i * 8, tg_struct_off as u64);
+    let mut groups = Vec::with_capacity(animation.track_groups.len());
+    for group in &animation.track_groups {
+        checked_i32(group.vector_tracks.len(), "vector-track count")?;
+        checked_i32(group.transform_tracks.len(), "transform-track count")?;
+        checked_i32(group.transform_lod_errors.len(), "LOD error count")?;
+        checked_i32(group.text_tracks.len(), "text-track count")?;
+        let vector_tracks = planner.array(
+            group.vector_tracks.len(),
+            vector_track::SIZE,
+            "vector-track array",
+        )?;
+        let transform_tracks = planner.array(
+            group.transform_tracks.len(),
+            transform_track::SIZE,
+            "transform-track array",
+        )?;
+        let lod_errors = planner.array(group.transform_lod_errors.len(), 4, "LOD error array")?;
+        let text_tracks = planner.array(
+            group.text_tracks.len(),
+            text_track::SIZE,
+            "text-track array",
+        )?;
+        let mut text_entries = Vec::with_capacity(group.text_tracks.len());
+        for track in &group.text_tracks {
+            checked_i32(track.entries.len(), "text-track entry count")?;
+            text_entries.push(planner.array(
+                track.entries.len(),
+                text_track_entry::SIZE,
+                "text-track entry array",
+            )?);
+        }
+        let periodic_loop = if group.periodic_loop.is_some() {
+            planner.allocate_aligned(periodic_loop::SIZE, 16, "periodic loop")?
+        } else {
+            0
+        };
+        groups.push(GroupLayout {
+            vector_tracks,
+            transform_tracks,
+            lod_errors,
+            text_tracks,
+            text_entries,
+            periodic_loop,
+            vector_curves: Vec::new(),
+            transform_curves: Vec::new(),
+        });
     }
 
-    // ---- Write type trees for curve formats ----
-    for &(fmt, off) in &type_tree_offsets {
-        type_tree::write_curve_type_tree(&mut buf, &mut strings, fmt, off);
+    let animation_pointer_array = planner.allocate_aligned(8, 16, "animation pointer array")?;
+    let animation_structure =
+        planner.allocate_aligned(animation::SIZE, 16, "animation structure")?;
+    let animation_group_pointer_array = planner.array(
+        animation.track_groups.len(),
+        8,
+        "animation group pointer array",
+    )?;
+
+    let mut type_trees = Vec::with_capacity(formats.len());
+    for format in formats {
+        let size = type_tree::curve_type_tree_size(format)?;
+        let offset = planner.allocate_aligned(size, 16, "curve type tree")?;
+        type_trees.push((format, offset));
     }
 
-    // ---- Write curve data objects ----
-    write_curve_data(&mut buf, anim, &curve_layout)?;
-
-    // ---- Write file_info type tree ----
-    type_tree::write_file_info_type_tree(&mut buf, &mut strings, fi_type_tree_start);
-
-    // ---- Phase 5: String table (appended at end) ----
-    strings.write(&mut buf);
-
-    Ok(buf)
-}
-
-// ============================================================================
-// Curve format collection
-// ============================================================================
-
-/// Collect unique curve format IDs across all track groups.
-fn collect_unique_formats(anim: &Animation) -> Vec<u8> {
-    let mut seen = Vec::new();
-    for tg in &anim.track_groups {
-        for tt in &tg.transform_tracks {
-            for curve in [&tt.orientation, &tt.position, &tt.scale_shear] {
-                if !seen.contains(&curve.format) {
-                    seen.push(curve.format);
-                }
-            }
+    for (group, layout) in animation.track_groups.iter().zip(&mut groups) {
+        for track in &group.vector_tracks {
+            layout
+                .vector_curves
+                .push(plan_curve(&mut planner, &track.value)?);
+        }
+        for track in &group.transform_tracks {
+            layout.transform_curves.push([
+                plan_curve(&mut planner, &track.orientation)?,
+                plan_curve(&mut planner, &track.position)?,
+                plan_curve(&mut planner, &track.scale_shear)?,
+            ]);
         }
     }
-    seen
+
+    Ok(FileLayout {
+        group_pointer_array,
+        group_structures,
+        groups,
+        animation_pointer_array,
+        animation_structure,
+        animation_group_pointer_array,
+        type_trees,
+        size: planner.cursor,
+    })
 }
 
-// ============================================================================
-// Curve data layout planning
-// ============================================================================
+fn build_file_info(animation: &Animation) -> Result<Vec<u8>> {
+    let layout = plan_layout(animation)?;
+    let mut output = vec![0; layout.size];
+    let mut strings = StringTable::new();
+    strings.add(file_info::FROM_FILE_NAME_PTR, UAX_FROM_FILENAME.to_string());
 
-/// Layout information for a single curve data object.
-struct CurveObjLayout {
-    /// Offset of the curve data object in the buffer.
-    obj_offset: usize,
-    /// Optional: offsets for `ref_arr` data (knots, controls, `knots_controls`).
-    ref_arr_offsets: Vec<usize>,
-}
-
-/// Complete layout for all curve data in the animation.
-struct CurveDataLayout {
-    /// Per track-group, per transform-track, per curve (ori/pos/ss) layout.
-    /// Indexed as [`tg_idx`][tt_idx][`curve_idx`] where `curve_idx`: 0=ori, 1=pos, 2=ss
-    layouts: Vec<Vec<[CurveObjLayout; 3]>>,
-}
-
-/// Plan where all curve data objects and their `ref_arr` data will be placed.
-fn plan_curve_data(anim: &Animation, cursor: &mut usize) -> CurveDataLayout {
-    let mut layouts = Vec::with_capacity(anim.track_groups.len());
-
-    for tg in &anim.track_groups {
-        let mut tg_layouts = Vec::with_capacity(tg.transform_tracks.len());
-        for tt in &tg.transform_tracks {
-            let curves = [&tt.orientation, &tt.position, &tt.scale_shear];
-            let mut curve_layouts: [CurveObjLayout; 3] = core::array::from_fn(|_| CurveObjLayout {
-                obj_offset: 0,
-                ref_arr_offsets: Vec::new(),
-            });
-
-            for (ci, curve) in curves.iter().enumerate() {
-                let obj_off = align16(*cursor);
-                let (obj_size, ref_arr_sizes) = curve_obj_size(curve);
-                *cursor = obj_off + obj_size;
-
-                let mut ref_arr_offsets = Vec::new();
-                for &ra_size in &ref_arr_sizes {
-                    let ra_off = *cursor; // ref_arr data follows immediately (no alignment needed)
-                    ref_arr_offsets.push(ra_off);
-                    *cursor += ra_size;
-                }
-
-                curve_layouts[ci] = CurveObjLayout {
-                    obj_offset: obj_off,
-                    ref_arr_offsets,
-                };
-            }
-            tg_layouts.push(curve_layouts);
-        }
-        layouts.push(tg_layouts);
-    }
-
-    CurveDataLayout { layouts }
-}
-
-/// Compute the size of a curve data object (header + payload) and sizes of `ref_arr` data.
-fn curve_obj_size(curve: &CurveData) -> (usize, Vec<usize>) {
-    let header = curve_data_header::SIZE; // 2 bytes (format + degree)
-    match &curve.payload {
-        CurvePayload::Identity { .. } => (header + 2, vec![]),
-        CurvePayload::DaConstant32f { controls, .. } => {
-            // padding(2) + ref_arr header (i32 count + u64 ptr = 12)
-            (header + 2 + 12, vec![controls.len() * 4])
-        }
-        CurvePayload::D3Constant32f { .. } => (header + 2 + 12, vec![]),
-        CurvePayload::D4Constant32f { .. } => (header + 2 + 16, vec![]),
-        CurvePayload::DaK32fC32f {
-            knots, controls, ..
-        } => {
-            // padding(2) + 2x ref_arr headers (12 each)
-            (header + 2 + 24, vec![knots.len() * 4, controls.len() * 4])
-        }
-        CurvePayload::D4nK16uC15u { knots_controls, .. }
-        | CurvePayload::D4nK8uC7u { knots_controls, .. } => {
-            // sote(2) + ooks(4) + ref_arr(12)
-            (header + 2 + 4 + 12, vec![knots_controls.len()])
-        }
-        CurvePayload::D3K16uC16u { knots_controls, .. }
-        | CurvePayload::D3K8uC8u { knots_controls, .. }
-        | CurvePayload::D3I1K8uC8u { knots_controls, .. } => {
-            // ooks_trunc(2) + scales(12) + offsets(12) + ref_arr(12)
-            (header + 2 + 12 + 12 + 12, vec![knots_controls.len()])
-        }
-        CurvePayload::Unknown { raw } => (header + raw.len(), vec![]),
-    }
-}
-
-// ============================================================================
-// Structure writers
-// ============================================================================
-
-/// Write a Granny transform into `buf` at `offset` (68 bytes).
-fn write_transform(buf: &mut [u8], offset: usize, t: &Transform) {
-    put_u32(buf, offset + transform::FLAGS, t.flags);
-    for i in 0..3 {
-        put_f32(buf, offset + transform::POSITION + i * 4, t.position[i]);
-    }
-    for i in 0..4 {
-        put_f32(
-            buf,
-            offset + transform::ORIENTATION + i * 4,
-            t.orientation[i],
-        );
-    }
-    for i in 0..9 {
-        put_f32(
-            buf,
-            offset + transform::SCALE_SHEAR + i * 4,
-            t.scale_shear[i],
-        );
-    }
-}
-
-/// Write all track group structs and their transform track arrays.
-struct TrackGroupLayout<'a> {
-    start: usize,
-    track_offsets: &'a [usize],
-    lod_offsets: &'a [Option<usize>],
-    type_tree_offsets: &'a [(u8, usize)],
-    curves: &'a CurveDataLayout,
-}
-
-fn write_track_groups(
-    buf: &mut [u8],
-    strings: &mut StringTable,
-    anim: &Animation,
-    layout: &TrackGroupLayout<'_>,
-) -> Result<()> {
-    for (tgi, tg) in anim.track_groups.iter().enumerate() {
-        let base = layout.start + tgi * track_group::SIZE;
-
-        // Name
-        if let Some(ref name) = tg.name {
-            strings.add(base + track_group::NAME_PTR, name.clone());
-        }
-
-        // TransformTrack count + ptr
-        let tt_count = tg.transform_tracks.len();
-        put_i32(
-            buf,
-            base + track_group::TRANSFORM_TRACK_COUNT,
-            checked_i32(tt_count, "transform track count")?,
-        );
-        if tt_count > 0 {
-            put_u64(
-                buf,
-                base + track_group::TRANSFORM_TRACKS_PTR,
-                layout.track_offsets[tgi] as u64,
-            );
-        }
-
-        // LOD errors
-        if let Some(lod_off) = layout.lod_offsets[tgi] {
-            put_i32(
-                buf,
-                base + track_group::TRANSFORM_LOD_ERROR_COUNT,
-                checked_i32(tg.transform_lod_errors.len(), "LOD error count")?,
-            );
-            put_u64(
-                buf,
-                base + track_group::TRANSFORM_LOD_ERRORS_PTR,
-                lod_off as u64,
-            );
-            for (i, &e) in tg.transform_lod_errors.iter().enumerate() {
-                put_f32(buf, lod_off + i * 4, e);
-            }
-        }
-
-        // InitialPlacement
-        write_transform(
-            buf,
-            base + track_group::INITIAL_PLACEMENT,
-            &tg.initial_placement,
-        );
-
-        // Flags
-        put_u32(buf, base + track_group::FLAGS, tg.flags);
-
-        // Write transform tracks
-        write_transform_tracks(
-            buf,
-            strings,
-            &tg.transform_tracks,
-            layout.track_offsets[tgi],
-            layout.type_tree_offsets,
-            &layout.curves.layouts[tgi],
-        );
-    }
-    Ok(())
-}
-
-/// Find the type tree offset for a given curve format.
-fn find_type_tree_offset(type_tree_offsets: &[(u8, usize)], fmt: u8) -> u64 {
-    type_tree_offsets
-        .iter()
-        .find(|&&(f, _)| f == fmt)
-        .map_or(0, |&(_, off)| off as u64)
-}
-
-/// Write a curve2 variant (`type_ptr` + `obj_ptr`) at `offset`.
-fn write_curve2(buf: &mut [u8], offset: usize, type_tree_off: u64, obj_off: u64) {
-    put_u64(buf, offset + curve2::TYPE_PTR, type_tree_off);
-    put_u64(buf, offset + curve2::OBJECT_PTR, obj_off);
-}
-
-/// Write transform tracks for a single track group.
-fn write_transform_tracks(
-    buf: &mut [u8],
-    strings: &mut StringTable,
-    tracks: &[TransformTrack],
-    tt_start: usize,
-    type_tree_offsets: &[(u8, usize)],
-    curve_layouts: &[[CurveObjLayout; 3]],
-) {
-    for (tti, tt) in tracks.iter().enumerate() {
-        let base = tt_start + tti * transform_track::SIZE;
-
-        // Name
-        if let Some(ref name) = tt.name {
-            strings.add(base + transform_track::NAME_PTR, name.clone());
-        }
-
-        // Flags
-        put_i32(buf, base + transform_track::FLAGS, tt.flags);
-
-        // Orientation curve2
-        let cl = &curve_layouts[tti];
-        let ori_tt = find_type_tree_offset(type_tree_offsets, tt.orientation.format);
-        write_curve2(
-            buf,
-            base + transform_track::ORIENTATION_CURVE,
-            ori_tt,
-            cl[0].obj_offset as u64,
-        );
-
-        // Position curve2
-        let pos_tt = find_type_tree_offset(type_tree_offsets, tt.position.format);
-        write_curve2(
-            buf,
-            base + transform_track::POSITION_CURVE,
-            pos_tt,
-            cl[1].obj_offset as u64,
-        );
-
-        // ScaleShear curve2
-        let ss_tt = find_type_tree_offset(type_tree_offsets, tt.scale_shear.format);
-        write_curve2(
-            buf,
-            base + transform_track::SCALE_SHEAR_CURVE,
-            ss_tt,
-            cl[2].obj_offset as u64,
-        );
-    }
-}
-
-/// Write the animation struct.
-fn write_animation(
-    buf: &mut [u8],
-    strings: &mut StringTable,
-    anim: &Animation,
-    offset: usize,
-    tg_ptr_array: usize,
-) -> Result<()> {
-    if let Some(ref name) = anim.name {
-        strings.add(offset + animation::NAME_PTR, name.clone());
-    }
-    put_f32(buf, offset + animation::DURATION, anim.duration);
-    put_f32(buf, offset + animation::TIME_STEP, anim.time_step);
-    put_f32(buf, offset + animation::OVERSAMPLING, anim.oversampling);
     put_i32(
-        buf,
-        offset + animation::TRACK_GROUP_COUNT,
-        checked_i32(anim.track_groups.len(), "animation track group count")?,
-    );
-    put_u64(
-        buf,
-        offset + animation::TRACK_GROUPS_PTR,
-        tg_ptr_array as u64,
-    );
+        &mut output,
+        file_info::TRACK_GROUP_COUNT,
+        checked_i32(animation.track_groups.len(), "track-group count")?,
+    )?;
+    put_pointer(
+        &mut output,
+        file_info::TRACK_GROUPS_PTR,
+        layout.group_pointer_array,
+        "group pointer array",
+    )?;
+    put_i32(&mut output, file_info::ANIMATION_COUNT, 1)?;
+    put_pointer(
+        &mut output,
+        file_info::ANIMATIONS_PTR,
+        layout.animation_pointer_array,
+        "animation pointer array",
+    )?;
+
+    for (index, group) in animation.track_groups.iter().enumerate() {
+        let group_offset = element_offset(
+            layout.group_structures,
+            index,
+            track_group::SIZE,
+            "track-group offset",
+        )?;
+        put_pointer(
+            &mut output,
+            element_offset(layout.group_pointer_array, index, 8, "group pointer")?,
+            group_offset,
+            "track-group pointer",
+        )?;
+        write_track_group(
+            &mut output,
+            &mut strings,
+            group,
+            group_offset,
+            &layout.groups[index],
+            &layout.type_trees,
+        )?;
+    }
+
+    put_pointer(
+        &mut output,
+        layout.animation_pointer_array,
+        layout.animation_structure,
+        "animation structure pointer",
+    )?;
+    write_animation(&mut output, &mut strings, animation, &layout)?;
+
+    for &(format, offset) in &layout.type_trees {
+        type_tree::write_curve_type_tree(&mut output, &mut strings, format, offset)?;
+    }
+    strings.write(&mut output)?;
+    Ok(output)
+}
+
+fn write_track_group(
+    output: &mut [u8],
+    strings: &mut StringTable,
+    group: &TrackGroup,
+    offset: usize,
+    layout: &GroupLayout,
+    type_trees: &[(u8, usize)],
+) -> Result<()> {
+    if let Some(name) = &group.name {
+        strings.add(
+            add(offset, track_group::NAME_PTR, "track-group name")?,
+            name.clone(),
+        );
+    }
+    write_array_header(
+        output,
+        offset,
+        track_group::VECTOR_TRACK_COUNT,
+        track_group::VECTOR_TRACKS_PTR,
+        group.vector_tracks.len(),
+        layout.vector_tracks,
+        "vector tracks",
+    )?;
+    write_array_header(
+        output,
+        offset,
+        track_group::TRANSFORM_TRACK_COUNT,
+        track_group::TRANSFORM_TRACKS_PTR,
+        group.transform_tracks.len(),
+        layout.transform_tracks,
+        "transform tracks",
+    )?;
+    write_array_header(
+        output,
+        offset,
+        track_group::TRANSFORM_LOD_ERROR_COUNT,
+        track_group::TRANSFORM_LOD_ERRORS_PTR,
+        group.transform_lod_errors.len(),
+        layout.lod_errors,
+        "transform LOD errors",
+    )?;
+    write_array_header(
+        output,
+        offset,
+        track_group::TEXT_TRACK_COUNT,
+        track_group::TEXT_TRACKS_PTR,
+        group.text_tracks.len(),
+        layout.text_tracks,
+        "text tracks",
+    )?;
+
+    write_transform(
+        output,
+        add(offset, track_group::INITIAL_PLACEMENT, "initial placement")?,
+        &group.initial_placement,
+    )?;
+    put_u32(
+        output,
+        add(offset, track_group::FLAGS, "accumulation flags")?,
+        group.flags,
+    )?;
+    write_f32_values(
+        output,
+        add(offset, track_group::LOOP_TRANSLATION, "loop translation")?,
+        &group.loop_translation,
+    )?;
+    if let Some(periodic) = &group.periodic_loop {
+        put_pointer(
+            output,
+            add(
+                offset,
+                track_group::PERIODIC_LOOP_PTR,
+                "periodic-loop pointer",
+            )?,
+            layout.periodic_loop,
+            "periodic-loop pointer",
+        )?;
+        write_periodic_loop(output, layout.periodic_loop, periodic)?;
+    }
+
+    write_group_track_data(output, strings, group, layout, type_trees)
+}
+
+fn write_group_track_data(
+    output: &mut [u8],
+    strings: &mut StringTable,
+    group: &TrackGroup,
+    layout: &GroupLayout,
+    type_trees: &[(u8, usize)],
+) -> Result<()> {
+    for (index, track) in group.vector_tracks.iter().enumerate() {
+        let track_offset = element_offset(
+            layout.vector_tracks,
+            index,
+            vector_track::SIZE,
+            "vector-track offset",
+        )?;
+        write_vector_track(
+            output,
+            strings,
+            track,
+            track_offset,
+            &layout.vector_curves[index],
+            type_trees,
+        )?;
+    }
+    for (index, track) in group.transform_tracks.iter().enumerate() {
+        let track_offset = element_offset(
+            layout.transform_tracks,
+            index,
+            transform_track::SIZE,
+            "transform-track offset",
+        )?;
+        write_transform_track(
+            output,
+            strings,
+            track,
+            track_offset,
+            &layout.transform_curves[index],
+            type_trees,
+        )?;
+    }
+    for (index, error) in group.transform_lod_errors.iter().enumerate() {
+        put_f32(
+            output,
+            element_offset(layout.lod_errors, index, 4, "LOD error")?,
+            *error,
+        )?;
+    }
+    for (index, track) in group.text_tracks.iter().enumerate() {
+        let track_offset = element_offset(
+            layout.text_tracks,
+            index,
+            text_track::SIZE,
+            "text-track offset",
+        )?;
+        write_text_track(
+            output,
+            strings,
+            track,
+            track_offset,
+            layout.text_entries[index],
+        )?;
+    }
     Ok(())
 }
 
-// ============================================================================
-// Curve data writing
-// ============================================================================
-
-/// Write a `ref_arr` header (count i32 + ptr u64) and copy data.
-fn write_ref_arr(
-    buf: &mut [u8],
-    header_off: usize,
-    data_off: usize,
-    data: &[u8],
+fn write_array_header(
+    output: &mut [u8],
+    base: usize,
+    count_relative: usize,
+    pointer_relative: usize,
     count: usize,
+    pointer: usize,
+    field: &'static str,
 ) -> Result<()> {
-    put_i32(buf, header_off, checked_i32(count, "curve element count")?);
-    put_u64(buf, header_off + 4, data_off as u64);
-    buf[data_off..data_off + data.len()].copy_from_slice(data);
-    Ok(())
-}
-
-/// Write all curve data objects into the buffer.
-fn write_curve_data(buf: &mut [u8], anim: &Animation, layout: &CurveDataLayout) -> Result<()> {
-    for (tgi, tg) in anim.track_groups.iter().enumerate() {
-        for (tti, tt) in tg.transform_tracks.iter().enumerate() {
-            let curves = [&tt.orientation, &tt.position, &tt.scale_shear];
-            for (ci, curve) in curves.iter().enumerate() {
-                let cl = &layout.layouts[tgi][tti][ci];
-                write_single_curve(buf, cl, curve)?;
-            }
-        }
+    put_i32(
+        output,
+        add(base, count_relative, field)?,
+        checked_i32(count, field)?,
+    )?;
+    if count > 0 {
+        put_pointer(output, add(base, pointer_relative, field)?, pointer, field)?;
     }
     Ok(())
 }
 
-fn write_quantized_d3_curve(
-    buf: &mut [u8],
-    layout: &CurveObjLayout,
-    payload_offset: usize,
-    one_over_knot_scale_trunc: u16,
-    control_scales: &[f32; 3],
-    control_offsets: &[f32; 3],
-    knots_controls: &[u8],
+fn type_tree_offset(type_trees: &[(u8, usize)], format: u8) -> Result<usize> {
+    type_trees
+        .iter()
+        .find(|(candidate, _)| *candidate == format)
+        .map(|(_, offset)| *offset)
+        .ok_or(Error::UnsupportedCurveFormat(format))
+}
+
+fn write_curve_variant(
+    output: &mut [u8],
+    offset: usize,
+    value: &CurveData,
+    layout: &CurveLayout,
+    type_trees: &[(u8, usize)],
 ) -> Result<()> {
-    put_u16(buf, payload_offset, one_over_knot_scale_trunc);
-    for (index, scale) in control_scales.iter().enumerate() {
-        put_f32(buf, payload_offset + 2 + index * 4, *scale);
+    put_pointer(
+        output,
+        add(offset, curve2::TYPE_PTR, "curve type pointer")?,
+        type_tree_offset(type_trees, value.format)?,
+        "curve type pointer",
+    )?;
+    put_pointer(
+        output,
+        add(offset, curve2::OBJECT_PTR, "curve object pointer")?,
+        layout.object_offset,
+        "curve object pointer",
+    )?;
+    curve::write(output, layout, value)
+}
+
+fn write_vector_track(
+    output: &mut [u8],
+    strings: &mut StringTable,
+    track: &VectorTrack,
+    offset: usize,
+    curve_layout: &CurveLayout,
+    type_trees: &[(u8, usize)],
+) -> Result<()> {
+    if let Some(name) = &track.name {
+        strings.add(
+            add(offset, vector_track::NAME_PTR, "vector-track name")?,
+            name.clone(),
+        );
     }
-    for (index, offset) in control_offsets.iter().enumerate() {
-        put_f32(buf, payload_offset + 14 + index * 4, *offset);
-    }
-    write_ref_arr(
-        buf,
-        payload_offset + 26,
-        layout.ref_arr_offsets[0],
-        knots_controls,
-        knots_controls.len(),
+    put_u32(
+        output,
+        add(offset, vector_track::TRACK_KEY, "vector-track key")?,
+        track.track_key,
+    )?;
+    put_i32(
+        output,
+        add(offset, vector_track::DIMENSION, "vector-track dimension")?,
+        track.dimension,
+    )?;
+    write_curve_variant(
+        output,
+        add(offset, vector_track::VALUE_CURVE, "vector-track curve")?,
+        &track.value,
+        curve_layout,
+        type_trees,
     )
 }
 
-fn write_constant_curve(buf: &mut [u8], payload_offset: usize, padding: u16, controls: &[f32]) {
-    put_u16(buf, payload_offset, padding);
-    for (index, control) in controls.iter().enumerate() {
-        put_f32(buf, payload_offset + 2 + index * 4, *control);
+fn write_transform_track(
+    output: &mut [u8],
+    strings: &mut StringTable,
+    track: &TransformTrack,
+    offset: usize,
+    curve_layouts: &[CurveLayout; 3],
+    type_trees: &[(u8, usize)],
+) -> Result<()> {
+    if let Some(name) = &track.name {
+        strings.add(
+            add(offset, transform_track::NAME_PTR, "transform-track name")?,
+            name.clone(),
+        );
     }
+    put_i32(
+        output,
+        add(offset, transform_track::FLAGS, "transform-track flags")?,
+        track.flags,
+    )?;
+    for (relative, value, layout) in [
+        (
+            transform_track::ORIENTATION_CURVE,
+            &track.orientation,
+            &curve_layouts[0],
+        ),
+        (
+            transform_track::POSITION_CURVE,
+            &track.position,
+            &curve_layouts[1],
+        ),
+        (
+            transform_track::SCALE_SHEAR_CURVE,
+            &track.scale_shear,
+            &curve_layouts[2],
+        ),
+    ] {
+        write_curve_variant(
+            output,
+            add(offset, relative, "transform curve")?,
+            value,
+            layout,
+            type_trees,
+        )?;
+    }
+    Ok(())
 }
 
-/// Write a single curve data object at its planned offset.
-fn write_single_curve(buf: &mut [u8], cl: &CurveObjLayout, curve: &CurveData) -> Result<()> {
-    let o = cl.obj_offset;
-    // Header: format + degree
-    buf[o] = curve.format;
-    buf[o + 1] = curve.degree;
-    let p = o + curve_data_header::SIZE; // payload start
-
-    match &curve.payload {
-        CurvePayload::Identity { dimension } => {
-            put_u16(buf, p, *dimension);
-        }
-        CurvePayload::DaConstant32f { padding, controls } => {
-            put_u16(buf, p, *padding);
-            let f32_bytes: Vec<u8> = controls.iter().flat_map(|v| v.to_le_bytes()).collect();
-            write_ref_arr(
-                buf,
-                p + 2,
-                cl.ref_arr_offsets[0],
-                &f32_bytes,
-                controls.len(),
-            )?;
-        }
-        CurvePayload::D3Constant32f { padding, controls } => {
-            write_constant_curve(buf, p, *padding, controls);
-        }
-        CurvePayload::D4Constant32f { padding, controls } => {
-            write_constant_curve(buf, p, *padding, controls);
-        }
-        CurvePayload::DaK32fC32f {
-            padding,
-            knots,
-            controls,
-        } => {
-            put_u16(buf, p, *padding);
-            let knot_bytes: Vec<u8> = knots.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let ctrl_bytes: Vec<u8> = controls.iter().flat_map(|v| v.to_le_bytes()).collect();
-            write_ref_arr(buf, p + 2, cl.ref_arr_offsets[0], &knot_bytes, knots.len())?;
-            write_ref_arr(
-                buf,
-                p + 2 + 12,
-                cl.ref_arr_offsets[1],
-                &ctrl_bytes,
-                controls.len(),
-            )?;
-        }
-        CurvePayload::D4nK16uC15u {
-            scale_offset_table_entries,
-            one_over_knot_scale,
-            knots_controls,
-        }
-        | CurvePayload::D4nK8uC7u {
-            scale_offset_table_entries,
-            one_over_knot_scale,
-            knots_controls,
-        } => {
-            put_u16(buf, p, *scale_offset_table_entries);
-            put_f32(buf, p + 2, *one_over_knot_scale);
-            write_ref_arr(
-                buf,
-                p + 6,
-                cl.ref_arr_offsets[0],
-                knots_controls,
-                knots_controls.len(),
-            )?;
-        }
-        CurvePayload::D3K16uC16u {
-            one_over_knot_scale_trunc,
-            control_scales,
-            control_offsets,
-            knots_controls,
-        }
-        | CurvePayload::D3K8uC8u {
-            one_over_knot_scale_trunc,
-            control_scales,
-            control_offsets,
-            knots_controls,
-        }
-        | CurvePayload::D3I1K8uC8u {
-            one_over_knot_scale_trunc,
-            control_scales,
-            control_offsets,
-            knots_controls,
-        } => {
-            write_quantized_d3_curve(
-                buf,
-                cl,
-                p,
-                *one_over_knot_scale_trunc,
-                control_scales,
-                control_offsets,
-                knots_controls,
-            )?;
-        }
-        CurvePayload::Unknown { raw } => {
-            buf[p..p + raw.len()].copy_from_slice(raw);
+fn write_text_track(
+    output: &mut [u8],
+    strings: &mut StringTable,
+    track: &TextTrack,
+    offset: usize,
+    entries_offset: usize,
+) -> Result<()> {
+    if let Some(name) = &track.name {
+        strings.add(
+            add(offset, text_track::NAME_PTR, "text-track name")?,
+            name.clone(),
+        );
+    }
+    write_array_header(
+        output,
+        offset,
+        text_track::ENTRY_COUNT,
+        text_track::ENTRIES_PTR,
+        track.entries.len(),
+        entries_offset,
+        "text-track entries",
+    )?;
+    for (index, entry) in track.entries.iter().enumerate() {
+        let entry_offset = element_offset(
+            entries_offset,
+            index,
+            text_track_entry::SIZE,
+            "text-track entry",
+        )?;
+        put_f32(
+            output,
+            add(
+                entry_offset,
+                text_track_entry::TIME_STAMP,
+                "text-track timestamp",
+            )?,
+            entry.time_stamp,
+        )?;
+        if let Some(text) = &entry.text {
+            strings.add(
+                add(entry_offset, text_track_entry::TEXT_PTR, "text-track text")?,
+                text.clone(),
+            );
         }
     }
     Ok(())
 }
+
+fn write_animation(
+    output: &mut [u8],
+    strings: &mut StringTable,
+    animation: &Animation,
+    layout: &FileLayout,
+) -> Result<()> {
+    let offset = layout.animation_structure;
+    if let Some(name) = &animation.name {
+        strings.add(
+            add(offset, animation::NAME_PTR, "animation name")?,
+            name.clone(),
+        );
+    }
+    put_f32(
+        output,
+        add(offset, animation::DURATION, "animation duration")?,
+        animation.duration,
+    )?;
+    put_f32(
+        output,
+        add(offset, animation::TIME_STEP, "animation time step")?,
+        animation.time_step,
+    )?;
+    put_f32(
+        output,
+        add(offset, animation::OVERSAMPLING, "animation oversampling")?,
+        animation.oversampling,
+    )?;
+    write_array_header(
+        output,
+        offset,
+        animation::TRACK_GROUP_COUNT,
+        animation::TRACK_GROUPS_PTR,
+        animation.track_groups.len(),
+        layout.animation_group_pointer_array,
+        "animation track groups",
+    )?;
+    put_i32(
+        output,
+        add(
+            offset,
+            animation::DEFAULT_LOOP_COUNT,
+            "animation default loop count",
+        )?,
+        animation.default_loop_count,
+    )?;
+    put_u32(
+        output,
+        add(offset, animation::FLAGS, "animation flags")?,
+        animation.flags,
+    )?;
+
+    for index in 0..animation.track_groups.len() {
+        let group_offset = element_offset(
+            layout.group_structures,
+            index,
+            track_group::SIZE,
+            "animation track-group target",
+        )?;
+        put_pointer(
+            output,
+            element_offset(
+                layout.animation_group_pointer_array,
+                index,
+                8,
+                "animation track-group pointer",
+            )?,
+            group_offset,
+            "animation track-group pointer",
+        )?;
+    }
+    Ok(())
+}
+
+fn write_transform(output: &mut [u8], offset: usize, value: &Transform) -> Result<()> {
+    put_u32(
+        output,
+        add(offset, transform::FLAGS, "transform flags")?,
+        value.flags,
+    )?;
+    write_f32_values(
+        output,
+        add(offset, transform::POSITION, "transform position")?,
+        &value.position,
+    )?;
+    write_f32_values(
+        output,
+        add(offset, transform::ORIENTATION, "transform orientation")?,
+        &value.orientation,
+    )?;
+    write_f32_values(
+        output,
+        add(offset, transform::SCALE_SHEAR, "transform scale/shear")?,
+        &value.scale_shear,
+    )
+}
+
+fn write_periodic_loop(output: &mut [u8], offset: usize, value: &PeriodicLoop) -> Result<()> {
+    put_f32(
+        output,
+        add(offset, periodic_loop::RADIUS, "loop radius")?,
+        value.radius,
+    )?;
+    put_f32(
+        output,
+        add(offset, periodic_loop::D_ANGLE, "loop angle")?,
+        value.d_angle,
+    )?;
+    put_f32(
+        output,
+        add(offset, periodic_loop::D_Z, "loop Z delta")?,
+        value.d_z,
+    )?;
+    write_f32_values(
+        output,
+        add(offset, periodic_loop::BASIS_X, "loop basis X")?,
+        &value.basis_x,
+    )?;
+    write_f32_values(
+        output,
+        add(offset, periodic_loop::BASIS_Y, "loop basis Y")?,
+        &value.basis_y,
+    )?;
+    write_f32_values(
+        output,
+        add(offset, periodic_loop::AXIS, "loop axis")?,
+        &value.axis,
+    )
+}
+
+fn write_f32_values(output: &mut [u8], offset: usize, values: &[f32]) -> Result<()> {
+    for (index, value) in values.iter().enumerate() {
+        let relative = index
+            .checked_mul(4)
+            .ok_or(Error::SizeOverflow("f32 array offset"))?;
+        put_f32(output, add(offset, relative, "f32 array offset")?, *value)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

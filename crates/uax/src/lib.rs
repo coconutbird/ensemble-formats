@@ -9,7 +9,12 @@
 //! - ECF container with file ID `0xAAC93747`
 //! - Single chunk with ID `0x0700` containing Granny `file_info` directly
 //! - No separate Granny section header — chunk data IS `file_info`
-//! - x64 native pointer layout (same format for HW1 DE and HW2)
+//! - packed x64 pointer layout recovered from the HW1 DE loader
+//!
+//! [`Reader`] and [`Writer`] operate on the animation and referenced track
+//! groups used by the game loader. Ancillary Granny root objects such as
+//! exported models and skeletons are not part of that semantic model. Use
+//! [`UaxFile`] when exact preservation of the original chunk is required.
 //!
 //! ## Example (Read-Only)
 //!

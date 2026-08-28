@@ -7,8 +7,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::types::{animation, file_info, read_cstring, read_f32_le, read_i32_le, read_ptr};
-use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
+use crate::types::{animation, file_info, read_cstring, read_f32_le, read_i32_le, read_u64_le};
+use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID, UAX_FROM_FILENAME};
 use ecf::{EcfChunkHeader, EcfHeader, Reader as EcfReader};
 
 /// A parsed UAX animation file.
@@ -31,7 +31,8 @@ impl UaxFile {
     /// # Errors
     ///
     /// Returns an error if the ECF container is invalid, the animation chunk
-    /// is absent or truncated, or the file ID is not a UAX ID.
+    /// is absent or truncated, the file ID or `FromFileName` marker is wrong,
+    /// or the first animation pointer chain is malformed.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let ecf = EcfReader::new(data)?;
 
@@ -54,11 +55,14 @@ impl UaxFile {
             return Err(Error::ChunkTooSmall(chunk_data.len(), file_info::MIN_SIZE));
         }
 
-        Ok(Self {
+        let result = Self {
             ecf_header,
             chunk_header,
             chunk_data,
-        })
+        };
+        result.validate_from_file_name()?;
+        result.animation_struct_offset()?;
+        Ok(result)
     }
 
     /// Write the UAX file to bytes, preserving original ECF structure.
@@ -123,9 +127,15 @@ impl UaxFile {
     ///
     /// Returns an error if the animation pointer chain is absent or invalid.
     pub fn animation_name(&self) -> Result<Option<String>> {
-        let anim_off = self.animation_struct_offset()?;
-        let fi = &self.chunk_data;
-        Ok(read_ptr(fi, anim_off + animation::NAME_PTR).and_then(|p| read_cstring(fi, p)))
+        let animation_offset = self.animation_struct_offset()?;
+        let field = self.field_offset(
+            animation_offset,
+            animation::NAME_PTR,
+            "animation name pointer",
+        )?;
+        self.optional_pointer(field, "animation name")?
+            .map(|pointer| self.string_at(pointer))
+            .transpose()
     }
 
     /// Get animation duration in seconds.
@@ -135,8 +145,7 @@ impl UaxFile {
     /// Returns an error if the animation pointer chain or duration field is
     /// absent or truncated.
     pub fn duration(&self) -> Result<f32> {
-        let off = self.animation_struct_offset()?;
-        read_f32_le(&self.chunk_data, off + animation::DURATION).ok_or(Error::UnexpectedEof)
+        self.animation_f32(animation::DURATION, "animation duration")
     }
 
     /// Set animation duration in seconds.
@@ -146,12 +155,22 @@ impl UaxFile {
     /// Returns an error if the animation pointer chain or duration field is
     /// absent or truncated.
     pub fn set_duration(&mut self, duration: f32) -> Result<()> {
-        let off = self.animation_struct_offset()?;
-        let pos = off + animation::DURATION;
-        if pos + 4 > self.chunk_data.len() {
-            return Err(Error::UnexpectedEof);
-        }
-        self.chunk_data[pos..pos + 4].copy_from_slice(&duration.to_le_bytes());
+        let animation_offset = self.animation_struct_offset()?;
+        let position =
+            self.field_offset(animation_offset, animation::DURATION, "animation duration")?;
+        let end = position
+            .checked_add(4)
+            .ok_or(Error::SizeOverflow("animation duration"))?;
+        let chunk_size = self.chunk_data.len();
+        self.chunk_data
+            .get_mut(position..end)
+            .ok_or(Error::InvalidRange {
+                field: "animation duration",
+                offset: position,
+                size: 4,
+                chunk_size,
+            })?
+            .copy_from_slice(&duration.to_bits().to_le_bytes());
         Ok(())
     }
 
@@ -162,8 +181,7 @@ impl UaxFile {
     /// Returns an error if the animation pointer chain or time-step field is
     /// absent or truncated.
     pub fn time_step(&self) -> Result<f32> {
-        let off = self.animation_struct_offset()?;
-        read_f32_le(&self.chunk_data, off + animation::TIME_STEP).ok_or(Error::UnexpectedEof)
+        self.animation_f32(animation::TIME_STEP, "animation time step")
     }
 
     /// Get animation oversampling factor.
@@ -173,19 +191,99 @@ impl UaxFile {
     /// Returns an error if the animation pointer chain or oversampling field
     /// is absent or truncated.
     pub fn oversampling(&self) -> Result<f32> {
-        let off = self.animation_struct_offset()?;
-        read_f32_le(&self.chunk_data, off + animation::OVERSAMPLING).ok_or(Error::UnexpectedEof)
+        self.animation_f32(animation::OVERSAMPLING, "animation oversampling")
     }
 
     /// Resolve the offset of the first animation struct within `chunk_data`.
     ///
     /// `file_info` has Animations** at +0x7C → ptr array → first animation struct.
     fn animation_struct_offset(&self) -> Result<usize> {
-        let fi = &self.chunk_data;
-        // Animations** → array of pointers
-        let arr = read_ptr(fi, file_info::ANIMATIONS_PTR).ok_or(Error::NoAnimations)?;
-        // First animation pointer
-        read_ptr(fi, arr).ok_or(Error::NoAnimations)
+        let signed_count = self.animation_count()?;
+        if signed_count < 0 {
+            return Err(Error::InvalidCount("animation count", signed_count));
+        }
+        if signed_count == 0 {
+            return Err(Error::NoAnimations);
+        }
+        let array = self.required_pointer(file_info::ANIMATIONS_PTR, "animation pointer array")?;
+        self.range(array, 8, "first animation pointer")?;
+        let animation = self.required_pointer(array, "first animation")?;
+        self.range(animation, animation::SIZE, "animation")?;
+        Ok(animation)
+    }
+
+    fn validate_from_file_name(&self) -> Result<()> {
+        let pointer = self.required_pointer(file_info::FROM_FILE_NAME_PTR, "FromFileName")?;
+        let value = self.string_at(pointer)?;
+        if !value.eq_ignore_ascii_case(UAX_FROM_FILENAME) {
+            return Err(Error::InvalidFromFileName(value));
+        }
+        Ok(())
+    }
+
+    fn animation_f32(&self, relative: usize, field: &'static str) -> Result<f32> {
+        let animation = self.animation_struct_offset()?;
+        let offset = self.field_offset(animation, relative, field)?;
+        read_f32_le(&self.chunk_data, offset).ok_or(Error::InvalidRange {
+            field,
+            offset,
+            size: 4,
+            chunk_size: self.chunk_data.len(),
+        })
+    }
+
+    fn field_offset(&self, base: usize, relative: usize, field: &'static str) -> Result<usize> {
+        let offset = base
+            .checked_add(relative)
+            .ok_or(Error::SizeOverflow(field))?;
+        if offset > self.chunk_data.len() {
+            return Err(Error::InvalidRange {
+                field,
+                offset,
+                size: 0,
+                chunk_size: self.chunk_data.len(),
+            });
+        }
+        Ok(offset)
+    }
+
+    fn range(&self, offset: usize, size: usize, field: &'static str) -> Result<&[u8]> {
+        let end = offset.checked_add(size).ok_or(Error::SizeOverflow(field))?;
+        self.chunk_data.get(offset..end).ok_or(Error::InvalidRange {
+            field,
+            offset,
+            size,
+            chunk_size: self.chunk_data.len(),
+        })
+    }
+
+    fn optional_pointer(&self, offset: usize, field: &'static str) -> Result<Option<usize>> {
+        let raw = read_u64_le(&self.chunk_data, offset).ok_or(Error::InvalidRange {
+            field,
+            offset,
+            size: 8,
+            chunk_size: self.chunk_data.len(),
+        })?;
+        if raw == 0 {
+            return Ok(None);
+        }
+        let pointer = usize::try_from(raw)
+            .map_err(|_| Error::InvalidPointerOffset(raw, self.chunk_data.len()))?;
+        if pointer >= self.chunk_data.len() {
+            return Err(Error::InvalidPointerOffset(raw, self.chunk_data.len()));
+        }
+        Ok(Some(pointer))
+    }
+
+    fn required_pointer(&self, offset: usize, field: &'static str) -> Result<usize> {
+        self.optional_pointer(offset, field)?
+            .ok_or(Error::NullPointer(field))
+    }
+
+    fn string_at(&self, offset: usize) -> Result<String> {
+        read_cstring(&self.chunk_data, offset).ok_or(Error::StringReadError(
+            u64::try_from(offset).unwrap_or(u64::MAX),
+        ))
     }
 }
 

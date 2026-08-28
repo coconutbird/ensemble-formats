@@ -1,303 +1,253 @@
-//! Granny type tree emission for UAX curve data and `file_info` schema.
-//! Each type member is 44 bytes on disk. Terminated by a 44-byte zero entry.
+//! Embedded Granny curve type definitions.
 //!
-//! Two-pass design: build into a temp buffer to measure size, then copy
-//! into the final chunk at a known offset. All internal pointers in the
-//! temp buffer are relative to the temp buffer start and get rebased on copy.
+//! Every member is a packed 44-byte descriptor. Curve variants point at one
+//! of these trees so `GrannyRebasePointers` can traverse referenced arrays.
 
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use super::string_table::StringTable;
+use crate::{Error, Result};
 
-const STRIDE: usize = 44;
+const MEMBER_SIZE: usize = 44;
+const INLINE: u32 = 1;
+const REFERENCE_TO_ARRAY: u32 = 3;
+const REAL32: u32 = 10;
+const UINT8: u32 = 12;
+const INT16: u32 = 15;
+const UINT16: u32 = 16;
 
-// Granny member type IDs
-const I: u32 = 1; // Inline
-const R: u32 = 2; // Reference
-const RA: u32 = 3; // ReferenceToArray
-const AR: u32 = 4; // ArrayOfReferences
-const VR: u32 = 5; // VariantReference
-const S: u32 = 8; // String
-const TX: u32 = 9; // Transform
-const F32: u32 = 10; // Real32
-const U8: u32 = 12; // UInt8
-const I16: u32 = 15; // Int16
-const U16: u32 = 16; // UInt16
-const I32: u32 = 19; // Int32
-
-struct M {
-    ty: u32,
+struct Member {
+    kind: u32,
     name: &'static str,
-    aw: u32,
-    sub: Option<Vec<M>>,
+    array_width: u32,
+    reference_type: Option<Vec<Member>>,
 }
 
-fn m(ty: u32, n: &'static str) -> M {
-    M {
-        ty,
-        name: n,
-        aw: 0,
-        sub: None,
-    }
-}
-fn ma(ty: u32, n: &'static str, aw: u32) -> M {
-    M {
-        ty,
-        name: n,
-        aw,
-        sub: None,
-    }
-}
-fn mr(ty: u32, n: &'static str, s: Vec<M>) -> M {
-    M {
-        ty,
-        name: n,
-        aw: 0,
-        sub: Some(s),
+fn member(member_type: u32, name: &'static str) -> Member {
+    Member {
+        kind: member_type,
+        name,
+        array_width: 0,
+        reference_type: None,
     }
 }
 
-/// Emit type members into `tmp`. Returns offset (relative to tmp start) where this def begins.
-/// String name pointers are recorded as fixups keyed by `(base + offset_within_tmp)`.
-fn emit(tmp: &mut Vec<u8>, base: usize, st: &mut StringTable, ms: &[M]) -> usize {
-    let start = tmp.len();
-    let mut deferred: Vec<(usize, &[M])> = Vec::new();
-    for member in ms {
-        tmp.extend_from_slice(&member.ty.to_le_bytes()); // +0  MemberType
-        let np = tmp.len();
-        tmp.extend_from_slice(&0u64.to_le_bytes()); // +4  NamePtr (patched)
-        if !member.name.is_empty() {
-            st.add(base + np, String::from(member.name));
-        }
-        let rp = tmp.len();
-        tmp.extend_from_slice(&0u64.to_le_bytes()); // +12 ReferenceTypePtr
-        tmp.extend_from_slice(&member.aw.to_le_bytes()); // +20 ArrayWidth
-        tmp.extend_from_slice(&[0u8; 20]); // +24 Extra[3]+Unused[2]
-        if let Some(ref s) = member.sub
-            && !s.is_empty()
-        {
-            deferred.push((rp, s.as_slice()));
-        }
-    }
-    tmp.extend_from_slice(&[0u8; STRIDE]); // terminator
-    // Emit nested types and patch reference pointers (relative to tmp start → rebased to base)
-    for (rp, nested) in deferred {
-        let nested_off = emit(tmp, base, st, nested);
-        let abs = (base + nested_off) as u64;
-        tmp[rp..rp + 8].copy_from_slice(&abs.to_le_bytes());
-    }
-    start
-}
-
-/// Build a type tree into a temporary buffer. Returns the temp bytes.
-fn build_tree(base: usize, st: &mut StringTable, ms: &[M]) -> Vec<u8> {
-    let mut tmp = Vec::new();
-    emit(&mut tmp, base, st, ms);
-    tmp
-}
-
-fn hdr(n: &'static str) -> M {
-    mr(I, n, vec![m(U8, "Format"), m(U8, "Degree")])
-}
-
-fn curve_ms(fmt: u8) -> Vec<M> {
-    match fmt {
-        0 => vec![
-            hdr("CurveDataHeader_DaKeyframes32f"),
-            m(I16, "Dimension"),
-            mr(RA, "Controls", vec![m(F32, "Real32")]),
-        ],
-        1 => vec![
-            hdr("CurveDataHeader_DaK32fC32f"),
-            m(I16, "Padding"),
-            mr(RA, "Knots", vec![m(F32, "Real32")]),
-            mr(RA, "Controls", vec![m(F32, "Real32")]),
-        ],
-        2 => vec![hdr("CurveDataHeader_DaIdentity"), m(I16, "Dimension")],
-        3 => vec![
-            hdr("CurveDataHeader_DaConstant32f"),
-            m(I16, "Padding"),
-            mr(RA, "Controls", vec![m(F32, "Real32")]),
-        ],
-        4 => vec![
-            hdr("CurveDataHeader_D3Constant32f"),
-            m(I16, "Padding"),
-            ma(F32, "Controls", 3),
-        ],
-        5 => vec![
-            hdr("CurveDataHeader_D4Constant32f"),
-            m(I16, "Padding"),
-            ma(F32, "Controls", 4),
-        ],
-        8 => vec![
-            hdr("CurveDataHeader_D4nK16uC15u"),
-            m(U16, "ScaleOffsetTableEntries"),
-            m(F32, "OneOverKnotScale"),
-            mr(RA, "KnotsControls", vec![m(U16, "UInt16")]),
-        ],
-        9 => vec![
-            hdr("CurveDataHeader_D4nK8uC7u"),
-            m(U16, "ScaleOffsetTableEntries"),
-            m(F32, "OneOverKnotScale"),
-            mr(RA, "KnotsControls", vec![m(U8, "UInt8")]),
-        ],
-        10 => vec![
-            hdr("CurveDataHeader_D3K16uC16u"),
-            m(U16, "OneOverKnotScaleTrunc"),
-            ma(F32, "ControlScales", 3),
-            ma(F32, "ControlOffsets", 3),
-            mr(RA, "KnotsControls", vec![m(U16, "UInt16")]),
-        ],
-        11 => vec![
-            hdr("CurveDataHeader_D3K8uC8u"),
-            m(U16, "OneOverKnotScaleTrunc"),
-            ma(F32, "ControlScales", 3),
-            ma(F32, "ControlOffsets", 3),
-            mr(RA, "KnotsControls", vec![m(U8, "UInt8")]),
-        ],
-        17 => vec![
-            hdr("CurveDataHeader_D3I1K16uC16u"),
-            m(U16, "OneOverKnotScaleTrunc"),
-            ma(F32, "ControlScales", 3),
-            ma(F32, "ControlOffsets", 3),
-            mr(RA, "KnotsControls", vec![m(U16, "UInt16")]),
-        ],
-        18 => vec![
-            hdr("CurveDataHeader_D3I1K8uC8u"),
-            m(U16, "OneOverKnotScaleTrunc"),
-            ma(F32, "ControlScales", 3),
-            ma(F32, "ControlOffsets", 3),
-            mr(RA, "KnotsControls", vec![m(U8, "UInt8")]),
-        ],
-        _ => vec![hdr("CurveDataHeader_Unknown")],
+fn array_member(member_type: u32, name: &'static str, array_width: u32) -> Member {
+    Member {
+        kind: member_type,
+        name,
+        array_width,
+        reference_type: None,
     }
 }
 
-fn fi_ms() -> Vec<M> {
+fn reference_member(member_type: u32, name: &'static str, members: Vec<Member>) -> Member {
+    Member {
+        kind: member_type,
+        name,
+        array_width: 0,
+        reference_type: Some(members),
+    }
+}
+
+fn header(name: &'static str) -> Member {
+    reference_member(
+        INLINE,
+        name,
+        vec![member(UINT8, "Format"), member(UINT8, "Degree")],
+    )
+}
+
+fn real32_array(name: &'static str) -> Member {
+    reference_member(REFERENCE_TO_ARRAY, name, vec![member(REAL32, "Real32")])
+}
+
+fn uint16_array(name: &'static str) -> Member {
+    reference_member(REFERENCE_TO_ARRAY, name, vec![member(UINT16, "UInt16")])
+}
+
+fn uint8_array(name: &'static str) -> Member {
+    reference_member(REFERENCE_TO_ARRAY, name, vec![member(UINT8, "UInt8")])
+}
+
+fn d3_members(name: &'static str, element_type: u32, element_name: &'static str) -> Vec<Member> {
     vec![
-        mr(
-            R,
-            "ArtToolInfo",
-            vec![
-                m(S, "FromArtToolName"),
-                m(I32, "ArtToolMajorRevision"),
-                m(I32, "ArtToolMinorRevision"),
-                m(I32, "ArtToolPointerSize"),
-                m(F32, "UnitsPerMeter"),
-                ma(F32, "Origin", 3),
-                ma(F32, "RightVector", 3),
-                ma(F32, "UpVector", 3),
-                ma(F32, "BackVector", 3),
-                m(VR, "ExtendedData"),
-            ],
+        header(name),
+        member(UINT16, "OneOverKnotScaleTrunc"),
+        array_member(REAL32, "ControlScales", 3),
+        array_member(REAL32, "ControlOffsets", 3),
+        reference_member(
+            REFERENCE_TO_ARRAY,
+            "KnotsControls",
+            vec![member(element_type, element_name)],
         ),
-        mr(
-            R,
-            "ExporterInfo",
-            vec![
-                m(S, "ExporterName"),
-                m(I32, "ExporterMajorRevision"),
-                m(I32, "ExporterMinorRevision"),
-                m(I32, "ExporterCustomization"),
-                m(I32, "ExporterBuildNumber"),
-                m(VR, "ExtendedData"),
-            ],
-        ),
-        m(S, "FromFileName"),
-        mr(
-            AR,
-            "Textures",
-            vec![m(S, "FromFileName"), m(VR, "ExtendedData")],
-        ),
-        mr(AR, "Materials", vec![m(S, "Name"), m(VR, "ExtendedData")]),
-        mr(AR, "Skeletons", vec![m(S, "Name"), m(VR, "ExtendedData")]),
-        mr(AR, "VertexDatas", vec![m(VR, "ExtendedData")]),
-        mr(AR, "TriTopologies", vec![m(VR, "ExtendedData")]),
-        mr(AR, "Meshes", vec![m(S, "Name"), m(VR, "ExtendedData")]),
-        mr(AR, "Models", vec![m(S, "Name"), m(VR, "ExtendedData")]),
-        mr(
-            AR,
-            "TrackGroups",
-            vec![
-                m(S, "Name"),
-                mr(RA, "VectorTracks", vec![]),
-                mr(
-                    RA,
-                    "TransformTracks",
-                    vec![
-                        m(S, "Name"),
-                        m(I32, "Flags"),
-                        m(VR, "OrientationCurve"),
-                        m(VR, "PositionCurve"),
-                        m(VR, "ScaleShearCurve"),
-                    ],
-                ),
-                mr(RA, "TransformLODErrors", vec![m(F32, "Real32")]),
-                mr(RA, "TextTracks", vec![]),
-                m(TX, "InitialPlacement"),
-                m(I32, "AccumulationFlags"),
-                ma(F32, "LoopTranslation", 3),
-                mr(R, "PeriodicLoop", vec![]),
-                m(VR, "ExtendedData"),
-            ],
-        ),
-        mr(
-            AR,
-            "Animations",
-            vec![
-                m(S, "Name"),
-                m(F32, "Duration"),
-                m(F32, "TimeStep"),
-                m(F32, "Oversampling"),
-                mr(AR, "TrackGroups", vec![]),
-                m(I32, "DefaultLoopCount"),
-                m(I32, "Flags"),
-                m(VR, "ExtendedData"),
-            ],
-        ),
-        m(VR, "ExtendedData"),
     ]
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
-
-/// Compute the byte size of a curve format's type tree.
-pub(super) fn curve_type_tree_size(fmt: u8) -> usize {
-    let ms = curve_ms(fmt);
-    let mut st = StringTable::new();
-    build_tree(0, &mut st, &ms).len()
+fn curve_members(format: u8) -> Option<Vec<Member>> {
+    let members = match format {
+        0 => vec![
+            header("CurveDataHeader_DaKeyframes32f"),
+            member(INT16, "Dimension"),
+            real32_array("Controls"),
+        ],
+        1 => vec![
+            header("CurveDataHeader_DaK32fC32f"),
+            member(INT16, "Padding"),
+            real32_array("Knots"),
+            real32_array("Controls"),
+        ],
+        2 => vec![
+            header("CurveDataHeader_DaIdentity"),
+            member(INT16, "Dimension"),
+        ],
+        3 => vec![
+            header("CurveDataHeader_DaConstant32f"),
+            member(INT16, "Padding"),
+            real32_array("Controls"),
+        ],
+        4 => vec![
+            header("CurveDataHeader_D3Constant32f"),
+            member(INT16, "Padding"),
+            array_member(REAL32, "Controls", 3),
+        ],
+        5 => vec![
+            header("CurveDataHeader_D4Constant32f"),
+            member(INT16, "Padding"),
+            array_member(REAL32, "Controls", 4),
+        ],
+        6 => vec![
+            header("CurveDataHeader_DaK16uC16u"),
+            member(UINT16, "OneOverKnotScaleTrunc"),
+            real32_array("ControlScaleOffsets"),
+            uint16_array("KnotsControls"),
+        ],
+        7 => vec![
+            header("CurveDataHeader_DaK8uC8u"),
+            member(UINT16, "OneOverKnotScaleTrunc"),
+            real32_array("ControlScaleOffsets"),
+            uint8_array("KnotsControls"),
+        ],
+        8 => vec![
+            header("CurveDataHeader_D4nK16uC15u"),
+            member(UINT16, "ScaleOffsetTableEntries"),
+            member(REAL32, "OneOverKnotScale"),
+            uint16_array("KnotsControls"),
+        ],
+        9 => vec![
+            header("CurveDataHeader_D4nK8uC7u"),
+            member(UINT16, "ScaleOffsetTableEntries"),
+            member(REAL32, "OneOverKnotScale"),
+            uint8_array("KnotsControls"),
+        ],
+        10 => d3_members("CurveDataHeader_D3K16uC16u", UINT16, "UInt16"),
+        11 => d3_members("CurveDataHeader_D3K8uC8u", UINT8, "UInt8"),
+        12 => vec![
+            header("CurveDataHeader_D9I1K16uC16u"),
+            member(UINT16, "OneOverKnotScaleTrunc"),
+            member(REAL32, "ControlScale"),
+            member(REAL32, "ControlOffset"),
+            uint16_array("KnotsControls"),
+        ],
+        13 => d3_members("CurveDataHeader_D9I3K16uC16u", UINT16, "UInt16"),
+        14 => vec![
+            header("CurveDataHeader_D9I1K8uC8u"),
+            member(UINT16, "OneOverKnotScaleTrunc"),
+            member(REAL32, "ControlScale"),
+            member(REAL32, "ControlOffset"),
+            uint8_array("KnotsControls"),
+        ],
+        15 => d3_members("CurveDataHeader_D9I3K8uC8u", UINT8, "UInt8"),
+        16 => vec![
+            header("CurveDataHeader_D3I1K32fC32f"),
+            member(UINT16, "Padding"),
+            array_member(REAL32, "ControlScales", 3),
+            array_member(REAL32, "ControlOffsets", 3),
+            real32_array("KnotsControls"),
+        ],
+        17 => d3_members("CurveDataHeader_D3I1K16uC16u", UINT16, "UInt16"),
+        18 => d3_members("CurveDataHeader_D3I1K8uC8u", UINT8, "UInt8"),
+        _ => return None,
+    };
+    Some(members)
 }
 
-/// Approximate size of the `file_info` type tree.
-pub(super) const FILE_INFO_TYPE_TREE_SIZE: usize = 8000; // generous upper bound; actual copy truncates
-
-/// Write a curve type tree at `offset` in `buf`. `buf` must be large enough.
-pub(super) fn write_curve_type_tree(
-    buf: &mut [u8],
+fn emit_members(
+    output: &mut Vec<u8>,
+    output_base: usize,
     strings: &mut StringTable,
-    fmt: u8,
-    offset: usize,
-) {
-    let ms = curve_ms(fmt);
-    let tree = build_tree(offset, strings, &ms);
-    buf[offset..offset + tree.len()].copy_from_slice(&tree);
-}
-
-/// Write the `file_info` type tree at `offset` in `buf` and return the actual size written.
-pub(super) fn write_file_info_type_tree(
-    buf: &mut Vec<u8>,
-    strings: &mut StringTable,
-    offset: usize,
-) {
-    let ms = fi_ms();
-    let tree = build_tree(offset, strings, &ms);
-    let end = offset + tree.len();
-    if end > buf.len() {
-        buf.resize(end, 0);
+    members: &[Member],
+) -> Result<usize> {
+    let start = output.len();
+    let mut deferred = Vec::new();
+    for item in members {
+        output.extend_from_slice(&item.kind.to_le_bytes());
+        let name_pointer = output.len();
+        output.extend_from_slice(&0_u64.to_le_bytes());
+        if !item.name.is_empty() {
+            let fixup = output_base
+                .checked_add(name_pointer)
+                .ok_or(Error::SizeOverflow("curve type name pointer"))?;
+            strings.add(fixup, String::from(item.name));
+        }
+        let reference_pointer = output.len();
+        output.extend_from_slice(&0_u64.to_le_bytes());
+        output.extend_from_slice(&item.array_width.to_le_bytes());
+        output.extend_from_slice(&[0; 20]);
+        if let Some(reference_type) = &item.reference_type {
+            deferred.push((reference_pointer, reference_type.as_slice()));
+        }
     }
-    buf[offset..end].copy_from_slice(&tree);
+    output.extend_from_slice(&[0; MEMBER_SIZE]);
+
+    for (pointer_position, reference_type) in deferred {
+        let reference_offset = emit_members(output, output_base, strings, reference_type)?;
+        let absolute_offset = output_base
+            .checked_add(reference_offset)
+            .ok_or(Error::SizeOverflow("curve reference type pointer"))?;
+        let pointer = u64::try_from(absolute_offset)
+            .map_err(|_| Error::SizeOverflow("curve reference type pointer"))?;
+        let pointer_end = pointer_position
+            .checked_add(8)
+            .ok_or(Error::SizeOverflow("curve reference type fixup"))?;
+        output
+            .get_mut(pointer_position..pointer_end)
+            .ok_or(Error::SizeOverflow("curve reference type fixup"))?
+            .copy_from_slice(&pointer.to_le_bytes());
+    }
+    Ok(start)
+}
+
+fn build_tree(base: usize, strings: &mut StringTable, members: &[Member]) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    emit_members(&mut output, base, strings, members)?;
+    Ok(output)
+}
+
+/// Return the serialized byte size of one curve type tree.
+pub(super) fn curve_type_tree_size(format: u8) -> Result<usize> {
+    let members = curve_members(format).ok_or(Error::UnsupportedCurveFormat(format))?;
+    let mut strings = StringTable::new();
+    Ok(build_tree(0, &mut strings, &members)?.len())
+}
+
+/// Write one curve type tree at `offset`.
+pub(super) fn write_curve_type_tree(
+    output: &mut [u8],
+    strings: &mut StringTable,
+    format: u8,
+    offset: usize,
+) -> Result<()> {
+    let members = curve_members(format).ok_or(Error::UnsupportedCurveFormat(format))?;
+    let tree = build_tree(offset, strings, &members)?;
+    let end = offset
+        .checked_add(tree.len())
+        .ok_or(Error::SizeOverflow("curve type tree"))?;
+    let destination = output
+        .get_mut(offset..end)
+        .ok_or(Error::SizeOverflow("curve type tree buffer"))?;
+    destination.copy_from_slice(&tree);
+    Ok(())
 }
