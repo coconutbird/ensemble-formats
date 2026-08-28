@@ -7,9 +7,13 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "ugx"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 ugx = { workspace = true }
@@ -17,4 +21,4 @@ ugx-gltf = { workspace = true }
 ecf = { workspace = true }
 clap = { workspace = true }
 thiserror = { workspace = true }
-serde_json = "1.0"
+serde_json.workspace = true

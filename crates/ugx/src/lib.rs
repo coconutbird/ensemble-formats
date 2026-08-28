@@ -46,7 +46,7 @@
 //!
 //! for (i, section) in geom.sections.iter().enumerate() {
 //!     let vertices = geom.unpack_section_vertices(i).expect("unpack failed");
-//!     let indices = geom.get_section_indices(i);
+//!     let indices = geom.get_section_indices(i).expect("indices unavailable");
 //!     println!("Section {i}: {} verts, {} tris", vertices.len(), indices.len() / 3);
 //! }
 //! ```
@@ -73,3 +73,32 @@ pub use reader::{Reader, read_materials};
 
 mod writer;
 pub use writer::Writer;
+
+pub(crate) fn checked_usize(value: u64, context: &'static str) -> Result<usize> {
+    usize::try_from(value).map_err(|_| Error::SizeOverflow(context))
+}
+
+pub(crate) fn checked_usize_i32(value: i32, context: &'static str) -> Result<usize> {
+    let value = u64::try_from(value).map_err(|_| Error::SizeOverflow(context))?;
+    checked_usize(value, context)
+}
+
+pub(crate) fn checked_u32(value: usize, context: &'static str) -> Result<u32> {
+    u32::try_from(value).map_err(|_| Error::SizeOverflow(context))
+}
+
+pub(crate) fn checked_i32(value: usize, context: &'static str) -> Result<i32> {
+    i32::try_from(value).map_err(|_| Error::SizeOverflow(context))
+}
+
+pub(crate) fn advance_position(
+    position: &mut usize,
+    amount: u64,
+    context: &'static str,
+) -> Result<()> {
+    let amount = checked_usize(amount, context)?;
+    *position = position
+        .checked_add(amount)
+        .ok_or(Error::SizeOverflow(context))?;
+    Ok(())
+}

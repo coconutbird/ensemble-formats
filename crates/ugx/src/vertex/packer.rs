@@ -1,6 +1,6 @@
-//! UnivertPacker - vertex format descriptor.
+//! `UnivertPacker` - vertex format descriptor.
 //!
-//! The UnivertPacker describes how vertex attributes are packed in the vertex buffer.
+//! The `UnivertPacker` describes how vertex attributes are packed in the vertex buffer.
 //! It uses a string-based "pack order" to specify which attributes are present and
 //! in what order, along with type specifiers for each attribute.
 //!
@@ -16,23 +16,23 @@
 //! | Character | Meaning            | Example                      |
 //! |-----------|--------------------|-----------------------------|
 //! | `P`       | Position           | Float4 (16 bytes)           |
-//! | `B#`      | Basis (T/B/N)      | 3x Dec3N (12 bytes)         |
-//! | `N`       | Normal only        | Dec3N (4 bytes)             |
-//! | `T#`      | TexCoord set #     | HalfFloat2 (4 bytes)        |
-//! | `S`       | Skin (idx+weights) | UByte4 + UByte4N (8 bytes)  |
-//! | `D`       | Diffuse color      | D3DColor (4 bytes)          |
+//! | `B#`      | Basis (T/B/N)      | 3x `Dec3N` (12 bytes)         |
+//! | `N`       | Normal only        | `Dec3N` (4 bytes)             |
+//! | `T#`      | `TexCoord` set #     | `HalfFloat2` (4 bytes)        |
+//! | `S`       | Skin (idx+weights) | `UByte4` + `UByte4N` (8 bytes)  |
+//! | `D`       | Diffuse color      | `D3DColor` (4 bytes)          |
 //! | `I`       | Vertex index       | Short2 (4 bytes)            |
-//! | `X#`      | Basis scale        | HalfFloat2 (4 bytes)        |
+//! | `X#`      | Basis scale        | `HalfFloat2` (4 bytes)        |
 //!
 //! ## Common Pack Order Examples
 //!
-//! - `"PBNT0S"` - Position, Basis, Normal, TexCoord0, Skin (skinned mesh)
-//! - `"PNT0"` - Position, Normal, TexCoord0 (static mesh)
+//! - `"PBNT0S"` - Position, Basis, Normal, `TexCoord0`, Skin (skinned mesh)
+//! - `"PNT0"` - Position, Normal, `TexCoord0` (static mesh)
 //! - `"PB0NT0T1S"` - Multiple texcoords (e.g., diffuse + lightmap)
 //!
 //! # On-Disk Layout (84 bytes)
 //!
-//! The packed format in BCachedData chunk differs from in-memory (104 bytes on x64):
+//! The packed format in `BCachedData` chunk differs from in-memory (104 bytes on x64):
 //! - Strings are stored as offsets (8 bytes each)
 //! - Element types are stored as u32 enums
 //!
@@ -40,13 +40,13 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use num_traits::ToPrimitive;
 
 use crate::error::{Error, Result};
 use crate::vertex::element::VertexElementType;
 
 /// Vertex element specifiers used in pack order strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum VertexElementSpec {
     /// Position (P).
     Position,
@@ -77,7 +77,7 @@ pub struct UnpackedVertex {
     pub tangent: [f32; 4],
     /// Binormal [x, y, z, w].
     pub binormal: [f32; 4],
-    /// Texture coordinates (up to MAX_UV sets).
+    /// Texture coordinates (up to `MAX_UV` sets).
     pub texcoords: [[f32; 2]; MAX_UV],
     /// Number of texcoord sets.
     pub num_texcoords: usize,
@@ -94,7 +94,7 @@ pub struct UnpackedVertex {
 /// Maximum number of UV coordinate sets.
 pub const MAX_UV: usize = 8;
 
-/// UnivertPacker - describes vertex format and unpacks vertices.
+/// `UnivertPacker` - describes vertex format and unpacks vertices.
 #[derive(Debug, Clone)]
 pub struct UnivertPacker {
     /// Position element type.
@@ -143,9 +143,13 @@ impl Default for UnivertPacker {
 }
 
 impl UnivertPacker {
-    /// Read a UnivertPacker from raw bytes (legacy unpacked format).
+    /// Read a `UnivertPacker` from raw bytes (legacy unpacked format).
     /// Note: The packed format is read differently in ugx.rs.
-    #[allow(dead_code)]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is truncated, contains an invalid vertex
+    /// element type, or contains invalid UTF-8.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
         fn read_u8(data: &[u8], pos: &mut usize) -> Result<u8> {
             if *pos >= data.len() {
@@ -188,6 +192,7 @@ impl UnivertPacker {
     }
 
     /// Calculate the size in bytes of a single vertex.
+    #[must_use]
     pub fn vertex_size(&self) -> usize {
         let mut size = 0;
         let mut chars = self.pack_order.chars().peekable();
@@ -212,7 +217,11 @@ impl UnivertPacker {
                 }
                 'N' => size += self.normal_type.size(),
                 'T' => {
-                    let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+                    let idx = chars
+                        .next()
+                        .and_then(|c| c.to_digit(10))
+                        .and_then(|value| usize::try_from(value).ok())
+                        .unwrap_or_default();
                     if idx < MAX_UV {
                         size += self.uv_types[idx].size();
                     }
@@ -231,6 +240,11 @@ impl UnivertPacker {
     }
 
     /// Unpack a single vertex from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vertex data is truncated or contains a value
+    /// that cannot be represented by the declared format.
     pub fn unpack_vertex(&self, data: &[u8], pos: &mut usize) -> Result<UnpackedVertex> {
         let mut vertex = UnpackedVertex::default();
         let mut chars = self.pack_order.chars().peekable();
@@ -242,16 +256,16 @@ impl UnivertPacker {
                     vertex.position = [v[0], v[1], v[2]];
                 }
                 'B' => {
-                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    chars.next();
                     vertex.tangent = self.basis_type.unpack(data, pos)?;
                     vertex.binormal = self.basis_type.unpack(data, pos)?;
                 }
                 'A' => {
-                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    chars.next();
                     vertex.tangent = self.tangent_type.unpack(data, pos)?;
                 }
                 'X' => {
-                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    chars.next();
                     let scale = self.basis_scale_type.unpack(data, pos)?;
                     vertex.tangent[3] = scale[0];
                     vertex.binormal[3] = scale[1];
@@ -261,7 +275,11 @@ impl UnivertPacker {
                     vertex.normal = [v[0], v[1], v[2]];
                 }
                 'T' => {
-                    let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+                    let idx = chars
+                        .next()
+                        .and_then(|c| c.to_digit(10))
+                        .and_then(|value| usize::try_from(value).ok())
+                        .unwrap_or_default();
                     if idx < MAX_UV {
                         let v = self.uv_types[idx].unpack(data, pos)?;
                         vertex.texcoords[idx] = [v[0], v[1]];
@@ -279,7 +297,10 @@ impl UnivertPacker {
                 }
                 'I' => {
                     let v = self.index_type.unpack(data, pos)?;
-                    vertex.index = v[0] as i16;
+                    vertex.index = v[0]
+                        .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+                        .to_i16()
+                        .unwrap_or_default();
                 }
                 _ => {}
             }
@@ -307,16 +328,16 @@ impl UnivertPacker {
                     self.pos_type.pack(out, v);
                 }
                 'B' => {
-                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    chars.next();
                     self.basis_type.pack(out, vertex.tangent);
                     self.basis_type.pack(out, vertex.binormal);
                 }
                 'A' => {
-                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    chars.next();
                     self.tangent_type.pack(out, vertex.tangent);
                 }
                 'X' => {
-                    let _idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                    chars.next();
                     let scale = [vertex.tangent[3], vertex.binormal[3], 0.0, 1.0];
                     self.basis_scale_type.pack(out, scale);
                 }
@@ -325,7 +346,11 @@ impl UnivertPacker {
                     self.normal_type.pack(out, v);
                 }
                 'T' => {
-                    let idx = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+                    let idx = chars
+                        .next()
+                        .and_then(|c| c.to_digit(10))
+                        .and_then(|value| usize::try_from(value).ok())
+                        .unwrap_or_default();
                     if idx < MAX_UV {
                         let v = [vertex.texcoords[idx][0], vertex.texcoords[idx][1], 0.0, 1.0];
                         self.uv_types[idx].pack(out, v);
@@ -339,7 +364,7 @@ impl UnivertPacker {
                     self.diffuse_type.pack(out, vertex.diffuse);
                 }
                 'I' => {
-                    let v = [vertex.index as f32, 0.0, 0.0, 1.0];
+                    let v = [f32::from(vertex.index), 0.0, 0.0, 1.0];
                     self.index_type.pack(out, v);
                 }
                 _ => {}
@@ -348,12 +373,13 @@ impl UnivertPacker {
     }
 
     /// Check if this packer is empty (no pack order).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pack_order.is_empty()
     }
 }
 
-/// Read a "BigString" - length-prefixed string used in UGX.
+/// Read a "`BigString`" - length-prefixed string used in UGX.
 fn read_big_string(data: &[u8], pos: &mut usize) -> Result<String> {
     let end = *pos + 4;
     if end > data.len() {

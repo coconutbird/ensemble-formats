@@ -26,6 +26,11 @@ impl DdxTexture {
     ///
     /// This decompresses DXT/BC formats to standard RGBA8.
     /// Only decodes the base mip level (mip0).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if dimensions overflow this platform, the base mip is
+    /// truncated, the texture format is unsupported, or block decoding fails.
     pub fn decode_to_rgba(&self) -> Result<DecodedTexture> {
         let width = self.info.width as usize;
         let height = self.info.height as usize;
@@ -35,147 +40,64 @@ impl DdxTexture {
         let mut pixels_u32 = vec![0u32; width * height];
 
         // Decode based on format
-        match self.info.data_format {
-            DataFormat::Dxt1 => {
-                // DXT1/BC1: 4x4 blocks, 8 bytes per block
-                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 8;
-                if texture_data.len() < expected_size {
-                    return Err(Error::DecompressionError(format!(
-                        "DXT1 data too small: expected {} bytes, have {}",
-                        expected_size,
-                        texture_data.len()
-                    )));
+        if decode_block_format(
+            self.info.data_format,
+            texture_data,
+            width,
+            height,
+            &mut pixels_u32,
+        )? {
+            // Block-compressed formats are handled by the helper above.
+        } else {
+            match self.info.data_format {
+                DataFormat::A8R8G8B8 => {
+                    // Raw 32-bit ARGB - just copy (reorder to RGBA)
+                    if self.data.len() < width * height * 4 {
+                        return Err(Error::DecompressionError("A8R8G8B8 data too small".into()));
+                    }
+                    for (i, chunk) in self.data.chunks(4).take(width * height).enumerate() {
+                        // ARGB -> RGBA (as u32)
+                        let a = u32::from(chunk[0]);
+                        let r = u32::from(chunk[1]);
+                        let g = u32::from(chunk[2]);
+                        let b = u32::from(chunk[3]);
+                        pixels_u32[i] = (a << 24) | (b << 16) | (g << 8) | r;
+                    }
                 }
-                texture2ddecoder::decode_bc1(
-                    &texture_data[..expected_size],
-                    width,
-                    height,
-                    &mut pixels_u32,
-                )
-                .map_err(|e| Error::DecompressionError(format!("BC1 decode error: {}", e)))?;
-            }
-            DataFormat::Dxt3 => {
-                // DXT3/BC2: 4x4 blocks, 16 bytes per block
-                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 16;
-                if texture_data.len() < expected_size {
-                    return Err(Error::DecompressionError(format!(
-                        "DXT3 data too small: expected {} bytes, have {}",
-                        expected_size,
-                        texture_data.len()
-                    )));
+                DataFormat::A8B8G8R8 => {
+                    // Raw 32-bit ABGR - reorder to RGBA
+                    if self.data.len() < width * height * 4 {
+                        return Err(Error::DecompressionError("A8B8G8R8 data too small".into()));
+                    }
+                    for (i, chunk) in self.data.chunks(4).take(width * height).enumerate() {
+                        // ABGR -> RGBA (as u32)
+                        let a = u32::from(chunk[0]);
+                        let b = u32::from(chunk[1]);
+                        let g = u32::from(chunk[2]);
+                        let r = u32::from(chunk[3]);
+                        pixels_u32[i] = (a << 24) | (b << 16) | (g << 8) | r;
+                    }
                 }
-                texture2ddecoder::decode_bc2(
-                    &texture_data[..expected_size],
-                    width,
-                    height,
-                    &mut pixels_u32,
-                )
-                .map_err(|e| Error::DecompressionError(format!("BC2 decode error: {}", e)))?;
-            }
-            DataFormat::Dxt5 | DataFormat::Dxt5N | DataFormat::Dxt5Y | DataFormat::Dxt5H => {
-                // DXT5/BC3: 4x4 blocks, 16 bytes per block
-                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 16;
-                if texture_data.len() < expected_size {
-                    return Err(Error::DecompressionError(format!(
-                        "DXT5 data too small: expected {} bytes, have {}",
-                        expected_size,
-                        texture_data.len()
-                    )));
+                DataFormat::A8 => {
+                    // 8-bit alpha only - expand to grayscale RGBA
+                    if self.data.len() < width * height {
+                        return Err(Error::DecompressionError("A8 data too small".into()));
+                    }
+                    for (i, &a) in self.data.iter().take(width * height).enumerate() {
+                        let v = u32::from(a);
+                        pixels_u32[i] = (v << 24) | (v << 16) | (v << 8) | v;
+                    }
                 }
-                texture2ddecoder::decode_bc3(
-                    &texture_data[..expected_size],
-                    width,
-                    height,
-                    &mut pixels_u32,
-                )
-                .map_err(|e| Error::DecompressionError(format!("BC3 decode error: {}", e)))?;
-            }
-            DataFormat::Dxn => {
-                // DXN/BC5: 4x4 blocks, 16 bytes per block (two-channel normal maps)
-                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 16;
-                if texture_data.len() < expected_size {
-                    return Err(Error::DecompressionError(format!(
-                        "DXN data too small: expected {} bytes, have {}",
-                        expected_size,
-                        texture_data.len()
-                    )));
+                _ => {
+                    return Err(Error::UnsupportedFormat(self.info.data_format));
                 }
-                texture2ddecoder::decode_bc5(
-                    &texture_data[..expected_size],
-                    width,
-                    height,
-                    &mut pixels_u32,
-                )
-                .map_err(|e| Error::DecompressionError(format!("BC5 decode error: {}", e)))?;
-            }
-            DataFormat::Bc7 => {
-                // BC7: 4x4 blocks, 16 bytes per block
-                let expected_size = width.div_ceil(4) * height.div_ceil(4) * 16;
-                if texture_data.len() < expected_size {
-                    return Err(Error::DecompressionError(format!(
-                        "BC7 data too small: expected {} bytes, have {}",
-                        expected_size,
-                        texture_data.len()
-                    )));
-                }
-                texture2ddecoder::decode_bc7(
-                    &texture_data[..expected_size],
-                    width,
-                    height,
-                    &mut pixels_u32,
-                )
-                .map_err(|e| Error::DecompressionError(format!("BC7 decode error: {}", e)))?;
-            }
-            DataFormat::A8R8G8B8 => {
-                // Raw 32-bit ARGB - just copy (reorder to RGBA)
-                if self.data.len() < width * height * 4 {
-                    return Err(Error::DecompressionError("A8R8G8B8 data too small".into()));
-                }
-                for (i, chunk) in self.data.chunks(4).take(width * height).enumerate() {
-                    // ARGB -> RGBA (as u32)
-                    let a = chunk[0] as u32;
-                    let r = chunk[1] as u32;
-                    let g = chunk[2] as u32;
-                    let b = chunk[3] as u32;
-                    pixels_u32[i] = (a << 24) | (b << 16) | (g << 8) | r;
-                }
-            }
-            DataFormat::A8B8G8R8 => {
-                // Raw 32-bit ABGR - reorder to RGBA
-                if self.data.len() < width * height * 4 {
-                    return Err(Error::DecompressionError("A8B8G8R8 data too small".into()));
-                }
-                for (i, chunk) in self.data.chunks(4).take(width * height).enumerate() {
-                    // ABGR -> RGBA (as u32)
-                    let a = chunk[0] as u32;
-                    let b = chunk[1] as u32;
-                    let g = chunk[2] as u32;
-                    let r = chunk[3] as u32;
-                    pixels_u32[i] = (a << 24) | (b << 16) | (g << 8) | r;
-                }
-            }
-            DataFormat::A8 => {
-                // 8-bit alpha only - expand to grayscale RGBA
-                if self.data.len() < width * height {
-                    return Err(Error::DecompressionError("A8 data too small".into()));
-                }
-                for (i, &a) in self.data.iter().take(width * height).enumerate() {
-                    let v = a as u32;
-                    pixels_u32[i] = (v << 24) | (v << 16) | (v << 8) | v;
-                }
-            }
-            _ => {
-                return Err(Error::UnsupportedFormat(self.info.data_format));
             }
         }
 
         // Convert u32 pixels (BGRA format from texture2ddecoder) to RGBA bytes
         let mut rgba = Vec::with_capacity(width * height * 4);
         for pixel in pixels_u32 {
-            let b = (pixel & 0xFF) as u8;
-            let g = ((pixel >> 8) & 0xFF) as u8;
-            let r = ((pixel >> 16) & 0xFF) as u8;
-            let a = ((pixel >> 24) & 0xFF) as u8;
+            let [b, g, r, a] = pixel.to_le_bytes();
             rgba.push(r);
             rgba.push(g);
             rgba.push(b);
@@ -188,6 +110,48 @@ impl DdxTexture {
             pixels: rgba,
         })
     }
+}
+
+fn decode_block_format(
+    format: DataFormat,
+    data: &[u8],
+    width: usize,
+    height: usize,
+    pixels: &mut [u32],
+) -> Result<bool> {
+    let (block_size, label) = match format {
+        DataFormat::Dxt1 => (8, "DXT1"),
+        DataFormat::Dxt3 => (16, "DXT3"),
+        DataFormat::Dxt5 | DataFormat::Dxt5N | DataFormat::Dxt5Y | DataFormat::Dxt5H => {
+            (16, "DXT5")
+        }
+        DataFormat::Dxn => (16, "DXN"),
+        DataFormat::Bc7 => (16, "BC7"),
+        _ => return Ok(false),
+    };
+    let expected_size = width
+        .div_ceil(4)
+        .checked_mul(height.div_ceil(4))
+        .and_then(|blocks| blocks.checked_mul(block_size))
+        .ok_or(Error::SizeOverflow("decoded texture size"))?;
+    let compressed = data.get(..expected_size).ok_or_else(|| {
+        Error::DecompressionError(format!(
+            "{label} data too small: expected {expected_size} bytes, have {}",
+            data.len()
+        ))
+    })?;
+    let result = match format {
+        DataFormat::Dxt1 => texture2ddecoder::decode_bc1(compressed, width, height, pixels),
+        DataFormat::Dxt3 => texture2ddecoder::decode_bc2(compressed, width, height, pixels),
+        DataFormat::Dxt5 | DataFormat::Dxt5N | DataFormat::Dxt5Y | DataFormat::Dxt5H => {
+            texture2ddecoder::decode_bc3(compressed, width, height, pixels)
+        }
+        DataFormat::Dxn => texture2ddecoder::decode_bc5(compressed, width, height, pixels),
+        DataFormat::Bc7 => texture2ddecoder::decode_bc7(compressed, width, height, pixels),
+        _ => return Ok(false),
+    };
+    result.map_err(|error| Error::DecompressionError(format!("{label} decode error: {error}")))?;
+    Ok(true)
 }
 
 #[cfg(test)]

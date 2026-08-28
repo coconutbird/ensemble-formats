@@ -7,11 +7,16 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "xmb"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 xmb.workspace = true
 ecf.workspace = true
 clap.workspace = true
+nostdio = { workspace = true, features = ["std"] }

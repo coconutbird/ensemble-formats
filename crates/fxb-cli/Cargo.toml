@@ -7,9 +7,13 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "fxb"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 fxb = { workspace = true }

@@ -4,7 +4,7 @@ use alloc::string::String;
 
 use d3dasm::dxbc::shex::{ComponentSelect, Opcode, Operand, OperandIndex, RegisterType};
 
-/// Extract (cb_slot, register_index) from a CB operand.
+/// Extract (`cb_slot`, `register_index`) from a CB operand.
 pub(super) fn cb_indices(op: &Operand) -> Option<(u32, u32)> {
     if op.indices.len() >= 2
         && let (OperandIndex::Imm32(slot), OperandIndex::Imm32(reg)) =
@@ -24,15 +24,15 @@ pub(super) fn component_string(cs: &ComponentSelect) -> String {
             let mut s = String::new();
             for i in 0..4u8 {
                 if m & (1 << i) != 0 {
-                    s.push(names[i as usize]);
+                    s.push(names[usize::from(i)]);
                 }
             }
             s
         }
-        ComponentSelect::Swizzle(sw) => sw.iter().map(|&c| names[c as usize]).collect(),
+        ComponentSelect::Swizzle(sw) => sw.iter().map(|&c| names[usize::from(c)]).collect(),
         ComponentSelect::Scalar(c) => {
             let mut s = String::new();
-            s.push(names[*c as usize]);
+            s.push(names[usize::from(*c)]);
             s
         }
     }
@@ -43,7 +43,7 @@ pub(super) fn has_texcoord_operand(ops: &[Operand]) -> bool {
     ops.iter().any(|op| op.reg_type == RegisterType::Input)
 }
 
-/// Check if an operand reads from the DefaultXSC Time register (`cb0[21]`).
+/// Check if an operand reads from the `DefaultXSC` Time register (`cb0[21]`).
 /// In Hogan shaders, Time is at cbuffer slot 0, register 21.
 pub(super) fn is_default_xsc_time(op: &Operand) -> bool {
     op.reg_type == RegisterType::ConstantBuffer
@@ -56,10 +56,7 @@ pub(super) fn is_default_xsc_time(op: &Operand) -> bool {
 pub(super) fn has_ones_immediate(ops: &[Operand]) -> bool {
     ops.iter().any(|op| {
         op.reg_type == RegisterType::Immediate32
-            && op
-                .immediate_values
-                .iter()
-                .any(|&v| f32::from_bits(v) == 1.0)
+            && op.immediate_values.iter().any(|&v| v == 1.0f32.to_bits())
     })
 }
 
@@ -70,7 +67,7 @@ pub(super) fn has_neg_one_immediate(ops: &[Operand]) -> bool {
             && op
                 .immediate_values
                 .iter()
-                .any(|&v| f32::from_bits(v) == -1.0)
+                .any(|&v| v == (-1.0f32).to_bits())
     })
 }
 
@@ -78,13 +75,15 @@ pub(super) fn has_neg_one_immediate(ops: &[Operand]) -> bool {
 pub(super) fn component_count(op: &Operand) -> u8 {
     match &op.components {
         ComponentSelect::Scalar(_) => 1,
-        ComponentSelect::Mask(m) => m.count_ones() as u8,
+        ComponentSelect::Mask(m) => {
+            u8::try_from(m.count_ones()).expect("an operand mask has at most eight bits")
+        }
         ComponentSelect::Swizzle(sw) => {
             let mut seen = 0u8;
-            for &c in sw.iter() {
+            for &c in sw {
                 seen |= 1 << c;
             }
-            seen.count_ones() as u8
+            u8::try_from(seen.count_ones()).expect("a component swizzle has at most four values")
         }
         _ => 0,
     }
@@ -97,7 +96,7 @@ pub(super) fn write_mask(op: &Operand) -> u8 {
         ComponentSelect::Scalar(c) => 1 << *c,
         ComponentSelect::Swizzle(sw) => {
             let mut m = 0u8;
-            for &c in sw.iter() {
+            for &c in sw {
                 m |= 1 << c;
             }
             m
@@ -111,7 +110,7 @@ pub(super) fn read_mask(op: &Operand) -> u8 {
     match &op.components {
         ComponentSelect::Swizzle(sw) => {
             let mut m = 0u8;
-            for &c in sw.iter() {
+            for &c in sw {
                 m |= 1 << c;
             }
             m

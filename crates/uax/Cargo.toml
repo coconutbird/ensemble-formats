@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 ecf = { workspace = true }
 nostdio = { workspace = true }
@@ -15,4 +18,4 @@ zerocopy.workspace = true
 
 [dev-dependencies]
 era = { workspace = true }
-test-utils = { path = "../test-utils" }
+test-utils.workspace = true

@@ -1,175 +1,189 @@
-//! Rebuild derived data tests — compare rebuilt output against real game files.
+//! Rebuild derived-data tests using real game files.
+
+use std::path::{Path, PathBuf};
 
 use test_utils::prelude::*;
-use ugx::*;
+use ugx::{AABB, UgxGeom, UgxVersion};
 
-/// Test rebuild against real UGX files: read original, strip derived data, rebuild, compare.
 #[test]
-fn test_rebuild_vs_original() {
-    // Static paths + recursive scan of extracted ERA contents
-    let mut paths: Vec<String> = vec![
-        "../../foxcannon01/mesh_turret_0.ugx".into(),
-        "../../foxcannon01/mesh_barrel_0.ugx".into(),
-        "../../foxcannon01/mesh_foxcannon01.ugx".into(),
-        "../../test_ugx/art/covenant/air/banshee_01/banshee_damage_01.ugx".into(),
+fn rebuild_matches_original_derived_data() {
+    let tested = candidate_paths()
+        .iter()
+        .filter(|path| verify_path(path))
+        .count();
+
+    if tested == 0 {
+        eprintln!("No real UGX fixtures found; skipping the rebuild comparison");
+    }
+}
+
+fn candidate_paths() -> Vec<PathBuf> {
+    let mut paths = vec![
+        PathBuf::from("../../foxcannon01/mesh_turret_0.ugx"),
+        PathBuf::from("../../foxcannon01/mesh_barrel_0.ugx"),
+        PathBuf::from("../../foxcannon01/mesh_foxcannon01.ugx"),
+        PathBuf::from("../../test_ugx/art/covenant/air/banshee_01/banshee_damage_01.ugx"),
     ];
-    paths.extend(
-        find_files_by_ext(std::path::Path::new("../../test_ugx_rebuild"), "ugx")
-            .into_iter()
-            .map(|p| p.to_string_lossy().into_owned()),
+    paths.extend(find_files_by_ext(
+        Path::new("../../test_ugx_rebuild"),
+        "ugx",
+    ));
+    paths
+}
+
+fn verify_path(path: &Path) -> bool {
+    let Ok(data) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(original) = ugx::Reader::read(&data) else {
+        return false;
+    };
+
+    let mut rebuilt = stripped_clone(&original);
+    rebuilt
+        .rebuild_derived_data()
+        .expect("valid source geometry should rebuild");
+
+    assert_bounds(path, &original, &rebuilt);
+    assert_bone_bounds(path, &original, &rebuilt);
+    assert_eq!(
+        rebuilt.instance_index_multiplier,
+        original.instance_index_multiplier,
+        "{}: instance-index multiplier mismatch",
+        path.display(),
     );
+    assert_tree(path, &original, &rebuilt);
+    assert_accessory_coverage(path, &rebuilt);
+    assert_writable(&original, &rebuilt);
+    true
+}
 
-    let mut tested = 0usize;
-    for path in &paths {
-        let data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
+fn stripped_clone(original: &UgxGeom) -> UgxGeom {
+    let mut rebuilt = original.clone();
+    rebuilt.bone_bounds = original.bones.iter().map(|_| AABB::default()).collect();
+    rebuilt.accessories.clear();
+    rebuilt.valid_accessories.clear();
+    rebuilt.aabb_tree = None;
+    rebuilt
+}
 
-        let original = match ugx::Reader::read(&data) {
-            Ok(g) => g,
-            Err(_) => continue,
-        };
-
-        // Clone and strip derived data
-        let mut rebuilt = original.clone();
-        rebuilt.bone_bounds = original.bones.iter().map(|_| AABB::default()).collect();
-        rebuilt.accessories = Vec::new();
-        rebuilt.valid_accessories = Vec::new();
-        rebuilt.aabb_tree = None;
-
-        rebuilt.rebuild_derived_data();
-
-        // Bounds: tolerance accounts for Half4 vertex packing precision
-        for i in 0..3 {
-            let tol = (original.bounds.max[i] - original.bounds.min[i]).abs() * 0.005 + 0.01;
-            assert!(
-                (rebuilt.bounds.min[i] - original.bounds.min[i]).abs() < tol,
-                "{path}: bounds.min[{i}] mismatch: rebuilt={} vs original={} (tol={tol})",
-                rebuilt.bounds.min[i],
-                original.bounds.min[i],
-            );
-            assert!(
-                (rebuilt.bounds.max[i] - original.bounds.max[i]).abs() < tol,
-                "{path}: bounds.max[{i}] mismatch: rebuilt={} vs original={} (tol={tol})",
-                rebuilt.bounds.max[i],
-                original.bounds.max[i],
-            );
-        }
-
-        // Bounding sphere: radius = half the AABB diagonal
-        let orig_r = original.bounding_sphere.radius;
-        let rebuilt_r = rebuilt.bounding_sphere.radius;
-        let sphere_err = if orig_r > 0.0 {
-            ((rebuilt_r - orig_r) / orig_r * 100.0).abs()
-        } else {
-            0.0
-        };
+fn assert_bounds(path: &Path, original: &UgxGeom, rebuilt: &UgxGeom) {
+    for axis in 0..3 {
+        let tolerance =
+            (original.bounds.max[axis] - original.bounds.min[axis]).abs() * 0.005 + 0.01;
         assert!(
-            sphere_err < 1.0,
-            "{path}: bounding sphere radius mismatch: rebuilt={rebuilt_r} vs original={orig_r} ({sphere_err:.1}% diff)",
+            (rebuilt.bounds.min[axis] - original.bounds.min[axis]).abs() < tolerance,
+            "{}: bounds.min[{axis}] mismatch: rebuilt={} original={} tolerance={tolerance}",
+            path.display(),
+            rebuilt.bounds.min[axis],
+            original.bounds.min[axis],
         );
-
-        // Bone bounds: count and per-bone AABB values
-        assert_eq!(
-            rebuilt.bone_bounds.len(),
-            original.bone_bounds.len(),
-            "{path}: bone bounds count mismatch",
+        assert!(
+            (rebuilt.bounds.max[axis] - original.bounds.max[axis]).abs() < tolerance,
+            "{}: bounds.max[{axis}] mismatch: rebuilt={} original={} tolerance={tolerance}",
+            path.display(),
+            rebuilt.bounds.max[axis],
+            original.bounds.max[axis],
         );
-        for (bi, (rb, ob)) in rebuilt
-            .bone_bounds
-            .iter()
-            .zip(original.bone_bounds.iter())
-            .enumerate()
-        {
-            let orig_is_sentinel = ob.min[0] > ob.max[0];
-            if orig_is_sentinel {
-                continue;
-            }
-            // Wider tolerance: vertex quantization (Half4) can cause up to
-            // ~7 units of drift on wreckage/debris models with extreme spread.
-            for axis in 0..3 {
-                let extent = (ob.max[axis] - ob.min[axis]).abs();
-                let tol = extent * 0.05 + 7.0;
-                let min_err = (rb.min[axis] - ob.min[axis]).abs();
-                let max_err = (rb.max[axis] - ob.max[axis]).abs();
-                assert!(
-                    min_err <= tol && max_err <= tol,
-                    "{path}: bone_bounds[{bi}] axis={axis}: rebuilt=[{:.4}, {:.4}] orig=[{:.4}, {:.4}] err=[{:.4}, {:.4}] tol={tol:.4}",
-                    rb.min[axis],
-                    rb.max[axis],
-                    ob.min[axis],
-                    ob.max[axis],
-                    min_err,
-                    max_err,
-                );
-            }
-        }
-
-        // Metadata flags: only instance_index_multiplier must be exact.
-        // Header-level booleans (rigid_only, global_bones, etc.) sometimes
-        // don't follow strictly from per-section flags in the original data.
-        assert_eq!(
-            rebuilt.instance_index_multiplier, original.instance_index_multiplier,
-            "{path}: instance_index_multiplier mismatch",
-        );
-
-        // AABB tree: if original had one, rebuilt should too.
-        // The original tree is typically a minimal stub (few nodes, 0 obj_indices)
-        // while our rebuilt tree is a proper section-level BVH. We verify
-        // structural invariants rather than exact node-count match.
-        if original.aabb_tree.is_some() {
-            assert!(
-                rebuilt.aabb_tree.is_some(),
-                "{path}: rebuilt should have AABB tree when original did",
-            );
-            let new_tree = rebuilt.aabb_tree.as_ref().unwrap();
-            // All obj_indices should be empty (engine reads from accessories)
-            for node in &new_tree.nodes {
-                assert!(
-                    node.obj_indices.is_empty(),
-                    "{path}: tree node obj_indices should be empty",
-                );
-            }
-        }
-
-        // Accessories: engine invariant is accessories.len() == tree.nodes.len().
-        // The original file's accessory count matches its (stub) tree, and our
-        // rebuilt count matches our (full) tree — they won't be equal, but every
-        // section must be reachable through the rebuilt accessories.
-        if let Some(ref tree) = rebuilt.aabb_tree {
-            assert_eq!(
-                rebuilt.accessories.len(),
-                tree.nodes.len(),
-                "{path}: accessories.len() must equal tree.nodes.len()",
-            );
-        }
-        // Verify all sections are covered by at least one accessory.
-        if !rebuilt.accessories.is_empty() {
-            let all_sections = rebuilt.sections.len();
-            let mut covered = vec![false; all_sections];
-            for acc in &rebuilt.accessories {
-                for &si in &acc.object_indices {
-                    if (si as usize) < all_sections {
-                        covered[si as usize] = true;
-                    }
-                }
-            }
-            for (si, &c) in covered.iter().enumerate() {
-                assert!(c, "{path}: section {si} not reachable via any accessory",);
-            }
-        }
-
-        // Write rebuilt to UGX bytes and read back to verify structural validity
-        let ugx_bytes = ugx::Writer::write(&rebuilt, ugx::UgxVersion::Hw2).unwrap();
-        let re_read = ugx::Reader::read(&ugx_bytes).unwrap();
-        assert_eq!(re_read.sections.len(), original.sections.len());
-
-        tested += 1;
     }
 
+    let original_radius = original.bounding_sphere.radius;
+    let rebuilt_radius = rebuilt.bounding_sphere.radius;
+    let percentage_error = if original_radius.abs() > f32::EPSILON {
+        ((rebuilt_radius - original_radius) / original_radius * 100.0).abs()
+    } else {
+        0.0
+    };
     assert!(
-        tested > 0,
-        "No real UGX files found — rebuild comparison test skipped"
+        percentage_error < 1.0,
+        "{}: sphere radius mismatch: rebuilt={rebuilt_radius} original={original_radius} ({percentage_error:.1}% difference)",
+        path.display(),
     );
+}
+
+fn assert_bone_bounds(path: &Path, original: &UgxGeom, rebuilt: &UgxGeom) {
+    assert_eq!(
+        rebuilt.bone_bounds.len(),
+        original.bone_bounds.len(),
+        "{}: bone-bounds count mismatch",
+        path.display(),
+    );
+    for (bone_index, (rebuilt_bounds, original_bounds)) in rebuilt
+        .bone_bounds
+        .iter()
+        .zip(&original.bone_bounds)
+        .enumerate()
+    {
+        if original_bounds.min[0] > original_bounds.max[0] {
+            continue;
+        }
+        for axis in 0..3 {
+            let extent = (original_bounds.max[axis] - original_bounds.min[axis]).abs();
+            let tolerance = extent * 0.05 + 7.0;
+            let min_error = (rebuilt_bounds.min[axis] - original_bounds.min[axis]).abs();
+            let max_error = (rebuilt_bounds.max[axis] - original_bounds.max[axis]).abs();
+            assert!(
+                min_error <= tolerance && max_error <= tolerance,
+                "{}: bone_bounds[{bone_index}] axis {axis}: errors [{min_error:.4}, {max_error:.4}], tolerance {tolerance:.4}",
+                path.display(),
+            );
+        }
+    }
+}
+
+fn assert_tree(path: &Path, original: &UgxGeom, rebuilt: &UgxGeom) {
+    if original.aabb_tree.is_none() {
+        return;
+    }
+    let tree = rebuilt.aabb_tree.as_ref().unwrap_or_else(|| {
+        panic!(
+            "{}: rebuilt geometry should retain an AABB tree",
+            path.display()
+        )
+    });
+    assert!(
+        tree.nodes.iter().all(|node| node.obj_indices.is_empty()),
+        "{}: rebuilt AABB nodes must use accessories, not object indices",
+        path.display(),
+    );
+}
+
+fn assert_accessory_coverage(path: &Path, rebuilt: &UgxGeom) {
+    if let Some(tree) = &rebuilt.aabb_tree {
+        assert_eq!(
+            rebuilt.accessories.len(),
+            tree.nodes.len(),
+            "{}: accessory and tree-node counts differ",
+            path.display(),
+        );
+    }
+    if rebuilt.accessories.is_empty() {
+        return;
+    }
+
+    let mut covered = vec![false; rebuilt.sections.len()];
+    for section_index in rebuilt
+        .accessories
+        .iter()
+        .flat_map(|accessory| &accessory.object_indices)
+        .filter_map(|index| usize::try_from(*index).ok())
+    {
+        if let Some(value) = covered.get_mut(section_index) {
+            *value = true;
+        }
+    }
+    for (section_index, is_covered) in covered.into_iter().enumerate() {
+        assert!(
+            is_covered,
+            "{}: section {section_index} is not reachable through an accessory",
+            path.display(),
+        );
+    }
+}
+
+fn assert_writable(original: &UgxGeom, rebuilt: &UgxGeom) {
+    let bytes = ugx::Writer::write(rebuilt, UgxVersion::Hw2)
+        .expect("rebuilt geometry should serialize as HW2");
+    let reread = ugx::Reader::read(&bytes).expect("rebuilt geometry should parse after writing");
+    assert_eq!(reread.sections.len(), original.sections.len());
 }

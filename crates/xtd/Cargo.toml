@@ -7,8 +7,13 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 ecf = { workspace = true }
+nostdio.workspace = true
+num-traits.workspace = true
 thiserror = { workspace = true }
 zerocopy.workspace = true
 

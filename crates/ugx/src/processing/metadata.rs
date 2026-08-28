@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use crate::UgxGeom;
+use crate::{Error, Result, UgxGeom};
 
 impl UgxGeom {
     /// Recompute metadata flags from section data.
@@ -13,7 +13,12 @@ impl UgxGeom {
     /// Updates: `rigid_only`, `rigid_bone_index`, `all_sections_rigid`,
     /// `all_sections_skinned`, `global_bones`, `instance_index_multiplier`,
     /// `max_instances`, `large_geom_bone_index`.
-    pub fn rebuild_metadata_flags(&mut self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a derived vertex count cannot be represented by the
+    /// UGX metadata fields.
+    pub fn rebuild_metadata_flags(&mut self) -> Result<()> {
         // A section is "effectively rigid" if:
         // - its rigid_only flag is true, OR
         // - it uses global_bones with max_bones == 1 (single-bone global binding)
@@ -33,25 +38,26 @@ impl UgxGeom {
 
         // rigid_only: true when all sections are effectively rigid AND all bound
         // to the same bone (single rigid_bone_index across all sections).
-        let same_rigid_bone = all_rigid
-            && !self.sections.is_empty()
-            && self
-                .sections
-                .iter()
-                .all(|s| s.rigid_bone_index == self.sections[0].rigid_bone_index);
+        let same_rigid_bone = self.sections.first().is_some_and(|first_section| {
+            all_rigid
+                && self
+                    .sections
+                    .iter()
+                    .all(|section| section.rigid_bone_index == first_section.rigid_bone_index)
+        });
         self.rigid_only = same_rigid_bone;
         // all_sections_rigid uses the broader "effectively rigid" test
-        self.all_sections_rigid = all_rigid;
-        self.global_bones = any_global || all_global_indices;
+        self.flags.all_sections_rigid = all_rigid;
+        self.flags.global_bones = any_global || all_global_indices;
 
         // all_sections_skinned: true only when every section is skinned AND
         // no section uses global_bones (matching original engine logic).
-        self.all_sections_skinned = !any_global && !all_rigid && all_skinned;
+        self.flags.all_sections_skinned = !any_global && !all_rigid && all_skinned;
 
         // rigid_bone_index: if a single rigid bone is used across all rigid
         // sections, use it; otherwise 0.
-        if all_rigid && !self.sections.is_empty() {
-            let first_rigid = self.sections[0].rigid_bone_index;
+        if all_rigid && let Some(first_section) = self.sections.first() {
+            let first_rigid = first_section.rigid_bone_index;
             if self
                 .sections
                 .iter()
@@ -69,10 +75,14 @@ impl UgxGeom {
         let max_verts = self
             .sections
             .iter()
-            .map(|s| s.num_verts as u32)
+            .map(|section| u32::try_from(section.num_verts).unwrap_or_default())
             .max()
             .unwrap_or(1);
-        self.instance_index_multiplier = max_verts.next_power_of_two() as i16;
+        let multiplier = max_verts
+            .checked_next_power_of_two()
+            .ok_or(Error::SizeOverflow("instance index multiplier"))?;
+        self.instance_index_multiplier = i16::try_from(multiplier)
+            .map_err(|_| Error::SizeOverflow("instance index multiplier"))?;
 
         // max_instances is set by artist tooling, not derivable from mesh data.
         // Preserve the existing value if already set (e.g. from glTF extras);
@@ -82,6 +92,7 @@ impl UgxGeom {
         }
         // large_geom_bone_index defaults to i16::MAX (no large geom)
         self.large_geom_bone_index = i16::MAX;
+        Ok(())
     }
 
     /// Rebuild the index buffer with instanced copies baked in.
@@ -98,30 +109,42 @@ impl UgxGeom {
     /// computes `max_instances` and `instance_index_multiplier`).
     ///
     /// If `max_instances <= 1`, the buffer is left unchanged.
-    pub fn rebuild_instanced_index_buffer(&mut self) {
-        let max_inst = self.max_instances as u32;
-        let multiplier = self.instance_index_multiplier as u32;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if section counts, offsets, or instanced vertex indices
+    /// cannot be represented by their UGX integer fields.
+    pub fn rebuild_instanced_index_buffer(&mut self) -> Result<()> {
+        let max_inst = u32::try_from(self.max_instances).unwrap_or_default();
+        let multiplier = u32::try_from(self.instance_index_multiplier).unwrap_or_default();
 
         if max_inst <= 1 || multiplier == 0 {
-            return;
+            return Ok(());
         }
 
         // Compute the total base index count from sections.
-        let base_index_count: usize = self
-            .sections
-            .iter()
-            .map(|s| (s.num_tris as usize) * 3)
-            .sum();
+        let base_index_count = self.sections.iter().try_fold(0usize, |total, section| {
+            let triangle_count =
+                crate::checked_usize_i32(section.num_tris, "section triangle count")?;
+            let index_count = triangle_count
+                .checked_mul(3)
+                .ok_or(Error::SizeOverflow("section index count"))?;
+            total
+                .checked_add(index_count)
+                .ok_or(Error::SizeOverflow("index-buffer size"))
+        })?;
 
         // If the buffer already has the expected instanced size, skip.
-        let expected_instanced = base_index_count * max_inst as usize;
+        let expected_instanced = base_index_count
+            .checked_mul(crate::checked_usize(u64::from(max_inst), "instance count")?)
+            .ok_or(Error::SizeOverflow("instanced index-buffer size"))?;
         if self.index_buffer.len() == expected_instanced {
-            return;
+            return Ok(());
         }
 
         // If the buffer doesn't match base size either, skip to avoid corruption.
         if self.index_buffer.len() != base_index_count {
-            return;
+            return Ok(());
         }
 
         // Build the instanced buffer: for each instance i (0..max_instances),
@@ -129,15 +152,26 @@ impl UgxGeom {
         // i * instance_index_multiplier.
         let mut instanced = Vec::with_capacity(expected_instanced);
         for inst in 0..max_inst {
-            let vertex_offset = (inst * multiplier) as u16;
+            let vertex_offset = inst
+                .checked_mul(multiplier)
+                .and_then(|offset| u16::try_from(offset).ok())
+                .ok_or(Error::SizeOverflow("instanced vertex offset"))?;
             for section in &self.sections {
-                let sec_start = section.ib_offset as usize;
-                let sec_count = (section.num_tris as usize) * 3;
-                let sec_end = sec_start + sec_count;
-                if sec_end > self.index_buffer.len() {
-                    continue;
-                }
-                for &idx in &self.index_buffer[sec_start..sec_end] {
+                let sec_start =
+                    crate::checked_usize_i32(section.ib_offset, "section index offset")?;
+                let sec_count = crate::checked_usize_i32(section.num_tris, "triangle count")?
+                    .checked_mul(3)
+                    .ok_or(Error::SizeOverflow("section index count"))?;
+                let sec_end = sec_start
+                    .checked_add(sec_count)
+                    .ok_or(Error::SizeOverflow("section index range"))?;
+                let section_indices =
+                    self.index_buffer.get(sec_start..sec_end).ok_or_else(|| {
+                        Error::UnexpectedEof {
+                            context: "section index buffer".into(),
+                        }
+                    })?;
+                for &idx in section_indices {
                     instanced.push(idx.wrapping_add(vertex_offset));
                 }
             }
@@ -147,9 +181,16 @@ impl UgxGeom {
         let mut offset = 0i32;
         for section in &mut self.sections {
             section.ib_offset = offset;
-            offset += section.num_tris * 3;
+            let section_indices = section
+                .num_tris
+                .checked_mul(3)
+                .ok_or(Error::SizeOverflow("section index count"))?;
+            offset = offset
+                .checked_add(section_indices)
+                .ok_or(Error::SizeOverflow("section index offset"))?;
         }
 
         self.index_buffer = instanced;
+        Ok(())
     }
 }

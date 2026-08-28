@@ -43,6 +43,7 @@ pub enum DataFormat {
 
 impl DataFormat {
     /// Parse from u32 value.
+    #[must_use]
     pub fn from_u32(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Invalid),
@@ -67,6 +68,7 @@ impl DataFormat {
     }
 
     /// Returns true if this is a DXT-compressed format.
+    #[must_use]
     pub fn is_dxt(&self) -> bool {
         matches!(
             self,
@@ -87,6 +89,7 @@ impl DataFormat {
     }
 
     /// Returns true if this is a custom quantized format.
+    #[must_use]
     pub fn is_dxtq(&self) -> bool {
         matches!(
             self,
@@ -95,7 +98,8 @@ impl DataFormat {
     }
 
     /// Returns the DXT block size in bytes (0 for non-DXT formats).
-    pub fn dxt_block_size(&self) -> usize {
+    #[must_use]
+    pub fn dxt_block_size(&self) -> u32 {
         match self {
             Self::Dxt1 | Self::Dxt1Q => 8,
             Self::Dxt3
@@ -114,13 +118,14 @@ impl DataFormat {
     }
 
     /// Returns bits per pixel for this format.
+    #[must_use]
     pub fn bits_per_pixel(&self) -> u32 {
         match self {
             Self::A16B16G16R16F => 64,
             Self::A8R8G8B8 | Self::A8B8G8R8 => 32,
-            Self::A8 => 8,
             Self::Dxt1 => 4,
-            Self::Dxt3
+            Self::A8
+            | Self::Dxt3
             | Self::Dxt5
             | Self::Dxt5Y
             | Self::Dxt5N
@@ -132,6 +137,7 @@ impl DataFormat {
     }
 
     /// Returns true if format has alpha channel (DXT1 not counted).
+    #[must_use]
     pub fn has_alpha(&self) -> bool {
         matches!(
             self,
@@ -148,11 +154,13 @@ impl DataFormat {
     }
 
     /// Returns true if this is an HDR format.
+    #[must_use]
     pub fn is_hdr(&self) -> bool {
         matches!(self, Self::A16B16G16R16F | Self::Dxt5H | Self::Dxt5HQ)
     }
 
     /// Returns true if this format has a fixed size (not variable like DXTQ).
+    #[must_use]
     pub fn is_fixed_size(&self) -> bool {
         !self.is_dxtq()
     }

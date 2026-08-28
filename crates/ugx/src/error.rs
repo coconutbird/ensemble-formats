@@ -62,13 +62,17 @@ pub enum Error {
         actual: u32,
     },
 
-    /// Invalid Granny chunk — present but FromFileName is not "gr2ugx".
+    /// Invalid Granny chunk — present but `FromFileName` is not "gr2ugx".
     #[error("Invalid Granny chunk: FromFileName is \"{actual}\", expected \"gr2ugx\"")]
     InvalidGrannyChunk { actual: String },
 
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] ecf::io::IoError),
+
+    /// A size or offset cannot be represented on the target platform.
+    #[error("{0} is too large for the target platform")]
+    SizeOverflow(&'static str),
 }
 
 /// Result type for UGX operations.

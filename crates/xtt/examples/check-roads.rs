@@ -1,3 +1,5 @@
+//! Reports road-layer information from an XTT file.
+
 use std::env;
 use std::fs;
 use xtt::Reader;
@@ -9,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(&"test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtt".to_string())
         .clone();
 
-    println!("Opening XTT: {}", xtt_path);
+    println!("Opening XTT: {xtt_path}");
 
     let data = fs::read(&xtt_path)?;
     let xtt = Reader::read(&data)?;
@@ -26,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Print first few QN chunks
     for (i, qn) in xtt.foliage.qn_chunks.iter().take(5).enumerate() {
-        println!("\n  QN Chunk [{}]:", i);
+        println!("\n  QN Chunk [{i}]:");
         println!("    Parent index: {}", qn.qn_parent_index);
         println!("    Num sets: {}", qn.num_sets);
         println!("    Set indices: {:?}", qn.set_indices);

@@ -1,6 +1,12 @@
 use super::*;
 use alloc::string::ToString;
 
+fn assert_float_array_bits_eq<const N: usize>(actual: &[f32; N], expected: &[f32; N]) {
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
 #[test]
 fn test_vertex_size_calculation() {
     let packer = UnivertPacker {
@@ -60,9 +66,9 @@ fn test_pack_unpack_vertex_roundtrip() {
     let mut pos = 0;
     let unpacked = packer.unpack_vertex(&buf, &mut pos).unwrap();
 
-    assert_eq!(unpacked.position, original.position);
-    assert_eq!(unpacked.normal, original.normal);
-    assert_eq!(unpacked.texcoords[0], original.texcoords[0]);
+    assert_float_array_bits_eq(&unpacked.position, &original.position);
+    assert_float_array_bits_eq(&unpacked.normal, &original.normal);
+    assert_float_array_bits_eq(&unpacked.texcoords[0], &original.texcoords[0]);
 }
 
 #[test]
@@ -98,9 +104,9 @@ fn test_pack_unpack_vertex_with_skin_roundtrip() {
     let mut pos = 0;
     let unpacked = packer.unpack_vertex(&buf, &mut pos).unwrap();
 
-    assert_eq!(unpacked.position, original.position);
-    assert_eq!(unpacked.normal, original.normal);
-    assert_eq!(unpacked.texcoords[0], original.texcoords[0]);
+    assert_float_array_bits_eq(&unpacked.position, &original.position);
+    assert_float_array_bits_eq(&unpacked.normal, &original.normal);
+    assert_float_array_bits_eq(&unpacked.texcoords[0], &original.texcoords[0]);
     assert_eq!(unpacked.bone_indices, original.bone_indices);
-    assert_eq!(unpacked.bone_weights, original.bone_weights);
+    assert_float_array_bits_eq(&unpacked.bone_weights, &original.bone_weights);
 }

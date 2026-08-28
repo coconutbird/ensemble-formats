@@ -1,3 +1,5 @@
+//! Command-line inspection and conversion tools for FXB shader files.
+
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -145,7 +147,7 @@ fn cmd_extract(file: &std::path::Path, output: Option<&std::path::Path>) {
     }
 }
 
-fn print_shader_info(shader: &d3dasm::Shader, disasm: bool) {
+fn print_shader_info(shader: &d3dasm::Shader<'_>, disasm: bool) {
     if let Some(prog) = shader.program() {
         println!("  SM {}.{}", prog.major_version, prog.minor_version);
     }

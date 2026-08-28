@@ -1,4 +1,6 @@
-use clap::Parser;
+//! Command-line inspection and constant-buffer inference for UFX shader files.
+
+use clap::{Args, Parser};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -7,30 +9,176 @@ struct Cli {
     /// UFX file(s) to inspect.
     files: Vec<PathBuf>,
 
+    #[command(flatten)]
+    display: DisplayOptions,
+
+    #[command(flatten)]
+    analysis: AnalysisOptions,
+}
+
+#[derive(Args)]
+struct DisplayOptions {
     /// Show full disassembly for each shader stage.
     #[arg(short, long)]
     disasm: bool,
-
     /// Only show constant buffer layouts (skip bindings/signatures).
     #[arg(short = 'c', long)]
     cb_only: bool,
-
-    /// Infer semantic names for material CB parameters (cb8 PS, cb7 VS).
-    #[arg(short = 'i', long)]
-    infer_params: bool,
-
-    /// Build a control-flow graph and print it as Graphviz DOT.
-    #[arg(long)]
-    cfg: bool,
-
-    /// Batch inference: output one TSV line per file with hex flags and params.
-    /// Format: hex_flags<TAB>slot.reg.comp=semantic,...
-    #[arg(long)]
-    batch_infer: bool,
-
     /// Decode bitflags from the filename and show enabled features.
     #[arg(short = 'f', long)]
     flags: bool,
+}
+
+#[derive(Args)]
+struct AnalysisOptions {
+    /// Infer semantic names for material CB parameters (cb8 PS, cb7 VS).
+    #[arg(short = 'i', long)]
+    infer_params: bool,
+    /// Build a control-flow graph and print it as Graphviz DOT.
+    #[arg(long)]
+    cfg: bool,
+    /// Batch inference: output one TSV line per file with hex flags and params.
+    /// Format: `hex_flags`, a tab, then `slot.reg.comp=semantic,...`.
+    #[arg(long)]
+    batch_infer: bool,
+}
+
+fn print_batch_inference(name: &str, file: &ufx::UfxFile<'_>) {
+    use ufx::cb_infer::{HOGAN_PS_SLOT, HOGAN_VS_SLOT};
+
+    let flags = name
+        .strip_suffix(".ufx")
+        .and_then(|stem| stem.rsplit('_').next())
+        .unwrap_or("?");
+    let mut parameters = Vec::new();
+    if let Some(program) = file.pixel_shaders.first().and_then(ufx::Shader::program) {
+        parameters.extend(ufx::cb_infer::infer_cb_params(
+            program,
+            HOGAN_PS_SLOT,
+            HOGAN_VS_SLOT,
+        ));
+    }
+    if let Some(program) = file.vertex_shader.as_ref().and_then(ufx::Shader::program) {
+        parameters.extend(
+            ufx::cb_infer::infer_cb_params(program, HOGAN_PS_SLOT, HOGAN_VS_SLOT)
+                .into_iter()
+                .filter(|parameter| parameter.cb_slot == HOGAN_VS_SLOT),
+        );
+    }
+
+    let rendered: Vec<String> = parameters
+        .iter()
+        .map(|parameter| {
+            format!(
+                "cb{}[{}].{}={}[{}]",
+                parameter.cb_slot,
+                parameter.reg_index,
+                parameter.components,
+                parameter.semantic,
+                parameter.confidence
+            )
+        })
+        .collect();
+    println!("{}\t{}", flags, rendered.join(","));
+}
+
+fn print_flags(name: &str) {
+    use ufx::cb_infer::bitflags::HoganFlags;
+
+    let Some(flags) = HoganFlags::from_filename(name) else {
+        println!("  (could not parse flags from filename)");
+        return;
+    };
+    println!(
+        "\n  -- Bitflags: {} --",
+        ufx::cb_infer::bitflags::flags_summary(flags)
+    );
+    let features = flags.features();
+    if features.is_empty() {
+        println!("    (no known features decoded)");
+        return;
+    }
+    for feature in &features {
+        let requirements = if feature.requires_bits.is_empty() {
+            String::new()
+        } else {
+            format!(" (requires bits {:?})", feature.requires_bits)
+        };
+        println!(
+            "    bit {:2} | cb{} | {:<22} — {}{}",
+            feature.bit, feature.cb_slot, feature.name, feature.description, requirements
+        );
+    }
+}
+
+fn print_parameters(file: &ufx::UfxFile<'_>) {
+    use ufx::cb_infer::{HOGAN_PS_SLOT, HOGAN_VS_SLOT};
+
+    if let Some(program) = file.pixel_shaders.first().and_then(ufx::Shader::program) {
+        let parameters = ufx::cb_infer::infer_cb_params(program, HOGAN_PS_SLOT, HOGAN_VS_SLOT);
+        if parameters.is_empty() {
+            println!("  (no cb8/cb7 params detected)");
+        } else {
+            println!("\n  -- Inferred CB Parameters --");
+            print_parameter_rows(parameters.iter());
+        }
+    }
+
+    if let Some(program) = file.vertex_shader.as_ref().and_then(ufx::Shader::program) {
+        let parameters = ufx::cb_infer::infer_cb_params(program, HOGAN_PS_SLOT, HOGAN_VS_SLOT);
+        let vertex_parameters: Vec<_> = parameters
+            .iter()
+            .filter(|parameter| parameter.cb_slot == HOGAN_VS_SLOT)
+            .collect();
+        if !vertex_parameters.is_empty() {
+            println!("\n  -- Inferred VS CB Parameters --");
+            print_parameter_rows(vertex_parameters);
+        }
+    }
+}
+
+fn print_parameter_rows<'a>(parameters: impl IntoIterator<Item = &'a ufx::cb_infer::CbParam>) {
+    for parameter in parameters {
+        println!(
+            "    cb{}[{}].{:<6} => {:<24} [{}] (insn #{})",
+            parameter.cb_slot,
+            parameter.reg_index,
+            parameter.components,
+            parameter.semantic,
+            parameter.confidence,
+            parameter.insn_index,
+        );
+    }
+}
+
+fn print_cfg(file: &ufx::UfxFile<'_>) {
+    if let Some(program) = file.vertex_shader.as_ref().and_then(ufx::Shader::program) {
+        match ufx::cb_infer::cfg_report(program) {
+            Ok(report) => {
+                println!(
+                    "\n  -- Vertex Shader CFG ({} blocks, {} edges) --",
+                    report.block_count, report.edge_count,
+                );
+                println!("{}", report.dot);
+            }
+            Err(error) => eprintln!("  VS CFG error: {error}"),
+        }
+    }
+
+    for (index, shader) in file.pixel_shaders.iter().enumerate() {
+        if let Some(program) = shader.program() {
+            match ufx::cb_infer::cfg_report(program) {
+                Ok(report) => {
+                    println!(
+                        "\n  -- Pixel Shader {index} CFG ({} blocks, {} edges) --",
+                        report.block_count, report.edge_count,
+                    );
+                    println!("{}", report.dot);
+                }
+                Err(error) => eprintln!("  PS {index} CFG error: {error}"),
+            }
+        }
+    }
 }
 
 fn main() {
@@ -58,52 +206,8 @@ fn main() {
 
         let name = path.file_name().unwrap_or_default().to_string_lossy();
 
-        // Batch inference mode: one compact TSV line per file, no other output.
-        if cli.batch_infer {
-            use ufx::cb_infer::{HOGAN_PS_SLOT, HOGAN_VS_SLOT};
-
-            // Extract hex flags from filename: hogan_<type>_<hex>.ufx
-            let hex_part = name
-                .strip_suffix(".ufx")
-                .and_then(|n| n.rsplit('_').next())
-                .unwrap_or("?");
-
-            let mut all_params = Vec::new();
-
-            // PS inference
-            if let Some(ps) = ufx.pixel_shaders.first()
-                && let Some(prog) = ps.program()
-            {
-                all_params.extend(ufx::cb_infer::infer_cb_params(
-                    prog,
-                    HOGAN_PS_SLOT,
-                    HOGAN_VS_SLOT,
-                ));
-            }
-
-            // VS inference
-            if let Some(vs) = &ufx.vertex_shader
-                && let Some(prog) = vs.program()
-            {
-                let vs_params = ufx::cb_infer::infer_cb_params(prog, HOGAN_PS_SLOT, HOGAN_VS_SLOT);
-                for p in vs_params {
-                    if p.cb_slot == HOGAN_VS_SLOT {
-                        all_params.push(p);
-                    }
-                }
-            }
-
-            // Output: hex<TAB>cb8[0].xy=uv_scale[high],cb8[1].x=normal_intensity[high],...
-            let param_strs: Vec<String> = all_params
-                .iter()
-                .map(|p| {
-                    format!(
-                        "cb{}[{}].{}={}[{}]",
-                        p.cb_slot, p.reg_index, p.components, p.semantic, p.confidence
-                    )
-                })
-                .collect();
-            println!("{}\t{}", hex_part, param_strs.join(","));
+        if cli.analysis.batch_infer {
+            print_batch_inference(&name, &ufx);
             continue;
         }
 
@@ -114,32 +218,8 @@ fn main() {
             ufx.ps_offsets[0], ufx.ps_offsets[1], ufx.ps_offsets[2], ufx.ps_offsets[3]
         );
 
-        if cli.flags {
-            use ufx::cb_infer::bitflags::HoganFlags;
-            if let Some(flags) = HoganFlags::from_filename(&name) {
-                println!(
-                    "\n  -- Bitflags: {} --",
-                    ufx::cb_infer::bitflags::flags_summary(flags)
-                );
-                let features = flags.features();
-                if features.is_empty() {
-                    println!("    (no known features decoded)");
-                } else {
-                    for f in &features {
-                        let req = if f.requires_bits.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" (requires bits {:?})", f.requires_bits)
-                        };
-                        println!(
-                            "    bit {:2} | cb{} | {:<22} — {}{}",
-                            f.bit, f.cb_slot, f.name, f.description, req
-                        );
-                    }
-                }
-            } else {
-                println!("  (could not parse flags from filename)");
-            }
+        if cli.display.flags {
+            print_flags(&name);
         }
 
         if let Some(ref vs) = ufx.vertex_shader {
@@ -148,7 +228,7 @@ fn main() {
                 vs.offset(),
                 vs.size()
             );
-            print_shader_info(vs, cli.cb_only, cli.disasm);
+            print_shader_info(vs, cli.display.cb_only, cli.display.disasm);
         }
 
         for (i, ps) in ufx.pixel_shaders.iter().enumerate() {
@@ -157,100 +237,22 @@ fn main() {
                 ps.offset(),
                 ps.size()
             );
-            print_shader_info(ps, cli.cb_only, cli.disasm);
+            print_shader_info(ps, cli.display.cb_only, cli.display.disasm);
         }
 
-        if cli.infer_params {
-            // Infer PS params from first pixel shader
-            use ufx::cb_infer::{HOGAN_PS_SLOT, HOGAN_VS_SLOT};
-
-            if let Some(ps) = ufx.pixel_shaders.first()
-                && let Some(prog) = ps.program()
-            {
-                let params = ufx::cb_infer::infer_cb_params(prog, HOGAN_PS_SLOT, HOGAN_VS_SLOT);
-                if params.is_empty() {
-                    println!("  (no cb8/cb7 params detected)");
-                } else {
-                    println!("\n  -- Inferred CB Parameters --");
-                    for p in &params {
-                        println!(
-                            "    cb{}[{}].{:<6} => {:<24} [{}] (insn #{})",
-                            p.cb_slot,
-                            p.reg_index,
-                            p.components,
-                            p.semantic,
-                            p.confidence,
-                            p.insn_index,
-                        );
-                    }
-                }
-            }
-
-            // Infer VS params
-            if let Some(vs) = &ufx.vertex_shader
-                && let Some(prog) = vs.program()
-            {
-                let params = ufx::cb_infer::infer_cb_params(prog, HOGAN_PS_SLOT, HOGAN_VS_SLOT);
-                let vs_params: Vec<_> = params
-                    .iter()
-                    .filter(|p| p.cb_slot == HOGAN_VS_SLOT)
-                    .collect();
-                if !vs_params.is_empty() {
-                    println!("\n  -- Inferred VS CB Parameters --");
-                    for p in &vs_params {
-                        println!(
-                            "    cb{}[{}].{:<6} => {:<24} [{}] (insn #{})",
-                            p.cb_slot,
-                            p.reg_index,
-                            p.components,
-                            p.semantic,
-                            p.confidence,
-                            p.insn_index,
-                        );
-                    }
-                }
-            }
+        if cli.analysis.infer_params {
+            print_parameters(&ufx);
         }
 
-        if cli.cfg {
-            if let Some(vs) = &ufx.vertex_shader
-                && let Some(prog) = vs.program()
-            {
-                match cfglib_dxbc::build_cfg(prog) {
-                    Ok(cfg) => {
-                        println!(
-                            "\n  -- Vertex Shader CFG ({} blocks, {} edges) --",
-                            cfg.blocks().len(),
-                            cfg.edges().count(),
-                        );
-                        println!("{}", cfg.to_dot());
-                    }
-                    Err(e) => eprintln!("  VS CFG error: {e}"),
-                }
-            }
-
-            for (i, ps) in ufx.pixel_shaders.iter().enumerate() {
-                if let Some(prog) = ps.program() {
-                    match cfglib_dxbc::build_cfg(prog) {
-                        Ok(cfg) => {
-                            println!(
-                                "\n  -- Pixel Shader {i} CFG ({} blocks, {} edges) --",
-                                cfg.blocks().len(),
-                                cfg.edges().count(),
-                            );
-                            println!("{}", cfg.to_dot());
-                        }
-                        Err(e) => eprintln!("  PS {i} CFG error: {e}"),
-                    }
-                }
-            }
+        if cli.analysis.cfg {
+            print_cfg(&ufx);
         }
 
         println!();
     }
 }
 
-fn print_shader_info(shader: &d3dasm::Shader, cb_only: bool, disasm: bool) {
+fn print_shader_info(shader: &ufx::Shader<'_>, cb_only: bool, disasm: bool) {
     if let Some(prog) = shader.program() {
         println!("  SM {}.{}", prog.major_version, prog.minor_version);
     }
@@ -304,7 +306,7 @@ fn print_shader_info(shader: &d3dasm::Shader, cb_only: bool, disasm: bool) {
     }
 }
 
-fn format_type(t: &d3dasm::dxbc::chunks::rdef::TypeDesc) -> String {
+fn format_type(t: &ufx::dxbc::chunks::rdef::TypeDesc<'_>) -> String {
     let base = match t.var_type {
         0 => "void",
         1 => "bool",
@@ -321,11 +323,9 @@ fn format_type(t: &d3dasm::dxbc::chunks::rdef::TypeDesc) -> String {
         _ => "?",
     };
     let class = match t.class {
-        0 => "",    // scalar
-        1 => "vec", // vector
-        2 => "mat", // matrix row-major
-        3 => "mat", // matrix col-major
-        _ => "",
+        1 => "vec",     // vector
+        2 | 3 => "mat", // row-major or column-major matrix
+        _ => "",        // scalar or unknown class
     };
     if t.rows == 1 && t.columns == 1 {
         base.to_string()

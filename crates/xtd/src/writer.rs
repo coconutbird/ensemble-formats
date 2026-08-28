@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use ecf::io::WriteBe;
+use nostdio::WriteBe;
 
 use crate::{
     CHUNK_ALPHA, CHUNK_AO, CHUNK_ATLAS, CHUNK_LIGHTING, CHUNK_TERRAIN, CHUNK_TESS,
@@ -14,6 +14,10 @@ pub struct Writer;
 
 impl Writer {
     /// Write an XTD file to a byte vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container cannot be finalized.
     pub fn write(file: &XtdFile) -> Result<Vec<u8>> {
         file.to_bytes()
     }
@@ -21,6 +25,10 @@ impl Writer {
 
 impl XtdFile {
     /// Serialize this XTD file to bytes (ECF container).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container cannot be finalized.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         Writer::write_inner(self)
     }
@@ -80,7 +88,7 @@ impl Writer {
         for v in &chunk.max {
             buf.write_f32_be(*v).unwrap();
         }
-        buf.push(if chunk.can_cast_shadows { 1 } else { 0 });
+        buf.push(u8::from(chunk.can_cast_shadows));
         buf
     }
 }

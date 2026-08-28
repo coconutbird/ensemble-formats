@@ -7,14 +7,14 @@ use alloc::vec::Vec;
 use ecf::io::{NoProgress, Progress, Read, Seek, Write};
 use tiger::{Digest, Tiger};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::header::{EraArchiveHeader, EraChunkExtra};
 
 /// ERA file ID constant.
-const ERA_FILE_ID: u32 = 0x17FDBA9C;
+const ERA_FILE_ID: u32 = 0x17FD_BA9C;
 
 /// ERA chunk ID (used for both filename table and file entries).
-const ERA_CHUNK_ID: u64 = 0x8DAFB100;
+const ERA_CHUNK_ID: u64 = 0x8DAF_B100;
 
 /// A file to be added to an ERA archive (uncompressed).
 struct PendingFile {
@@ -48,7 +48,7 @@ pub struct Writer {
     signing_key: Option<crate::crypto::merkle::PrivateKey>,
 }
 
-/// Pre-computed archive layout (shared between finalize and write_to).
+/// Pre-computed archive layout (shared between finalize and `write_to`).
 struct ComputedLayout {
     ecf_header: HeaderLayout,
     chunks: Vec<ChunkLayout>,
@@ -61,6 +61,7 @@ struct ComputedLayout {
 
 impl Writer {
     /// Create a new ERA writer.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             files: Vec::new(),
@@ -99,108 +100,135 @@ impl Writer {
         });
     }
 
-    /// Compress all pending files and compute the archive layout.
-    ///
-    /// `signature_size` is the number of bytes reserved for the digital
-    /// signature block between the ERA archive header and the chunk headers.
-    fn compute_layout(&self, signature_size: u32) -> ComputedLayout {
-        // Build filename table
+    /// Build the null-terminated filename table and its encoded offsets.
+    fn build_filename_table(&self) -> Result<(Vec<u8>, Vec<u32>, usize)> {
         let mut filename_table = Vec::new();
         let mut name_offsets = Vec::new();
 
         for file in &self.files {
-            name_offsets.push(filename_table.len() as u32);
+            name_offsets.push(filename_offset(filename_table.len())?);
             filename_table.extend_from_slice(file.filename.as_bytes());
             filename_table.push(0);
         }
 
-        let precomp_name_start = name_offsets.len();
+        let precompressed_start = name_offsets.len();
         for file in &self.precompressed {
-            name_offsets.push(filename_table.len() as u32);
+            name_offsets.push(filename_offset(filename_table.len())?);
             filename_table.extend_from_slice(file.filename.as_bytes());
             filename_table.push(0);
         }
 
+        Ok((filename_table, name_offsets, precompressed_start))
+    }
+
+    /// Compress all pending files and compute the archive layout.
+    ///
+    /// `signature_size` is the number of bytes reserved for the digital
+    /// signature block between the ERA archive header and the chunk headers.
+    fn compute_layout(&self, signature_size: u32) -> Result<ComputedLayout> {
+        let (filename_table, name_offsets, precomp_name_start) = self.build_filename_table()?;
         let filename_table_raw_len = filename_table.len();
-        let compressed_names = compress_data(&filename_table);
-        let compressed_files: Vec<CompressedData> =
-            self.files.iter().map(|f| compress_data(&f.data)).collect();
+        let compressed_names = compress_data(&filename_table)?;
+        let compressed_files: Vec<CompressedData> = self
+            .files
+            .iter()
+            .map(|file| compress_data(&file.data))
+            .collect::<Result<_>>()?;
 
         // Calculate layout
-        let total_files = self.files.len() + self.precompressed.len();
-        let num_chunks = 1 + total_files;
-        let total_header_size =
-            ecf::EcfHeader::SIZE + EraArchiveHeader::SIZE + signature_size as usize;
-        let chunk_header_size = ecf::EcfChunkHeader::SIZE + EraChunkExtra::SIZE;
-        let headers_size = total_header_size + chunk_header_size * num_chunks;
+        let total_files = self
+            .files
+            .len()
+            .checked_add(self.precompressed.len())
+            .ok_or(Error::SizeOverflow("file count"))?;
+        let num_chunks = total_files
+            .checked_add(1)
+            .ok_or(Error::SizeOverflow("chunk count"))?;
+        let signature_size =
+            usize::try_from(signature_size).map_err(|_| Error::SizeOverflow("signature size"))?;
+        let total_header_size = ecf::EcfHeader::SIZE
+            .checked_add(EraArchiveHeader::SIZE)
+            .and_then(|size| size.checked_add(signature_size))
+            .ok_or(Error::SizeOverflow("archive header"))?;
+        let chunk_header_size = ecf::EcfChunkHeader::SIZE
+            .checked_add(EraChunkExtra::SIZE)
+            .ok_or(Error::SizeOverflow("chunk header"))?;
+        let headers_size = chunk_header_size
+            .checked_mul(num_chunks)
+            .and_then(|size| size.checked_add(total_header_size))
+            .ok_or(Error::SizeOverflow("archive headers"))?;
 
-        let mut data_offset = align16(headers_size);
+        let mut data_offset = align16(headers_size)?;
         let mut chunks = Vec::with_capacity(num_chunks);
 
         // Filename table chunk (index 0)
         chunks.push(ChunkLayout {
             id: ERA_CHUNK_ID,
-            offset: data_offset as u32,
-            size: compressed_names.data.len() as u32,
-            decomp_size: filename_table_raw_len as u32,
+            offset: format_u32(data_offset, "filename-table offset")?,
+            size: format_u32(compressed_names.data.len(), "compressed filename table")?,
+            decomp_size: format_u32(filename_table_raw_len, "filename table")?,
             name_offset: 0,
             comp_tiger128: compressed_names.tiger128,
         });
-        data_offset = align16(data_offset + compressed_names.data.len());
+        data_offset = aligned_end(data_offset, compressed_names.data.len())?;
 
         // Regular file chunks
         for (i, (file, compressed)) in self.files.iter().zip(&compressed_files).enumerate() {
             chunks.push(ChunkLayout {
                 id: ERA_CHUNK_ID,
-                offset: data_offset as u32,
-                size: compressed.data.len() as u32,
-                decomp_size: file.data.len() as u32,
+                offset: format_u32(data_offset, "file offset")?,
+                size: format_u32(compressed.data.len(), "compressed file")?,
+                decomp_size: format_u32(file.data.len(), "file")?,
                 name_offset: name_offsets[i],
                 comp_tiger128: compressed.tiger128,
             });
-            data_offset = align16(data_offset + compressed.data.len());
+            data_offset = aligned_end(data_offset, compressed.data.len())?;
         }
 
         // Pre-compressed file chunks
         for (i, file) in self.precompressed.iter().enumerate() {
             chunks.push(ChunkLayout {
                 id: ERA_CHUNK_ID,
-                offset: data_offset as u32,
-                size: file.compressed_data.len() as u32,
+                offset: format_u32(data_offset, "file offset")?,
+                size: format_u32(file.compressed_data.len(), "compressed file")?,
                 decomp_size: file.decompressed_size,
                 name_offset: name_offsets[precomp_name_start + i],
                 comp_tiger128: file.tiger128,
             });
-            data_offset = align16(data_offset + file.compressed_data.len());
+            data_offset = aligned_end(data_offset, file.compressed_data.len())?;
         }
 
-        let total_data_bytes: u64 = compressed_names.data.len() as u64
-            + compressed_files
-                .iter()
-                .map(|f| f.data.len() as u64)
-                .sum::<u64>()
-            + self
-                .precompressed
-                .iter()
-                .map(|f| f.compressed_data.len() as u64)
-                .sum::<u64>();
+        let total_data_bytes = core::iter::once(compressed_names.data.len())
+            .chain(compressed_files.iter().map(|file| file.data.len()))
+            .chain(
+                self.precompressed
+                    .iter()
+                    .map(|file| file.compressed_data.len()),
+            )
+            .try_fold(0u64, |total, size| {
+                let size = u64::try_from(size).map_err(|_| Error::SizeOverflow("archive data"))?;
+                total
+                    .checked_add(size)
+                    .ok_or(Error::SizeOverflow("archive data"))
+            })?;
 
         let ecf_header = HeaderLayout {
-            header_size: total_header_size as u32,
-            file_size: data_offset as u32,
-            num_chunks: num_chunks as u16,
+            header_size: format_u32(total_header_size, "header size")?,
+            file_size: format_u32(data_offset, "archive size")?,
+            num_chunks: u16::try_from(num_chunks)
+                .map_err(|_| Error::SizeOverflow("chunk count"))?,
             id: ERA_FILE_ID,
             chunk_extra_data_size: 32,
         };
 
-        ComputedLayout {
+        Ok(ComputedLayout {
             ecf_header,
             chunks,
             compressed_names,
             compressed_files,
             total_data_bytes,
-            signature_size,
-        }
+            signature_size: format_u32(signature_size, "signature size")?,
+        })
     }
 
     /// Compute layout and (optionally) sign the archive.
@@ -216,48 +244,52 @@ impl Writer {
     /// signatures to fit.
     fn compute_layout_and_sign(&self) -> Result<(ComputedLayout, Option<Vec<u8>>)> {
         let Some(key) = &self.signing_key else {
-            return Ok((self.compute_layout(0), None));
+            return Ok((self.compute_layout(0)?, None));
         };
 
         // Seed: sign a dummy hash to discover the initial signature size.
         let dummy_sig = crate::crypto::merkle::sign(key, &[0u8; 20])?;
-        let mut sig_size = dummy_sig.len() as u32;
+        let mut sig_size = format_u32(dummy_sig.len(), "signature size")?;
 
         // Track all observed signature sizes to detect oscillation.
         let mut seen_sizes: Vec<u32> = Vec::new();
 
         // Iterate until stable (or oscillation detected).
         for _ in 0..16 {
-            let layout = self.compute_layout(sig_size);
+            let layout = self.compute_layout(sig_size)?;
             let header_hash = layout_header_hash(&layout);
             let sig = crate::crypto::merkle::sign(key, &header_hash)?;
+            let new_size = format_u32(sig.len(), "signature size")?;
 
-            if sig.len() as u32 == sig_size {
+            if new_size == sig_size {
                 return Ok((layout, Some(sig)));
             }
 
             // Check for oscillation: have we seen this size before?
-            if seen_sizes.contains(&(sig.len() as u32)) {
+            if seen_sizes.contains(&new_size) {
                 // Oscillation detected. Use the max of all observed sizes
                 // so the signature always fits, and pad shorter sigs.
                 let max_size = seen_sizes
                     .iter()
                     .copied()
-                    .chain(core::iter::once(sig.len() as u32))
+                    .chain(core::iter::once(new_size))
                     .max()
-                    .unwrap();
-                let layout = self.compute_layout(max_size);
+                    .ok_or(Error::SizeOverflow("signature size"))?;
+                let layout = self.compute_layout(max_size)?;
                 let header_hash = layout_header_hash(&layout);
                 let sig = crate::crypto::merkle::sign(key, &header_hash)?;
 
                 // Pad to exactly max_size
                 let mut padded = sig;
-                padded.resize(max_size as usize, 0);
+                padded.resize(
+                    usize::try_from(max_size).map_err(|_| Error::SizeOverflow("signature size"))?,
+                    0,
+                );
                 return Ok((layout, Some(padded)));
             }
 
             seen_sizes.push(sig_size);
-            sig_size = sig.len() as u32;
+            sig_size = new_size;
         }
 
         // Final fallback: use the max observed size and pad.
@@ -267,15 +299,22 @@ impl Writer {
             .chain(core::iter::once(sig_size))
             .max()
             .unwrap_or(sig_size);
-        let layout = self.compute_layout(max_size);
+        let layout = self.compute_layout(max_size)?;
         let header_hash = layout_header_hash(&layout);
         let sig = crate::crypto::merkle::sign(key, &header_hash)?;
         let mut padded = sig;
-        padded.resize(max_size as usize, 0);
+        padded.resize(
+            usize::try_from(max_size).map_err(|_| Error::SizeOverflow("signature size"))?,
+            0,
+        );
         Ok((layout, Some(padded)))
     }
 
     /// Build the archive into a `Vec<u8>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if compression, layout, signing, or output sizing fails.
     pub fn finalize(&self) -> Result<Vec<u8>> {
         self.finalize_with_progress(&mut NoProgress)
     }
@@ -284,6 +323,11 @@ impl Writer {
     ///
     /// The [`Progress`] implementation receives `(bytes_written, total_bytes)`
     /// and should return `true` to continue or `false` to cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if compression, layout, signing, or output sizing fails,
+    /// or if the progress callback cancels the operation.
     pub fn finalize_with_progress(&self, progress: &mut impl Progress) -> Result<Vec<u8>> {
         let (layout, signature) = self.compute_layout_and_sign()?;
 
@@ -369,6 +413,10 @@ impl Writer {
     /// in memory, this writes headers and chunk data sequentially to the
     /// provided writer. Ideal for piping directly through an encryption writer
     /// to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if archive construction or writing fails.
     pub fn write_to(&self, writer: impl Write) -> Result<u64> {
         self.write_to_with_progress(writer, &mut NoProgress)
     }
@@ -377,6 +425,11 @@ impl Writer {
     ///
     /// The [`Progress`] implementation receives `(bytes_written, total_bytes)`
     /// and should return `true` to continue or `false` to cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if archive construction or writing fails, or if the
+    /// progress callback cancels the operation.
     pub fn write_to_with_progress(
         &self,
         mut writer: impl Write,
@@ -495,7 +548,7 @@ impl Writer {
                 .map_err(|_| crate::error::Error::UnexpectedEof)?;
         }
 
-        Ok(layout.ecf_header.file_size as u64)
+        Ok(u64::from(layout.ecf_header.file_size))
     }
 }
 
@@ -525,40 +578,66 @@ struct ChunkLayout {
 }
 
 /// Align to 16-byte boundary.
-fn align16(n: usize) -> usize {
-    (n + 15) & !15
+fn align16(value: usize) -> Result<usize> {
+    value
+        .checked_add(15)
+        .map(|aligned| aligned & !15)
+        .ok_or(Error::SizeOverflow("aligned archive offset"))
+}
+
+fn aligned_end(offset: usize, size: usize) -> Result<usize> {
+    let end = offset
+        .checked_add(size)
+        .ok_or(Error::SizeOverflow("archive data offset"))?;
+    align16(end)
+}
+
+fn format_u32(value: usize, field: &'static str) -> Result<u32> {
+    u32::try_from(value).map_err(|_| Error::SizeOverflow(field))
+}
+
+fn filename_offset(value: usize) -> Result<u32> {
+    let offset = format_u32(value, "filename-table offset")?;
+    if offset > 0x00FF_FFFF {
+        return Err(Error::SizeOverflow("24-bit filename-table offset"));
+    }
+    Ok(offset)
 }
 
 /// Compress data and compute its Tiger128 hash.
-fn compress_data(data: &[u8]) -> CompressedData {
-    let decompressed_size = data.len() as u32;
+fn compress_data(data: &[u8]) -> Result<CompressedData> {
+    let decompressed_size = format_u32(data.len(), "decompressed file")?;
     let compressed = miniz_oxide::deflate::compress_to_vec(data, 6);
 
     let hash = Tiger::digest(&compressed);
     let mut tiger128 = [0u8; 16];
     tiger128.copy_from_slice(&hash[..16]);
 
-    CompressedData {
+    Ok(CompressedData {
         data: compressed,
         tiger128,
         decompressed_size,
-    }
+    })
 }
 
 /// Compress data and compute its Tiger128 hash (public API).
-pub fn compress_file_data(data: &[u8]) -> CompressedData {
+///
+/// # Errors
+///
+/// Returns an error if `data` is larger than the ERA format's `u32` size field.
+pub fn compress_file_data(data: &[u8]) -> Result<CompressedData> {
     compress_data(data)
 }
 
-/// Compute adler32 over header bytes 12..header_size.
+/// Compute adler32 over header bytes `12..header_size`.
 ///
 /// The engine's `ECF_ValidateHeader` checksums `data[12..header_size]`,
 /// which for ERA covers:
-///   - bytes 12..32: ECF header tail (file_size, num_chunks, flags, id, chunk_extra, pad)
-///   - bytes 32..48: ERA archive header (archive_magic, signature_size, reserved)
+///   - bytes 12..32: ECF header tail (`file_size`, `num_chunks`, flags, id, `chunk_extra`, pad)
+///   - bytes 32..48: ERA archive header (`archive_magic`, `signature_size`, reserved)
 ///   - bytes 48..48+sig: signature block (if present)
 ///
-/// Chunk headers start *after* header_size and are NOT included.
+/// Chunk headers start *after* `header_size` and are NOT included.
 fn compute_header_adler32(
     header: &HeaderLayout,
     archive_hdr: &EraArchiveHeader,
@@ -588,7 +667,7 @@ fn compute_header_adler32(
 
 /// Write ECF header into a buffer (must be at least 32 bytes).
 fn write_ecf_header(buf: &mut [u8], header: &HeaderLayout, adler32: u32) {
-    buf[0..4].copy_from_slice(&0xDABA7737u32.to_be_bytes());
+    buf[0..4].copy_from_slice(&0xDABA_7737_u32.to_be_bytes());
     buf[4..8].copy_from_slice(&header.header_size.to_be_bytes());
     buf[8..12].copy_from_slice(&adler32.to_be_bytes());
     buf[12..16].copy_from_slice(&header.file_size.to_be_bytes());
@@ -639,11 +718,15 @@ fn layout_header_hash(layout: &ComputedLayout) -> [u8; 20] {
 }
 
 impl Writer {
-    /// Stream the archive through a [`crypto::encrypt::Writer`], encrypting
+    /// Stream the archive through a [`crate::crypto::encrypt::Writer`], encrypting
     /// on the fly.
     ///
     /// The destination must implement `Write + Seek + Read` (e.g. a `File`).
     /// Returns the inner writer after finishing encryption.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if archive construction, encryption, or writing fails.
     pub fn write_to_encrypted<W: Write + Seek + Read>(
         &self,
         dest: W,
@@ -652,8 +735,13 @@ impl Writer {
         self.write_to_encrypted_with_progress(dest, keys, &mut NoProgress)
     }
 
-    /// Stream the archive through a [`crypto::encrypt::Writer`] with progress
+    /// Stream the archive through a [`crate::crypto::encrypt::Writer`] with progress
     /// reporting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if archive construction, encryption, or writing fails,
+    /// or if the progress callback cancels the operation.
     pub fn write_to_encrypted_with_progress<W: Write + Seek + Read>(
         &self,
         dest: W,

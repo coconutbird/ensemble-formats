@@ -29,6 +29,10 @@ pub enum Error {
     #[error("unexpected end of data")]
     UnexpectedEof,
 
+    /// Chunk data does not satisfy the cipher or archive format requirements.
+    #[error("invalid chunk data: {0}")]
+    InvalidChunkData(String),
+
     /// Operation was cancelled by the progress callback.
     #[error("operation cancelled")]
     Cancelled,
@@ -48,4 +52,8 @@ pub enum Error {
     /// Signature data truncated.
     #[error("signature data truncated")]
     SignatureTruncated,
+
+    /// A count, size, or offset cannot be represented by the ERA format.
+    #[error("{0} is too large for the ERA format")]
+    SizeOverflow(&'static str),
 }

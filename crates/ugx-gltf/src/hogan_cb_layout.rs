@@ -7,7 +7,11 @@
 //! This module predicts the exact CB layout (parameter names and offsets)
 //! from those flags, enabling named key-value storage in glTF extras.
 
-use ugx::types::HoganFlag;
+use ugx::types::HoganFlag::{
+    Emissive, EmissiveSubA, EmissiveSubB, ExtraTextureLayer, HeightBlend, MaterialOverride,
+    PerChannelUv, ReducedTexturing, RoughnessChannel, ScrollAnim, SimplifiedTexturing, VertexAnimA,
+    VertexAnimB,
+};
 
 /// A named parameter in the predicted constant buffer layout.
 #[derive(Debug, Clone)]
@@ -77,7 +81,7 @@ impl LayoutBuilder {
             offset: self.pos,
             components,
         });
-        self.pos += components as u32;
+        self.pos += u32::from(components);
     }
 
     /// Advance position to the next register boundary (multiple of 4).
@@ -129,12 +133,10 @@ pub(crate) fn predicted_layout_from_flags(flags: u64) -> CbLayout {
 /// CB7 (Vertex Shader) layout prediction.
 ///
 /// CB7 is relatively simple:
-/// - Bit 23: height_blend_range (4) + color_gradient (4)
-/// - Bit 41 or 44: vertex_anim (4)
+/// - Bit 23: `height_blend_range` (4) + `color_gradient` (4)
+/// - Bit 41 or 44: `vertex_anim` (4)
 fn predict_cb7(flags: u64) -> (Vec<CbLayoutEntry>, u32) {
     let mut b = LayoutBuilder::new();
-
-    use HoganFlag::*;
 
     if HeightBlend.test(flags) {
         b.push("height_blend_range", 4);
@@ -154,16 +156,16 @@ fn predict_cb7(flags: u64) -> (Vec<CbLayoutEntry>, u32) {
 /// CB8 uses a two-group packing strategy based on HLSL struct alignment:
 ///
 /// **Group A** (core texturing, sequential from register 0):
-/// - uv_scale_t0_t1 (2), uv_scale_t2_t3 (2) — always
-/// - normal_intensity (1) — unless bit 46/53
-/// - uv_scale_t4 (1) — if bit 27 or 32
-/// - emissive_intensity (1) — if bit 32 or (bit 27 + (29|30))
+/// - `uv_scale_t0_t1` (2), `uv_scale_t2_t3` (2) — always
+/// - `normal_intensity` (1) — unless bit 46/53
+/// - `uv_scale_t4` (1) — if bit 27 or 32
+/// - `emissive_intensity` (1) — if bit 32 or (bit 27 + (29|30))
 /// - scroll params — if bit 35 + 32
 ///
 /// **Group B** (material overrides, starts at register boundary):
-/// - roughness_channel_value (1) — if bit 28
-/// - detail_blend (1), roughness_override (1), override_strength (1) — if bit 49
-/// - spec_override_color (3), override_bias (1) — if bit 49 (new register)
+/// - `roughness_channel_value` (1) — if bit 28
+/// - `detail_blend` (1), `roughness_override` (1), `override_strength` (1) — if bit 49
+/// - `spec_override_color` (3), `override_bias` (1) — if bit 49 (new register)
 fn predict_cb8(flags: u64) -> (Vec<CbLayoutEntry>, u32) {
     let mut b = LayoutBuilder::new();
 
@@ -172,8 +174,6 @@ fn predict_cb8(flags: u64) -> (Vec<CbLayoutEntry>, u32) {
     // Always present: UV scales for base texture pairs.
     b.push("uv_scale_t0_t1", 2);
     b.push("uv_scale_t2_t3", 2);
-
-    use HoganFlag::*;
 
     // Normal intensity (absent in simplified/reduced texturing modes).
     if !SimplifiedTexturing.test(flags) && !ReducedTexturing.test(flags) {

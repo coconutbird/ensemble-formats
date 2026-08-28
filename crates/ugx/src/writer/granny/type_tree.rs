@@ -1,4 +1,4 @@
-//! FileInfo type tree builder — constructs the Granny2 schema describing
+//! `FileInfo` type tree builder — constructs the Granny2 schema describing
 //! all structures in the chunk.
 
 use alloc::string::String;
@@ -68,7 +68,7 @@ fn build_bone_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the bone_binding type definition matching the engine's at `0x141460EA0`.
+/// Build the `bone_binding` type definition matching the engine's at `0x141460EA0`.
 fn build_bone_binding_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "BoneName"),
@@ -82,7 +82,7 @@ fn build_bone_binding_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the VertexData type definition matching the engine's at `0x14145E3E0`.
+/// Build the `VertexData` type definition matching the engine's at `0x14145E3E0`.
 fn build_vertex_data_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::ReferenceToVariantArray, "Vertices"),
@@ -111,7 +111,7 @@ fn build_vertex_data_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the TriTopology type definition matching the engine's at `0x14145F1A0`.
+/// Build the `TriTopology` type definition matching the engine's at `0x14145F1A0`.
 fn build_tri_topology_type() -> Vec<GrannyTypeMember> {
     let int32_elem = vec![tm(GrannyMemberType::Int32, "Int32")];
     let int16_elem = vec![tm(GrannyMemberType::Int16, "Int16")];
@@ -265,7 +265,7 @@ fn build_model_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the ArtToolInfo type definition matching the engine's at `0x141461330`.
+/// Build the `ArtToolInfo` type definition matching the engine's at `0x141461330`.
 fn build_art_tool_info_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "FromArtToolName"),
@@ -281,7 +281,7 @@ fn build_art_tool_info_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the ExporterInfo type definition matching the engine's at `0x1414611F0`.
+/// Build the `ExporterInfo` type definition matching the engine's at `0x1414611F0`.
 fn build_exporter_info_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "ExporterName"),
@@ -350,7 +350,7 @@ fn build_material_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the TrackGroup type definition matching the engine's at `0x14145CDA0`.
+/// Build the `TrackGroup` type definition matching the engine's at `0x14145CDA0`.
 fn build_track_group_type() -> Vec<GrannyTypeMember> {
     vec![
         tm(GrannyMemberType::StringMember, "Name"),
@@ -398,7 +398,7 @@ fn build_animation_type() -> Vec<GrannyTypeMember> {
     ]
 }
 
-/// Build the complete FileInfo type definition tree matching the engine's
+/// Build the complete `FileInfo` type definition tree matching the engine's
 /// hardcoded `GrannyFileInfoTypeDef` at `0x14145C7D0` → `0x141461B60`.
 ///
 /// This constructs the Granny2 schema matching the `file_info` struct layout:

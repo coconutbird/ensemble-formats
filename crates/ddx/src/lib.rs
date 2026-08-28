@@ -8,7 +8,7 @@
 //! A DDX file is an ECF container with file ID `0x13CF5D01` containing:
 //! - Header chunk (ID `0x1D8828C6ECAF45F2`): Texture metadata
 //! - Mip0 chunk (ID `0x3F74B8E87D2B44BF`): Base mip level data
-//! - MipChain chunk (ID `0x46F1FD3F394348B8`, optional): Additional mip levels
+//! - `MipChain` chunk (ID `0x46F1FD3F394348B8`, optional): Additional mip levels
 //!
 //! ## Supported Formats
 //!
@@ -70,20 +70,25 @@ mod tests {
         }
     }
 
+    fn has_ddx_extension(name: &str) -> bool {
+        name.rsplit_once('.')
+            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("ddx"))
+    }
+
     #[test]
-    #[ignore] // Requires root.era to be present
+    #[ignore = "requires a local root.era fixture"]
     fn test_parse_ddx_from_era() {
         let era_data = read_and_decrypt_era(&find_era_path());
         let mut archive = era::Reader::from_bytes(&era_data).expect("Failed to read ERA");
 
         let ddx_idx = archive
             .iter()
-            .position(|e| e.filename.as_ref().is_some_and(|n| n.ends_with(".ddx")))
+            .position(|e| e.filename.as_deref().is_some_and(has_ddx_extension))
             .expect("No DDX file found in archive");
 
         let entry = archive.entry(ddx_idx).unwrap();
         let filename = entry.filename.clone().unwrap();
-        println!("Testing DDX file: {}", filename);
+        println!("Testing DDX file: {filename}");
 
         let data = archive.read_entry(ddx_idx).expect("Failed to read DDX");
         println!("DDX data size: {} bytes", data.len());
@@ -106,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Requires root.era to be present
+    #[ignore = "requires a local root.era fixture"]
     fn test_parse_all_ddx_from_era() {
         let era_data = read_and_decrypt_era(&find_era_path());
         let mut archive = era::Reader::from_bytes(&era_data).expect("Failed to read ERA");
@@ -114,7 +119,7 @@ mod tests {
         let ddx_indices: Vec<usize> = archive
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.filename.as_ref().is_some_and(|n| n.ends_with(".ddx")))
+            .filter(|(_, e)| e.filename.as_deref().is_some_and(has_ddx_extension))
             .map(|(i, _)| i)
             .collect();
 
@@ -140,23 +145,23 @@ mod tests {
                         success += 1;
                     }
                     Err(e) => {
-                        println!("PARSE FAIL: {} - {}", filename, e);
+                        println!("PARSE FAIL: {filename} - {e}");
                         failed += 1;
                     }
                 },
                 Err(e) => {
-                    println!("READ FAIL: {} - {}", filename, e);
+                    println!("READ FAIL: {filename} - {e}");
                     failed += 1;
                 }
             }
         }
 
-        println!("\nResults: {} success, {} failed", success, failed);
+        println!("\nResults: {success} success, {failed} failed");
         assert_eq!(failed, 0, "Some DDX files failed to parse");
     }
 
     #[test]
-    #[ignore] // Requires root.era to be present
+    #[ignore = "requires a local root.era fixture"]
     fn test_roundtrip_ddx() {
         let era_data = read_and_decrypt_era(&find_era_path());
         let mut archive = era::Reader::from_bytes(&era_data).expect("Failed to read ERA");
@@ -164,7 +169,7 @@ mod tests {
         let ddx_indices: Vec<usize> = archive
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.filename.as_ref().is_some_and(|n| n.ends_with(".ddx")))
+            .filter(|(_, e)| e.filename.as_deref().is_some_and(has_ddx_extension))
             .map(|(i, _)| i)
             .collect();
 
@@ -182,23 +187,20 @@ mod tests {
 
             assert_eq!(
                 texture.info.width, reparsed.info.width,
-                "{}: width mismatch",
-                filename
+                "{filename}: width mismatch"
             );
             assert_eq!(
                 texture.info.height, reparsed.info.height,
-                "{}: height mismatch",
-                filename
+                "{filename}: height mismatch"
             );
             assert_eq!(
                 texture.data.len(),
                 reparsed.data.len(),
-                "{}: data size mismatch",
-                filename
+                "{filename}: data size mismatch"
             );
-            assert_eq!(texture.data, reparsed.data, "{}: data mismatch", filename);
+            assert_eq!(texture.data, reparsed.data, "{filename}: data mismatch");
 
-            println!("OK: {} - roundtrip successful", filename);
+            println!("OK: {filename} - roundtrip successful");
         }
     }
 }

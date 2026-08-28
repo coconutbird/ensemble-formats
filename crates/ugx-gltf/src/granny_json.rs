@@ -3,6 +3,7 @@
 //! Used to preserve bone `ExtendedData` through glTF extras roundtrip.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use num_traits::ToPrimitive;
 use serde_json::Value;
 use ugx::{GrannyMemberType, GrannyTypeMember, GrannyVariant};
 
@@ -40,19 +41,22 @@ pub fn json_to_type_members(val: &Value) -> Option<Vec<GrannyTypeMember>> {
 
 fn json_to_type_member(val: &Value) -> Option<GrannyTypeMember> {
     let obj = val.as_object()?;
-    let type_id = obj.get("type")?.as_u64()? as u32;
+    let type_id = u32::try_from(obj.get("type")?.as_u64()?).ok()?;
     let member_type = GrannyMemberType::from_u32(type_id)?;
     let name = obj
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let array_width = obj.get("array_width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let array_width = obj
+        .get("array_width")
+        .and_then(gltf_json::Value::as_u64)
+        .map_or(Some(0), |value| u32::try_from(value).ok())?;
     let extra_arr = obj.get("extra").and_then(|v| v.as_array());
     let extra = if let Some(ea) = extra_arr {
         let mut e = [0u32; 3];
         for (i, v) in ea.iter().enumerate().take(3) {
-            e[i] = v.as_u64().unwrap_or(0) as u32;
+            e[i] = u32::try_from(v.as_u64().unwrap_or(0)).ok()?;
         }
         e
     } else {
@@ -119,9 +123,7 @@ pub fn variant_to_json(v: &GrannyVariant) -> Value {
 }
 
 fn json_f32(f: f32) -> Value {
-    serde_json::Number::from_f64(f as f64)
-        .map(Value::Number)
-        .unwrap_or(Value::Null)
+    serde_json::Number::from_f64(f64::from(f)).map_or(Value::Null, Value::Number)
 }
 
 // ---------------------------------------------------------------------------
@@ -177,69 +179,35 @@ pub fn json_to_variant(val: &Value, members: &[GrannyTypeMember]) -> Option<Gran
 
 fn json_to_variant_field(val: &Value, m: &GrannyTypeMember, width: usize) -> Option<GrannyVariant> {
     match m.member_type {
-        GrannyMemberType::Real32 => {
-            let arr = val.as_array()?;
-            let vals: Vec<f32> = arr
-                .iter()
-                .take(width)
-                .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-                .collect();
-            Some(GrannyVariant::Real32(vals))
-        }
+        GrannyMemberType::Real32 => Some(GrannyVariant::Real32(json_array(val, width, |value| {
+            value.as_f64().unwrap_or(0.0).to_f32()
+        })?)),
         GrannyMemberType::Int8 | GrannyMemberType::BinormalInt8 => {
-            let arr = val.as_array()?;
-            let vals: Vec<i8> = arr
-                .iter()
-                .take(width)
-                .map(|v| v.as_i64().unwrap_or(0) as i8)
-                .collect();
-            Some(GrannyVariant::Int8(vals))
+            Some(GrannyVariant::Int8(json_array(val, width, |value| {
+                i8::try_from(value.as_i64().unwrap_or(0)).ok()
+            })?))
         }
         GrannyMemberType::UInt8 | GrannyMemberType::NormalUInt8 => {
-            let arr = val.as_array()?;
-            let vals: Vec<u8> = arr
-                .iter()
-                .take(width)
-                .map(|v| v.as_u64().unwrap_or(0) as u8)
-                .collect();
-            Some(GrannyVariant::UInt8(vals))
+            Some(GrannyVariant::UInt8(json_array(val, width, |value| {
+                u8::try_from(value.as_u64().unwrap_or(0)).ok()
+            })?))
         }
         GrannyMemberType::Int16 | GrannyMemberType::BinormalInt16 => {
-            let arr = val.as_array()?;
-            let vals: Vec<i16> = arr
-                .iter()
-                .take(width)
-                .map(|v| v.as_i64().unwrap_or(0) as i16)
-                .collect();
-            Some(GrannyVariant::Int16(vals))
+            Some(GrannyVariant::Int16(json_array(val, width, |value| {
+                i16::try_from(value.as_i64().unwrap_or(0)).ok()
+            })?))
         }
         GrannyMemberType::UInt16 | GrannyMemberType::NormalUInt16 | GrannyMemberType::Real16 => {
-            let arr = val.as_array()?;
-            let vals: Vec<u16> = arr
-                .iter()
-                .take(width)
-                .map(|v| v.as_u64().unwrap_or(0) as u16)
-                .collect();
-            Some(GrannyVariant::UInt16(vals))
+            Some(GrannyVariant::UInt16(json_array(val, width, |value| {
+                u16::try_from(value.as_u64().unwrap_or(0)).ok()
+            })?))
         }
-        GrannyMemberType::Int32 => {
-            let arr = val.as_array()?;
-            let vals: Vec<i32> = arr
-                .iter()
-                .take(width)
-                .map(|v| v.as_i64().unwrap_or(0) as i32)
-                .collect();
-            Some(GrannyVariant::Int32(vals))
-        }
-        GrannyMemberType::UInt32 => {
-            let arr = val.as_array()?;
-            let vals: Vec<u32> = arr
-                .iter()
-                .take(width)
-                .map(|v| v.as_u64().unwrap_or(0) as u32)
-                .collect();
-            Some(GrannyVariant::UInt32(vals))
-        }
+        GrannyMemberType::Int32 => Some(GrannyVariant::Int32(json_array(val, width, |value| {
+            i32::try_from(value.as_i64().unwrap_or(0)).ok()
+        })?)),
+        GrannyMemberType::UInt32 => Some(GrannyVariant::UInt32(json_array(val, width, |value| {
+            u32::try_from(value.as_u64().unwrap_or(0)).ok()
+        })?)),
         GrannyMemberType::StringMember => {
             let s = val.as_str().unwrap_or("").to_string();
             Some(GrannyVariant::StringVal(s))
@@ -285,4 +253,12 @@ fn json_to_variant_field(val: &Value, m: &GrannyTypeMember, width: usize) -> Opt
         }
         GrannyMemberType::EmptyReference | GrannyMemberType::End => Some(GrannyVariant::Empty),
     }
+}
+
+fn json_array<T>(
+    value: &Value,
+    width: usize,
+    convert: impl Fn(&Value) -> Option<T>,
+) -> Option<Vec<T>> {
+    value.as_array()?.iter().take(width).map(convert).collect()
 }

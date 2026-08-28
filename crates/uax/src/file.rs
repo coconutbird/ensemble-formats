@@ -27,6 +27,11 @@ pub struct UaxFile {
 
 impl UaxFile {
     /// Read a UAX file from a byte slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container is invalid, the animation chunk
+    /// is absent or truncated, or the file ID is not a UAX ID.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let ecf = EcfReader::new(data)?;
 
@@ -57,45 +62,66 @@ impl UaxFile {
     }
 
     /// Write the UAX file to bytes, preserving original ECF structure.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SizeOverflow`] if the chunk size or a stored offset
+    /// cannot be represented by the ECF format or current platform.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         out.extend_from_slice(&self.ecf_header.to_bytes());
 
         let mut chunk_header = self.chunk_header.clone();
         chunk_header.adler32 = ecf::adler32(&self.chunk_data);
-        chunk_header.size = self.chunk_data.len() as u32;
+        chunk_header.size =
+            u32::try_from(self.chunk_data.len()).map_err(|_| Error::SizeOverflow("chunk size"))?;
         out.extend_from_slice(&chunk_header.to_bytes());
 
-        let chunk_offset = chunk_header.offset as usize;
+        let chunk_offset = usize::try_from(chunk_header.offset)
+            .map_err(|_| Error::SizeOverflow("chunk offset"))?;
         if out.len() < chunk_offset {
             out.resize(chunk_offset, 0);
         }
         out.extend_from_slice(&self.chunk_data);
 
-        let target_size = self.ecf_header.file_size as usize;
+        let target_size = usize::try_from(self.ecf_header.file_size)
+            .map_err(|_| Error::SizeOverflow("file size"))?;
         if out.len() < target_size {
             out.resize(target_size, 0);
         }
 
-        out
+        Ok(out)
     }
 
     /// Get the raw chunk data (for debugging/inspection).
+    #[must_use]
     pub fn chunk_data(&self) -> &[u8] {
         &self.chunk_data
     }
 
     /// Get the animation count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedEof`] if the count field is truncated.
     pub fn animation_count(&self) -> Result<i32> {
         read_i32_le(&self.chunk_data, file_info::ANIMATION_COUNT).ok_or(Error::UnexpectedEof)
     }
 
-    /// Get the track group count from file_info.
+    /// Get the track group count from `file_info`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedEof`] if the count field is truncated.
     pub fn track_group_count(&self) -> Result<i32> {
         read_i32_le(&self.chunk_data, file_info::TRACK_GROUP_COUNT).ok_or(Error::UnexpectedEof)
     }
 
     /// Get animation name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the animation pointer chain is absent or invalid.
     pub fn animation_name(&self) -> Result<Option<String>> {
         let anim_off = self.animation_struct_offset()?;
         let fi = &self.chunk_data;
@@ -103,12 +129,22 @@ impl UaxFile {
     }
 
     /// Get animation duration in seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the animation pointer chain or duration field is
+    /// absent or truncated.
     pub fn duration(&self) -> Result<f32> {
         let off = self.animation_struct_offset()?;
         read_f32_le(&self.chunk_data, off + animation::DURATION).ok_or(Error::UnexpectedEof)
     }
 
     /// Set animation duration in seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the animation pointer chain or duration field is
+    /// absent or truncated.
     pub fn set_duration(&mut self, duration: f32) -> Result<()> {
         let off = self.animation_struct_offset()?;
         let pos = off + animation::DURATION;
@@ -120,20 +156,30 @@ impl UaxFile {
     }
 
     /// Get animation time step between keyframes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the animation pointer chain or time-step field is
+    /// absent or truncated.
     pub fn time_step(&self) -> Result<f32> {
         let off = self.animation_struct_offset()?;
         read_f32_le(&self.chunk_data, off + animation::TIME_STEP).ok_or(Error::UnexpectedEof)
     }
 
     /// Get animation oversampling factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the animation pointer chain or oversampling field
+    /// is absent or truncated.
     pub fn oversampling(&self) -> Result<f32> {
         let off = self.animation_struct_offset()?;
         read_f32_le(&self.chunk_data, off + animation::OVERSAMPLING).ok_or(Error::UnexpectedEof)
     }
 
-    /// Resolve the offset of the first animation struct within chunk_data.
+    /// Resolve the offset of the first animation struct within `chunk_data`.
     ///
-    /// file_info has Animations** at +0x7C → ptr array → first animation struct.
+    /// `file_info` has Animations** at +0x7C → ptr array → first animation struct.
     fn animation_struct_offset(&self) -> Result<usize> {
         let fi = &self.chunk_data;
         // Animations** → array of pointers
@@ -161,9 +207,8 @@ mod tests {
 
     #[test]
     fn test_hw1_era_roundtrip() {
-        let game_dir = match load_game_dir("HW1_GAME_DIR") {
-            Some(d) => d,
-            None => return,
+        let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
+            return;
         };
 
         let era_paths = find_files_flat(&game_dir, "era");
@@ -176,9 +221,8 @@ mod tests {
         let mut errors = std::vec::Vec::new();
 
         for era_path in &era_paths {
-            let mut archive = match open_era(era_path) {
-                Ok(a) => a,
-                Err(_) => continue,
+            let Ok(mut archive) = open_era(era_path) else {
+                continue;
             };
             let entries = find_entries_in_era(&archive, ".uax");
             for (idx, filename) in &entries {
@@ -190,7 +234,7 @@ mod tests {
                 };
                 match UaxFile::from_bytes(&data) {
                     Ok(uax) => {
-                        let written = uax.to_bytes();
+                        let written = uax.to_bytes().expect("parsed UAX should serialize");
                         if data != written {
                             errors.push(std::format!(
                                 "{filename}: byte mismatch (orig={}, written={})",
@@ -223,9 +267,8 @@ mod tests {
 
     #[test]
     fn test_hw2_loose_roundtrip() {
-        let game_dir = match load_game_dir("HW2_GAME_DIR") {
-            Some(d) => d,
-            None => return,
+        let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
+            return;
         };
 
         let uax_files = find_files_by_ext(&game_dir, "uax");
@@ -243,7 +286,7 @@ mod tests {
             };
             match UaxFile::from_bytes(&data) {
                 Ok(uax) => {
-                    let written = uax.to_bytes();
+                    let written = uax.to_bytes().expect("parsed UAX should serialize");
                     if data != written {
                         errors.push(std::format!(
                             "{}: byte mismatch (orig={}, written={})",
@@ -307,7 +350,7 @@ mod tests {
         uax.set_duration(new_duration).unwrap();
         assert!((uax.duration().unwrap() - new_duration).abs() < 0.001);
 
-        let written = uax.to_bytes();
+        let written = uax.to_bytes().expect("modified UAX should serialize");
         let reloaded = UaxFile::from_bytes(&written).expect("Failed to re-read UAX");
         assert!((reloaded.duration().unwrap() - new_duration).abs() < 0.001);
 

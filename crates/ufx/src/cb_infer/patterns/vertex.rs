@@ -65,11 +65,11 @@ pub(crate) fn try_classify(
         let has_sincos = ctx
             .later_in_block()
             .iter()
-            .any(|sm4| matches!(sm4.0.opcode, Opcode::Sincos))
+            .any(|sm4| matches!(sm4.instruction().opcode, Opcode::Sincos))
             || ctx
                 .earlier_in_block()
                 .iter()
-                .any(|sm4| matches!(sm4.0.opcode, Opcode::Sincos))
+                .any(|sm4| matches!(sm4.instruction().opcode, Opcode::Sincos))
             || ctx
                 .successor_insns()
                 .iter()

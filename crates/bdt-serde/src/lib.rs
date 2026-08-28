@@ -46,11 +46,21 @@ pub use warn::Warning;
 /// Serialize a `T` into a [`bdt::Node`] with the given element name.
 ///
 /// This is the inverse of [`from_node`].
+///
+/// # Errors
+///
+/// Returns an error if `value` contains a type unsupported by BDT or a number
+/// outside the corresponding BDT variant's range.
 pub fn to_node<T: serde::Serialize>(name: &str, value: &T) -> Result<bdt::Node, Error> {
     ser::to_node(name, value)
 }
 
 /// Deserialize a `T` from a [`bdt::Node`] reference.
+///
+/// # Errors
+///
+/// Returns an error when the node shape or a variant value cannot be converted
+/// to the representation requested by `T`.
 pub fn from_node<'de, T: serde::Deserialize<'de>>(node: &bdt::Node) -> Result<T, Error> {
     T::deserialize(de::NodeDeserializer::new(node, None))
 }
@@ -61,6 +71,11 @@ pub fn from_node<'de, T: serde::Deserialize<'de>>(node: &bdt::Node) -> Result<T,
 /// Returns `(value, warnings)` — the parse succeeds even if there are
 /// unmapped fields; the warnings tell you which XML attributes/elements
 /// were not consumed by the target struct.
+///
+/// # Errors
+///
+/// Returns an error when the node shape or a variant value cannot be converted
+/// to the representation requested by `T`.
 pub fn from_node_warned<'de, T: serde::Deserialize<'de>>(
     node: &bdt::Node,
 ) -> Result<(T, alloc::vec::Vec<Warning>), Error> {

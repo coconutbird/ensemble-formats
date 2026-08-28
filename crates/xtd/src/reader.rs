@@ -38,6 +38,11 @@ pub struct Reader;
 
 impl Reader {
     /// Read an XTD file from a byte slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container or a recognized XTD chunk is
+    /// invalid or truncated.
     pub fn read(data: &[u8]) -> Result<XtdFile> {
         XtdFile::from_bytes(data)
     }
@@ -45,6 +50,11 @@ impl Reader {
 
 impl XtdFile {
     /// Parse an XTD file from a byte slice (ECF container).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container or a recognized XTD chunk is
+    /// invalid or truncated.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let ecf = ecf::Reader::new(data)?;
 

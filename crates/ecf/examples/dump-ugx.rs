@@ -1,11 +1,11 @@
-//! Dump UGX file structure for debugging.
+//! Dumps a UGX file's ECF structure for debugging.
 
 use ecf::Reader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: dump_ugx <file.ugx>");
+        eprintln!("Usage: dump-ugx <file.ugx>");
         std::process::exit(1);
     }
 
@@ -59,7 +59,7 @@ fn hexdump(data: &[u8], max: usize) {
     for (i, chunk) in data[..show].chunks(16).enumerate() {
         print!("  {:04X}: ", i * 16);
         for byte in chunk {
-            print!("{:02X} ", byte);
+            print!("{byte:02X} ");
         }
         // Pad
         for _ in chunk.len()..16 {
@@ -72,7 +72,7 @@ fn hexdump(data: &[u8], max: usize) {
             } else {
                 '.'
             };
-            print!("{}", c);
+            print!("{c}");
         }
         println!("|");
     }

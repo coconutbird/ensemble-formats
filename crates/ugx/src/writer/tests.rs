@@ -3,84 +3,66 @@ use crate::types::*;
 use crate::vertex::element::VertexElementType;
 use crate::vertex::packer::{MAX_UV, UnivertPacker, UnpackedVertex};
 use alloc::boxed::Box;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::vec;
 
-/// Create a minimal HW2-format test UgxGeom with one section and two bones.
-///
-/// Uses HalfFloat4 positions, Dec3N normals, HalfFloat2 UVs (20-byte vertex)
-/// matching HW2 vertex layout. Section has `base_vert_packer: None`.
-fn make_test_geom() -> UgxGeom {
-    // HW2-style packer: used for packing only, not stored in section.
-    let packer = UnivertPacker {
+fn assert_float_array_bits_eq<const N: usize>(actual: &[f32; N], expected: &[f32; N]) {
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+fn assert_float_bits_eq(actual: f32, expected: f32) {
+    assert_eq!(actual.to_bits(), expected.to_bits());
+}
+
+fn make_test_packer() -> UnivertPacker {
+    let mut uv_types = [VertexElementType::Ignore; MAX_UV];
+    uv_types[0] = VertexElementType::HalfFloat2;
+    UnivertPacker {
         pack_order: "PT0NA0".to_string(),
-        decl_order: "".to_string(),
+        decl_order: String::new(),
         pos_type: VertexElementType::HalfFloat4,
         basis_type: VertexElementType::Ignore,
         basis_scale_type: VertexElementType::Ignore,
         tangent_type: VertexElementType::Dec3N,
         normal_type: VertexElementType::Dec3N,
-        uv_types: {
-            let mut uv = [VertexElementType::Ignore; MAX_UV];
-            uv[0] = VertexElementType::HalfFloat2;
-            uv
-        },
+        uv_types,
         indices_type: VertexElementType::Ignore,
         weights_type: VertexElementType::Ignore,
         diffuse_type: VertexElementType::Ignore,
         index_type: VertexElementType::Ignore,
-    };
-
-    // Build vertex buffer
-    let vertices = vec![
-        UnpackedVertex {
-            position: [0.0, 0.0, 0.0],
-            normal: [0.0, 1.0, 0.0],
-            tangent: [1.0, 0.0, 0.0, 1.0],
-            texcoords: {
-                let mut tc = [[0.0; 2]; MAX_UV];
-                tc[0] = [0.0, 0.0];
-                tc
-            },
-            num_texcoords: 1,
-            ..Default::default()
-        },
-        UnpackedVertex {
-            position: [1.0, 0.0, 0.0],
-            normal: [0.0, 1.0, 0.0],
-            tangent: [1.0, 0.0, 0.0, 1.0],
-            texcoords: {
-                let mut tc = [[0.0; 2]; MAX_UV];
-                tc[0] = [1.0, 0.0];
-                tc
-            },
-            num_texcoords: 1,
-            ..Default::default()
-        },
-        UnpackedVertex {
-            position: [0.0, 1.0, 0.0],
-            normal: [0.0, 1.0, 0.0],
-            tangent: [1.0, 0.0, 0.0, 1.0],
-            texcoords: {
-                let mut tc = [[0.0; 2]; MAX_UV];
-                tc[0] = [0.0, 1.0];
-                tc
-            },
-            num_texcoords: 1,
-            ..Default::default()
-        },
-    ];
-
-    let mut vertex_buffer = Vec::new();
-    for v in &vertices {
-        packer.pack_vertex(&mut vertex_buffer, v, 1.0);
     }
+}
 
-    let vert_size = packer.vertex_size() as i32;
-    let vb_bytes = vertex_buffer.len() as i32;
+fn make_test_vertex(position: [f32; 3], texcoord: [f32; 2]) -> UnpackedVertex {
+    let mut texcoords = [[0.0; 2]; MAX_UV];
+    texcoords[0] = texcoord;
+    UnpackedVertex {
+        position,
+        normal: [0.0, 1.0, 0.0],
+        tangent: [1.0, 0.0, 0.0, 1.0],
+        texcoords,
+        num_texcoords: 1,
+        ..Default::default()
+    }
+}
 
-    // HW2: no base_vert_packer stored in section
-    let section = Section {
+fn make_test_vertex_buffer(packer: &UnivertPacker) -> Vec<u8> {
+    let vertices = [
+        make_test_vertex([0.0, 0.0, 0.0], [0.0, 0.0]),
+        make_test_vertex([1.0, 0.0, 0.0], [1.0, 0.0]),
+        make_test_vertex([0.0, 1.0, 0.0], [0.0, 1.0]),
+    ];
+    let mut buffer = Vec::new();
+    for vertex in &vertices {
+        packer.pack_vertex(&mut buffer, vertex, 1.0);
+    }
+    buffer
+}
+
+fn make_test_section(vert_size: i32, vb_bytes: i32) -> Section {
+    Section {
         material_index: -1,
         accessory_index: -1,
         max_bones: 0,
@@ -98,7 +80,19 @@ fn make_test_geom() -> UgxGeom {
         lod_near_distance: 0.0,
         lod_far_distance: f32::MAX,
         lod_fade_distance: 0.0,
-    };
+    }
+}
+
+/// Create a minimal HW2-format test `UgxGeom` with one section and two bones.
+///
+/// Uses `HalfFloat4` positions, `Dec3N` normals, `HalfFloat2` UVs (20-byte vertex)
+/// matching HW2 vertex layout. Section has `base_vert_packer: None`.
+fn make_test_geom() -> UgxGeom {
+    let packer = make_test_packer();
+    let vertex_buffer = make_test_vertex_buffer(&packer);
+    let vert_size = i32::try_from(packer.vertex_size()).unwrap();
+    let vb_bytes = i32::try_from(vertex_buffer.len()).unwrap();
+    let section = make_test_section(vert_size, vb_bytes);
 
     let bones = vec![
         Bone {
@@ -147,9 +141,11 @@ fn make_test_geom() -> UgxGeom {
         max_instances: 1,
         instance_index_multiplier: 4,
         large_geom_bone_index: i16::MAX,
-        all_sections_rigid: true,
-        all_sections_skinned: false,
-        global_bones: false,
+        flags: GeometryFlags {
+            all_sections_rigid: true,
+            all_sections_skinned: false,
+            global_bones: false,
+        },
         aabb_tree: None,
     }
 }
@@ -162,22 +158,25 @@ fn test_write_read_roundtrip() {
 
     assert_eq!(read_back.rigid_bone_index, original.rigid_bone_index);
     assert_eq!(read_back.rigid_only, original.rigid_only);
-    assert_eq!(read_back.all_sections_rigid, original.all_sections_rigid);
     assert_eq!(
-        read_back.all_sections_skinned,
-        original.all_sections_skinned
-    );
-    assert_eq!(read_back.global_bones, original.global_bones);
-    assert_eq!(
-        read_back.bounding_sphere.center,
-        original.bounding_sphere.center
+        read_back.flags.all_sections_rigid,
+        original.flags.all_sections_rigid
     );
     assert_eq!(
+        read_back.flags.all_sections_skinned,
+        original.flags.all_sections_skinned
+    );
+    assert_eq!(read_back.flags.global_bones, original.flags.global_bones);
+    assert_float_array_bits_eq(
+        &read_back.bounding_sphere.center,
+        &original.bounding_sphere.center,
+    );
+    assert_float_bits_eq(
         read_back.bounding_sphere.radius,
-        original.bounding_sphere.radius
+        original.bounding_sphere.radius,
     );
-    assert_eq!(read_back.bounds.min, original.bounds.min);
-    assert_eq!(read_back.bounds.max, original.bounds.max);
+    assert_float_array_bits_eq(&read_back.bounds.min, &original.bounds.min);
+    assert_float_array_bits_eq(&read_back.bounds.max, &original.bounds.max);
 
     assert_eq!(read_back.sections.len(), original.sections.len());
     let s_orig = &original.sections[0];
@@ -205,8 +204,8 @@ fn test_write_read_roundtrip() {
         .iter()
         .zip(read_back.bone_bounds.iter())
     {
-        assert_eq!(bb_read.min, bb_orig.min);
-        assert_eq!(bb_read.max, bb_orig.max);
+        assert_float_array_bits_eq(&bb_read.min, &bb_orig.min);
+        assert_float_array_bits_eq(&bb_read.max, &bb_orig.max);
     }
 
     // HW2 uses inferred vertex unpacking — compare read-back vertices
@@ -223,8 +222,8 @@ fn test_write_read_roundtrip() {
     assert!((read_verts[2].position[0]).abs() < 0.01);
     assert!((read_verts[2].position[1] - 1.0).abs() < 0.01);
 
-    let orig_indices = original.get_section_indices(0);
-    let read_indices = read_back.get_section_indices(0);
+    let orig_indices = original.get_section_indices(0).unwrap();
+    let read_indices = read_back.get_section_indices(0).unwrap();
     assert_eq!(read_indices, orig_indices);
 }
 

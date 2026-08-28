@@ -4,6 +4,8 @@ use ecf::io::{IoError, Read, Seek, SeekFrom, Write, invalid_seek, is_unexpected_
 
 use super::tea::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64, tea_encrypt_block64};
 
+const BLOCK_SIZE_U64: u64 = 64;
+
 /// A writer that encrypts data using TEA cipher before writing
 pub struct Writer<W> {
     inner: W,
@@ -46,7 +48,8 @@ impl<W: Write + Seek + Read> Writer<W> {
         }
 
         // Encrypt the block
-        let counter = (self.buffer_offset / TEA_BLOCK_SIZE as u64) as u32;
+        let counter =
+            u32::try_from(self.buffer_offset / BLOCK_SIZE_U64).map_err(|_| invalid_seek())?;
         let mut encrypted = [0u8; TEA_BLOCK_SIZE];
         tea_encrypt_block64(&self.keys, &self.buffer, &mut encrypted, counter);
 
@@ -65,7 +68,8 @@ impl<W: Write + Seek + Read> Writer<W> {
         let mut encrypted = [0u8; TEA_BLOCK_SIZE];
         match self.inner.read_exact(&mut encrypted) {
             Ok(()) => {
-                let counter = (block_offset / TEA_BLOCK_SIZE as u64) as u32;
+                let counter =
+                    u32::try_from(block_offset / BLOCK_SIZE_U64).map_err(|_| invalid_seek())?;
                 tea_decrypt_block64(&self.keys, &encrypted, &mut self.buffer, counter);
                 Ok(true)
             }
@@ -79,6 +83,11 @@ impl<W: Write + Seek + Read> Writer<W> {
     }
 
     /// Finish writing and return the inner writer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffered block cannot be encrypted, sought to,
+    /// or written to the underlying stream.
     pub fn finish(mut self) -> Result<W, IoError> {
         self.flush_buffer()?;
         Ok(self.inner)
@@ -100,8 +109,9 @@ impl<W: Write + Seek + Read> Write for Writer<W> {
 
         while total_written < buf.len() {
             // Calculate block alignment
-            let block_offset = (self.position / TEA_BLOCK_SIZE as u64) * TEA_BLOCK_SIZE as u64;
-            let offset_in_block = (self.position % TEA_BLOCK_SIZE as u64) as usize;
+            let block_offset = (self.position / BLOCK_SIZE_U64) * BLOCK_SIZE_U64;
+            let offset_in_block =
+                usize::try_from(self.position % BLOCK_SIZE_U64).map_err(|_| invalid_seek())?;
 
             // If we're starting a new block, flush the old one
             if self.buffer_len > 0 && block_offset != self.buffer_offset {
@@ -130,7 +140,10 @@ impl<W: Write + Seek + Read> Write for Writer<W> {
                 .copy_from_slice(&buf[total_written..total_written + bytes_to_copy]);
 
             self.buffer_len = self.buffer_len.max(offset_in_block + bytes_to_copy);
-            self.position += bytes_to_copy as u64;
+            self.position = self
+                .position
+                .checked_add(u64::try_from(bytes_to_copy).map_err(|_| invalid_seek())?)
+                .ok_or_else(invalid_seek)?;
             total_written += bytes_to_copy;
 
             // Flush if block is complete
@@ -156,9 +169,9 @@ impl<W: Write + Seek + Read> Seek for Writer<W> {
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset,
             SeekFrom::Current(offset) => if offset >= 0 {
-                self.position.checked_add(offset as u64)
+                self.position.checked_add(offset.unsigned_abs())
             } else {
-                self.position.checked_sub((-offset) as u64)
+                self.position.checked_sub(offset.unsigned_abs())
             }
             .ok_or_else(invalid_seek)?,
             SeekFrom::End(_) => {

@@ -38,7 +38,7 @@ pub mod version;
 pub use aabb_tree::{AabbTree, AabbTreeNode};
 pub use accessory::Accessory;
 pub use bone::{Bone, GrannyBone, GrannyBoneBinding, GrannyLocalTransform, GrannyMesh};
-pub use geom::UgxGeom;
+pub use geom::{GeometryFlags, UgxGeom};
 pub use granny::{GrannyMemberType, GrannyTypeMember, GrannyVariant};
 pub use material::{
     HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData, ShaderPermutation,

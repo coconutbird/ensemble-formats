@@ -41,7 +41,6 @@ bdt = { path = "crates/bdt" }
 bdt-serde = { path = "crates/bdt-serde" }
 ddx = { path = "crates/ddx" }
 ecf = { path = "crates/ecf" }
-nostdio = "0.1"
 era = { path = "crates/era" }
 uax = { path = "crates/uax" }
 xmb = { path = "crates/xmb" }
@@ -60,12 +59,19 @@ fxb = { path = "crates/fxb" }
 fxb-cli = { path = "crates/fxb-cli" }
 
 # External dependencies
-cfglib = { git = "https://github.com/coconutbird/cfglib.git" }
-cfglib-dxbc = { git = "https://github.com/coconutbird/cfglib.git" }
-d3dasm = { version = "0.1" }
-byteorder = "1.5"
+base64 = "0.22"
+hashbrown = { version = "0.16.1", default-features = false, features = [
+    "default-hasher",
+    "alloc",
+] }
+cfglib = { git = "https://github.com/coconutbird/cfglib.git", branch = "dev/il" }
+d3dasm = { git = "https://github.com/coconutbird/d3dasm.git", branch = "main" }
 texture2ddecoder = "0.1"
 flate2 = "1.0"
+glob = "0.3.3"
+gltf = "1.4"
+gltf-json = { version = "1.4", features = ["names", "extras"] }
+hex = "0.4.3"
 thiserror = "2.0"
 sha1 = { version = "0.10", default-features = false }
 tiger = { version = "0.2", default-features = false }
@@ -77,9 +83,28 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rayon = "1.10"
 image = "0.25"
+miniz_oxide = { version = "0.8", default-features = false, features = [
+    "with-alloc",
+] }
+nostdio = "0.2"
+num-traits = { version = "0.2", default-features = false }
 zerocopy = { version = "0.8", features = ["derive"] }
 dotenvy = "0.15"
 
+[workspace.lints.rust]
+warnings = { level = "deny", priority = -2 }
+unused = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+future_incompatible = { level = "deny", priority = -1 }
 
-[patch.crates-io]
-dxbc = { git = "https://github.com/coconutbird/d3dasm.git" }
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+[workspace.lints.rustdoc]
+all = { level = "deny", priority = -1 }

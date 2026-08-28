@@ -34,9 +34,9 @@ pub struct AnimationRaw {
     pub track_groups_ptr: [u8; 8],
 }
 
-/// x64 granny_file_info layout (verified from IDA: BGrannyAnimation::load).
+/// x64 `granny_file_info` layout (verified from IDA: `BGrannyAnimation::load`).
 ///
-/// The chunk data starts directly with file_info — no separate header.
+/// The chunk data starts directly with `file_info` — no separate header.
 /// Pointers are 64-bit LE offsets from the start of the chunk data.
 ///
 /// ```text
@@ -49,17 +49,17 @@ pub struct AnimationRaw {
 /// +0x7C: uint64 Animations**       (ptr to array of ptrs)
 /// ```
 pub mod file_info {
-    /// Offset of FromFileName pointer (u64)
+    /// Offset of `FromFileName` pointer (u64)
     pub const FROM_FILE_NAME_PTR: usize = 0x10;
-    /// Offset of TrackGroupCount field (i32)
+    /// Offset of `TrackGroupCount` field (i32)
     pub const TRACK_GROUP_COUNT: usize = 0x6C;
-    /// Offset of TrackGroups** pointer (u64) — points to array of pointers
+    /// Offset of `TrackGroups`** pointer (u64) — points to array of pointers
     pub const TRACK_GROUPS_PTR: usize = 0x70;
-    /// Offset of AnimationCount field (i32)
+    /// Offset of `AnimationCount` field (i32)
     pub const ANIMATION_COUNT: usize = 0x78;
     /// Offset of Animations** pointer (u64) — points to array of pointers
     pub const ANIMATIONS_PTR: usize = 0x7C;
-    /// Minimum file_info size to read animation/track group fields
+    /// Minimum `file_info` size to read animation/track group fields
     pub const MIN_SIZE: usize = 0x84;
 }
 
@@ -69,19 +69,19 @@ pub mod animation {
     pub const NAME_PTR: usize = 0x00;
     /// Offset of Duration field (f32)
     pub const DURATION: usize = 0x08;
-    /// Offset of TimeStep field (f32)
+    /// Offset of `TimeStep` field (f32)
     pub const TIME_STEP: usize = 0x0C;
     /// Offset of Oversampling field (f32)
     pub const OVERSAMPLING: usize = 0x10;
-    /// Offset of TrackGroupCount field (i32)
+    /// Offset of `TrackGroupCount` field (i32)
     pub const TRACK_GROUP_COUNT: usize = 0x14;
-    /// Offset of TrackGroups** pointer (u64) — points to array of pointers
+    /// Offset of `TrackGroups`** pointer (u64) — points to array of pointers
     pub const TRACK_GROUPS_PTR: usize = 0x18;
     /// Total size of animation structure
     pub const SIZE: usize = 0x20;
 }
 
-/// Granny track_group structure offsets (x64 packed layout).
+/// Granny `track_group` structure offsets (x64 packed layout).
 ///
 /// Verified from IDA and hex dumps. The Granny serializer packs fields
 /// sequentially without C alignment padding:
@@ -101,31 +101,31 @@ pub mod animation {
 pub mod track_group {
     /// Offset of Name pointer (u64)
     pub const NAME_PTR: usize = 0x00;
-    /// Offset of VectorTrackCount field (i32)
+    /// Offset of `VectorTrackCount` field (i32)
     pub const VECTOR_TRACK_COUNT: usize = 0x08;
-    /// Offset of VectorTracks pointer (u64)
+    /// Offset of `VectorTracks` pointer (u64)
     pub const VECTOR_TRACKS_PTR: usize = 0x0C;
-    /// Offset of TransformTrackCount field (i32)
+    /// Offset of `TransformTrackCount` field (i32)
     pub const TRANSFORM_TRACK_COUNT: usize = 0x14;
-    /// Offset of TransformTracks pointer (u64)
+    /// Offset of `TransformTracks` pointer (u64)
     pub const TRANSFORM_TRACKS_PTR: usize = 0x18;
-    /// Offset of TransformLODErrorCount field (i32)
+    /// Offset of `TransformLODErrorCount` field (i32)
     pub const TRANSFORM_LOD_ERROR_COUNT: usize = 0x20;
-    /// Offset of TransformLODErrors pointer (u64)
+    /// Offset of `TransformLODErrors` pointer (u64)
     pub const TRANSFORM_LOD_ERRORS_PTR: usize = 0x24;
-    /// Offset of TextTrackCount field (i32)
+    /// Offset of `TextTrackCount` field (i32)
     pub const TEXT_TRACK_COUNT: usize = 0x2C;
-    /// Offset of TextTracks pointer (u64)
+    /// Offset of `TextTracks` pointer (u64)
     pub const TEXT_TRACKS_PTR: usize = 0x30;
-    /// Offset of InitialPlacement (granny_transform — 68 bytes)
+    /// Offset of `InitialPlacement` (`granny_transform` — 68 bytes)
     pub const INITIAL_PLACEMENT: usize = 0x38;
     /// Offset of Flags field (i32) — at 0x38 + 68 = 0x7C
     pub const FLAGS: usize = 0x7C;
-    /// Total size of track_group structure
+    /// Total size of `track_group` structure
     pub const SIZE: usize = 0x80;
 }
 
-/// Granny transform_track structure offsets (packed layout).
+/// Granny `transform_track` structure offsets (packed layout).
 ///
 /// ```text
 /// +0x00: Name*             (u64)
@@ -139,17 +139,17 @@ pub mod transform_track {
     pub const NAME_PTR: usize = 0x00;
     /// Offset of Flags field (i32)
     pub const FLAGS: usize = 0x08;
-    /// Offset of OrientationCurve (granny_curve2 = 16 bytes)
+    /// Offset of `OrientationCurve` (`granny_curve2` = 16 bytes)
     pub const ORIENTATION_CURVE: usize = 0x0C;
-    /// Offset of PositionCurve (16 bytes)
+    /// Offset of `PositionCurve` (16 bytes)
     pub const POSITION_CURVE: usize = 0x1C;
-    /// Offset of ScaleShearCurve (16 bytes)
+    /// Offset of `ScaleShearCurve` (16 bytes)
     pub const SCALE_SHEAR_CURVE: usize = 0x2C;
-    /// Total size of transform_track structure (packed)
+    /// Total size of `transform_track` structure (packed)
     pub const SIZE: usize = 0x3C;
 }
 
-/// Granny curve2 structure (wraps granny_variant).
+/// Granny curve2 structure (wraps `granny_variant`).
 pub mod curve2 {
     /// Offset of Type pointer in variant (u64)
     pub const TYPE_PTR: usize = 0x00;
@@ -159,7 +159,7 @@ pub mod curve2 {
     pub const SIZE: usize = 0x10;
 }
 
-/// Granny curve_data_header structure.
+/// Granny `curve_data_header` structure.
 pub mod curve_data_header {
     /// Offset of Format field (u8)
     pub const FORMAT: usize = 0x00;
@@ -169,7 +169,7 @@ pub mod curve_data_header {
     pub const SIZE: usize = 0x02;
 }
 
-/// Granny transform structure (used in InitialPlacement).
+/// Granny transform structure (used in `InitialPlacement`).
 ///
 /// ```text
 /// +0x00: Flags       (u32)
@@ -184,7 +184,7 @@ pub mod transform {
     pub const POSITION: usize = 0x04;
     /// Offset of Orientation (quad — 16 bytes)
     pub const ORIENTATION: usize = 0x10;
-    /// Offset of ScaleShear (3×3 matrix — 36 bytes)
+    /// Offset of `ScaleShear` (3×3 matrix — 36 bytes)
     pub const SCALE_SHEAR: usize = 0x20;
     /// Total size of transform structure (4 + 12 + 16 + 36 = 68 bytes)
     pub const SIZE: usize = 0x44;
@@ -215,7 +215,7 @@ pub struct Animation {
 /// A group of animation tracks, usually one per animated skeleton.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackGroup {
-    /// Track group name (e.g. "GrannyRootBone_Warthog01").
+    /// Track group name (e.g. "`GrannyRootBone_Warthog01`").
     pub name: Option<String>,
     /// Transform tracks (one per bone).
     pub transform_tracks: Vec<TransformTrack>,
@@ -272,14 +272,14 @@ pub struct CurveData {
 /// |  18 | D3I1K8uC8u      | Quantized 3D identity-interleaved    |
 #[derive(Debug, Clone, PartialEq)]
 pub enum CurvePayload {
-    /// Format 2: DaIdentity — no animation data, just dimension.
+    /// Format 2: `DaIdentity` — no animation data, just dimension.
     Identity {
         /// Number of output dimensions (3=position, 4=quaternion, 9=scale/shear).
         dimension: u16,
     },
 
-    /// Format 3: DaConstant32f — dimension-agnostic constant.
-    /// Controls are stored in a ref_arr (variable length f32 array).
+    /// Format 3: `DaConstant32f` — dimension-agnostic constant.
+    /// Controls are stored in a `ref_arr` (variable length f32 array).
     DaConstant32f {
         /// Padding field.
         padding: u16,
@@ -287,7 +287,7 @@ pub enum CurvePayload {
         controls: Vec<f32>,
     },
 
-    /// Format 4: D3Constant32f — 3D constant (e.g. position).
+    /// Format 4: `D3Constant32f` — 3D constant (e.g. position).
     D3Constant32f {
         /// Padding field.
         padding: u16,
@@ -295,7 +295,7 @@ pub enum CurvePayload {
         controls: [f32; 3],
     },
 
-    /// Format 5: D4Constant32f — 4D constant (e.g. quaternion).
+    /// Format 5: `D4Constant32f` — 4D constant (e.g. quaternion).
     D4Constant32f {
         /// Padding field.
         padding: u16,
@@ -303,17 +303,17 @@ pub enum CurvePayload {
         controls: [f32; 4],
     },
 
-    /// Format 1: DaK32fC32f — f32 knots and f32 controls.
+    /// Format 1: `DaK32fC32f` — f32 knots and f32 controls.
     DaK32fC32f {
         /// Padding field.
         padding: u16,
-        /// Knot values (f32 array from ref_arr).
+        /// Knot values (f32 array from `ref_arr`).
         knots: Vec<f32>,
-        /// Control point values (f32 array from ref_arr).
+        /// Control point values (f32 array from `ref_arr`).
         controls: Vec<f32>,
     },
 
-    /// Format 8: D4nK16uC15u — quantized 4D normalized curve (u16 knots/controls).
+    /// Format 8: `D4nK16uC15u` — quantized 4D normalized curve (u16 knots/controls).
     D4nK16uC15u {
         /// Scale/offset table entries (packed u16).
         scale_offset_table_entries: u16,
@@ -323,7 +323,7 @@ pub enum CurvePayload {
         knots_controls: Vec<u8>,
     },
 
-    /// Format 9: D4nK8uC7u — quantized 4D normalized curve (u8 knots/controls).
+    /// Format 9: `D4nK8uC7u` — quantized 4D normalized curve (u8 knots/controls).
     D4nK8uC7u {
         /// Scale/offset table entries (packed u16).
         scale_offset_table_entries: u16,
@@ -333,9 +333,9 @@ pub enum CurvePayload {
         knots_controls: Vec<u8>,
     },
 
-    /// Format 10: D3K16uC16u — quantized 3D curve with 16-bit knots/controls.
+    /// Format 10: `D3K16uC16u` — quantized 3D curve with 16-bit knots/controls.
     D3K16uC16u {
-        /// Truncated 1/knot_scale (u16 encoding of the scale).
+        /// Truncated `1/knot_scale` (u16 encoding of the scale).
         one_over_knot_scale_trunc: u16,
         /// Per-axis control scale factors [x, y, z].
         control_scales: [f32; 3],
@@ -345,9 +345,9 @@ pub enum CurvePayload {
         knots_controls: Vec<u8>,
     },
 
-    /// Format 11: D3K8uC8u — quantized 3D curve with 8-bit knots/controls.
+    /// Format 11: `D3K8uC8u` — quantized 3D curve with 8-bit knots/controls.
     D3K8uC8u {
-        /// Truncated 1/knot_scale (u16 encoding of the scale).
+        /// Truncated `1/knot_scale` (u16 encoding of the scale).
         one_over_knot_scale_trunc: u16,
         /// Per-axis control scale factors [x, y, z].
         control_scales: [f32; 3],
@@ -357,9 +357,9 @@ pub enum CurvePayload {
         knots_controls: Vec<u8>,
     },
 
-    /// Format 18: D3I1K8uC8u — quantized 3D identity-interleaved curve (8-bit).
+    /// Format 18: `D3I1K8uC8u` — quantized 3D identity-interleaved curve (8-bit).
     D3I1K8uC8u {
-        /// Truncated 1/knot_scale (u16 encoding of the scale).
+        /// Truncated `1/knot_scale` (u16 encoding of the scale).
         one_over_knot_scale_trunc: u16,
         /// Per-axis control scale factors [x, y, z].
         control_scales: [f32; 3],
@@ -406,6 +406,7 @@ impl Default for Transform {
 
 /// Read a little-endian u64 at the given offset.
 #[inline]
+#[must_use]
 pub fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
     data.get(offset..offset + 8)
         .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
@@ -413,6 +414,7 @@ pub fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
 
 /// Read a little-endian u16 at the given offset.
 #[inline]
+#[must_use]
 pub fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
     data.get(offset..offset + 2)
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
@@ -420,6 +422,7 @@ pub fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
 
 /// Read a little-endian u32 at the given offset.
 #[inline]
+#[must_use]
 pub fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
     data.get(offset..offset + 4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -427,18 +430,21 @@ pub fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
 
 /// Read a little-endian i32 at the given offset.
 #[inline]
+#[must_use]
 pub fn read_i32_le(data: &[u8], offset: usize) -> Option<i32> {
-    read_u32_le(data, offset).map(|v| v as i32)
+    read_u32_le(data, offset).map(u32::cast_signed)
 }
 
 /// Read a little-endian f32 at the given offset.
 #[inline]
+#[must_use]
 pub fn read_f32_le(data: &[u8], offset: usize) -> Option<f32> {
     data.get(offset..offset + 4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 /// Read a null-terminated C string from data at the given offset.
+#[must_use]
 pub fn read_cstring(data: &[u8], offset: usize) -> Option<String> {
     if offset >= data.len() {
         return None;
@@ -454,8 +460,9 @@ pub fn read_cstring(data: &[u8], offset: usize) -> Option<String> {
 /// Read a pointer (u64 LE) and resolve it as an offset into `data`.
 /// Returns `None` if the pointer is null or out of bounds.
 #[inline]
+#[must_use]
 pub fn read_ptr(data: &[u8], offset: usize) -> Option<usize> {
-    let ptr = read_u64_le(data, offset)? as usize;
+    let ptr = usize::try_from(read_u64_le(data, offset)?).ok()?;
     if ptr == 0 || ptr >= data.len() {
         None
     } else {
@@ -464,6 +471,7 @@ pub fn read_ptr(data: &[u8], offset: usize) -> Option<usize> {
 }
 
 /// Read a Granny transform from `data` at `offset`.
+#[must_use]
 pub fn read_transform(data: &[u8], offset: usize) -> Transform {
     let flags = read_u32_le(data, offset + transform::FLAGS).unwrap_or(0);
     let position = [

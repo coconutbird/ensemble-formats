@@ -5,13 +5,13 @@
 //! ## File Structure
 //!
 //! XTD files contain the following chunks:
-//! - `0x1111` - XTDHeader: Main header with terrain dimensions
-//! - `0x2222` - TerrainChunk: Per-chunk visual headers (196 chunks typical)
-//! - `0x8888` - AtlasChunk: Terrain atlas texture data
-//! - `0xAAAA` - TessChunk: Tessellation data
-//! - `0xBBBB` - LightingChunk: Lighting data
-//! - `0xCCCC` - AOChunk: Ambient occlusion data
-//! - `0xDDDD` - AlphaChunk: Alpha/transparency data
+//! - `0x1111` - `XTDHeader`: Main header with terrain dimensions
+//! - `0x2222` - `TerrainChunk`: Per-chunk visual headers (196 chunks typical)
+//! - `0x8888` - `AtlasChunk`: Terrain atlas texture data
+//! - `0xAAAA` - `TessChunk`: Tessellation data
+//! - `0xBBBB` - `LightingChunk`: Lighting data
+//! - `0xCCCC` - `AOChunk`: Ambient occlusion data
+//! - `0xDDDD` - `AlphaChunk`: Alpha/transparency data
 
 #![no_std]
 extern crate alloc;
@@ -74,11 +74,20 @@ mod tests {
     extern crate std;
     use super::*;
     use alloc::vec::Vec;
+    use num_traits::ToPrimitive;
     use std::{print, println};
 
     // Test files are in the extracted test_extract directory (relative to workspace root)
     const TEST_XTD_PATH: &str =
         "../../test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtd";
+
+    fn assert_float_bits_eq(actual: f32, expected: f32) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+
+    fn assert_float_array_bits_eq<const N: usize>(actual: [f32; N], expected: [f32; N]) {
+        assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+    }
 
     #[test]
     #[ignore = "requires extracted XTD file"]
@@ -118,9 +127,9 @@ mod tests {
         println!("\nOriginal header (first 64 bytes):");
         for (i, &byte) in original.iter().enumerate().take(64) {
             if i % 16 == 0 {
-                print!("  {:04X}: ", i);
+                print!("  {i:04X}: ");
             }
-            print!("{:02X} ", byte);
+            print!("{byte:02X} ");
             if i % 16 == 15 {
                 println!();
             }
@@ -128,9 +137,9 @@ mod tests {
         println!("\nRewritten header (first 64 bytes):");
         for (i, &byte) in rewritten.iter().enumerate().take(64) {
             if i % 16 == 0 {
-                print!("  {:04X}: ", i);
+                print!("  {i:04X}: ");
             }
-            print!("{:02X} ", byte);
+            print!("{byte:02X} ");
             if i % 16 == 15 {
                 println!();
             }
@@ -164,10 +173,7 @@ mod tests {
             if original.len() != rewritten.len() {
                 println!("Size mismatch: {} vs {}", original.len(), rewritten.len());
             }
-            panic!(
-                "XTD roundtrip failed: {} non-checksum differences!",
-                diff_count
-            );
+            panic!("XTD roundtrip failed: {diff_count} non-checksum differences!");
         }
     }
 
@@ -199,7 +205,9 @@ mod tests {
         }
 
         // Generate indices
-        let indices = vertices.generate_indices();
+        let indices = vertices
+            .generate_indices()
+            .expect("Failed to generate indices");
         println!(
             "\nGenerated {} indices ({} triangles)",
             indices.len(),
@@ -244,10 +252,7 @@ mod tests {
             let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();
             assert!(
                 (len - 1.0).abs() < 0.1,
-                "Normal {} not normalized: {:?} (len={})",
-                i,
-                norm,
-                len
+                "Normal {i} not normalized: {norm:?} (len={len})"
             );
         }
     }
@@ -287,7 +292,7 @@ mod tests {
         let mut sorted_levels: Vec<_> = level_counts.into_iter().collect();
         sorted_levels.sort_by_key(|(level, _)| *level);
         for (level, count) in sorted_levels {
-            println!("    Level {}: {} patches", level, count);
+            println!("    Level {level}: {count} patches");
         }
 
         // Print a few bounding boxes
@@ -316,22 +321,26 @@ mod tests {
 
         println!("Original mesh:");
         println!("  Vertices: {}", vertices.positions.len());
-        let original_indices = vertices.generate_indices();
+        let original_indices = vertices
+            .generate_indices()
+            .expect("Failed to generate original indices");
         println!("  Triangles: {}", original_indices.len() / 3);
 
         // Generate tessellated mesh
-        let tessellated = vertices.tessellate(&tess);
+        let tessellated = vertices
+            .tessellate(&tess)
+            .expect("Failed to tessellate terrain");
 
         println!("\nTessellated mesh:");
         println!("  Vertices: {}", tessellated.positions.len());
         println!("  Triangles: {}", tessellated.indices.len() / 3);
         println!(
             "  Vertex increase: {:.1}x",
-            tessellated.positions.len() as f32 / vertices.positions.len() as f32
+            ratio(tessellated.positions.len(), vertices.positions.len())
         );
         println!(
             "  Triangle increase: {:.1}x",
-            tessellated.indices.len() as f32 / original_indices.len() as f32
+            ratio(tessellated.indices.len(), original_indices.len())
         );
 
         // Verify tessellated mesh is valid
@@ -347,7 +356,7 @@ mod tests {
         // Check all indices are valid
         for &idx in &tessellated.indices {
             assert!(
-                (idx as usize) < tessellated.positions.len(),
+                usize::try_from(idx).expect("index must fit usize") < tessellated.positions.len(),
                 "Invalid index {} (max {})",
                 idx,
                 tessellated.positions.len()
@@ -355,7 +364,21 @@ mod tests {
         }
     }
 
-    /// Build a minimal but complete XtdFile for round-trip testing.
+    fn ratio(numerator: usize, denominator: usize) -> f32 {
+        numerator.to_f32().expect("numerator must fit f32")
+            / denominator.to_f32().expect("denominator must fit f32")
+    }
+
+    fn test_chunk_meta(id: u64) -> ChunkMeta {
+        ChunkMeta {
+            id,
+            alignment_log2: 4,
+            flags: 0,
+            resource_flags: 0,
+        }
+    }
+
+    /// Build a minimal but complete `XtdFile` for round-trip testing.
     fn make_test_xtd() -> XtdFile {
         let header = XtdHeader {
             version: XTD_VERSION,
@@ -395,67 +418,26 @@ mod tests {
         // 4 bounding boxes, 32 bytes each
         for i in 0..4u8 {
             for _ in 0..8 {
-                tess_data.extend_from_slice(&(i as f32).to_be_bytes());
+                tess_data.extend_from_slice(&f32::from(i).to_be_bytes());
             }
         }
         let lighting_data = alloc::vec![0xBB; 128];
         let ao_data = alloc::vec![0xCC; 256];
         let alpha_data = alloc::vec![0xDD; 256];
 
-        // Build chunk_order matching the standard layout
         let chunk_order = alloc::vec![
-            ChunkMeta {
-                id: CHUNK_XTD_HEADER,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
-            ChunkMeta {
-                id: CHUNK_TERRAIN,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
-            ChunkMeta {
-                id: CHUNK_TERRAIN,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
-            ChunkMeta {
-                id: CHUNK_ATLAS,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
-            ChunkMeta {
-                id: CHUNK_TESS,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
-            ChunkMeta {
-                id: CHUNK_LIGHTING,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
-            ChunkMeta {
-                id: CHUNK_AO,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
-            ChunkMeta {
-                id: CHUNK_ALPHA,
-                alignment_log2: 4,
-                flags: 0,
-                resource_flags: 0
-            },
+            test_chunk_meta(CHUNK_XTD_HEADER),
+            test_chunk_meta(CHUNK_TERRAIN),
+            test_chunk_meta(CHUNK_TERRAIN),
+            test_chunk_meta(CHUNK_ATLAS),
+            test_chunk_meta(CHUNK_TESS),
+            test_chunk_meta(CHUNK_LIGHTING),
+            test_chunk_meta(CHUNK_AO),
+            test_chunk_meta(CHUNK_ALPHA),
         ];
 
         XtdFile {
-            ecf_file_id: 0x00077826,
+            ecf_file_id: 0x0007_7826,
             ecf_flags: 0,
             chunk_order,
             header,
@@ -477,9 +459,9 @@ mod tests {
         assert_eq!(read.header.version, original.header.version);
         assert_eq!(read.header.num_x_verts, original.header.num_x_verts);
         assert_eq!(read.header.num_x_chunks, original.header.num_x_chunks);
-        assert_eq!(read.header.tile_scale, original.header.tile_scale);
-        assert_eq!(read.header.world_min, original.header.world_min);
-        assert_eq!(read.header.world_max, original.header.world_max);
+        assert_float_bits_eq(read.header.tile_scale, original.header.tile_scale);
+        assert_float_array_bits_eq(read.header.world_min, original.header.world_min);
+        assert_float_array_bits_eq(read.header.world_max, original.header.world_max);
     }
 
     #[test]
@@ -493,8 +475,8 @@ mod tests {
             assert_eq!(r.grid_x, o.grid_x);
             assert_eq!(r.grid_z, o.grid_z);
             assert_eq!(r.max_v_stride, o.max_v_stride);
-            assert_eq!(r.min, o.min);
-            assert_eq!(r.max, o.max);
+            assert_float_array_bits_eq(r.min, o.min);
+            assert_float_array_bits_eq(r.max, o.max);
             assert_eq!(r.can_cast_shadows, o.can_cast_shadows);
         }
     }
@@ -582,10 +564,10 @@ mod tests {
         let bytes = Writer::write(&file).expect("write failed");
         let read = Reader::read(&bytes).expect("read failed");
 
-        assert_eq!(read.header.world_min, file.header.world_min);
-        assert_eq!(read.header.world_max, file.header.world_max);
-        assert_eq!(read.visual_chunks[0].min, file.visual_chunks[0].min);
-        assert_eq!(read.visual_chunks[0].max, file.visual_chunks[0].max);
+        assert_float_array_bits_eq(read.header.world_min, file.header.world_min);
+        assert_float_array_bits_eq(read.header.world_max, file.header.world_max);
+        assert_float_array_bits_eq(read.visual_chunks[0].min, file.visual_chunks[0].min);
+        assert_float_array_bits_eq(read.visual_chunks[0].max, file.visual_chunks[0].max);
     }
 
     #[test]
@@ -614,8 +596,8 @@ mod tests {
             .iter()
             .zip(&tess_orig.patch_bounding_boxes)
         {
-            assert_eq!(r.min, o.min);
-            assert_eq!(r.max, o.max);
+            assert_float_array_bits_eq(r.min, o.min);
+            assert_float_array_bits_eq(r.max, o.max);
         }
     }
 

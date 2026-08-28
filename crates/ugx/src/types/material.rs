@@ -1,9 +1,9 @@
-//! Material types: MapType, Map, Material, MaterialFlags, BlendType.
+//! Material types: `MapType`, Map, Material, `MaterialFlags`, `BlendType`.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// HW1 (`@Ver=4`) legacy material flags bitmask (from `Flags` in BDT NameValues).
+/// HW1 (`@Ver=4`) legacy material flags bitmask (from `Flags` in BDT `NameValues`).
 ///
 /// Matches the C++ `Unigeom::BMaterial` flags enum. Used by
 /// `BUGXGeomSectionRenderer_initFromMaterial` (`0x1406C93E0`) to
@@ -43,7 +43,7 @@ pub mod material_flags {
     pub const DISABLE_SHADOW_RECEPTION: u32 = 1 << 7;
 }
 
-/// HW1 (`@Ver=4`) legacy blend type values (from `BlendType` byte in BDT NameValues).
+/// HW1 (`@Ver=4`) legacy blend type values (from `BlendType` byte in BDT `NameValues`).
 ///
 /// Matches the C++ `Unigeom::BMaterial` blend type enum. Used by
 /// `BUGXGeomSectionRenderer_initFromMaterial` (`0x1406c97d2`).
@@ -69,6 +69,7 @@ impl BlendType {
     /// Parse a raw byte into a `BlendType`.
     ///
     /// Values ≥ 4 are treated as `AlphaToCoverage` by the engine (catch-all).
+    #[must_use]
     pub fn from_raw(value: u8) -> Self {
         match value {
             1 => Self::Additive,
@@ -80,6 +81,7 @@ impl BlendType {
 
     /// Returns `true` if this blend type uses the default alpha-to-coverage
     /// path (value 0 or ≥ 4).
+    #[must_use]
     pub fn is_alpha_to_coverage(self) -> bool {
         matches!(self, Self::AlphaToCoverage)
     }
@@ -136,8 +138,9 @@ impl MapType {
         MapType::Modulate,
     ];
 
-    /// Get the node name used in the BBinaryDataTree document.
+    /// Get the node name used in the `BBinaryDataTree` document.
     /// Names are lowercase to match the packed BDT format in UGX material chunks.
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             MapType::Diffuse => "diffuse",
@@ -157,7 +160,7 @@ impl MapType {
     }
 }
 
-/// A texture map reference (from Unigeom::BMap).
+/// A texture map reference (from `Unigeom::BMap`).
 #[derive(Debug, Clone, Default)]
 pub struct Map {
     /// Texture filename.
@@ -223,7 +226,7 @@ pub struct HoganMaterialData {
 /// properties from a `BNameValueMap` (specular, env reflectivity, etc.).
 #[derive(Debug, Clone)]
 pub struct LegacyMaterialData {
-    /// Texture maps indexed by MapType (13 slots, each can have multiple maps).
+    /// Texture maps indexed by `MapType` (13 slots, each can have multiple maps).
     pub maps: [Vec<Map>; MapType::NUM_TYPES],
     /// UVW velocity per map type.
     pub uvw_velocity: [[f32; 3]; MapType::NUM_TYPES],
@@ -281,9 +284,9 @@ pub enum MaterialData {
     Hogan(alloc::boxed::Box<HoganMaterialData>),
 }
 
-/// Material definition (from BBinaryDataTree packed document).
+/// Material definition (from `BBinaryDataTree` packed document).
 ///
-/// Materials are stored in UGX chunk 0x704 as a BBinaryDataTree document.
+/// Materials are stored in UGX chunk 0x704 as a `BBinaryDataTree` document.
 /// The `data` field determines whether this is a legacy (map-based) or
 /// Hogan (shader-based) material.
 #[derive(Debug, Clone)]
@@ -298,20 +301,23 @@ pub struct Material {
 
 impl Material {
     /// Returns `true` if this is a legacy (map-based) material.
+    #[must_use]
     pub fn is_legacy(&self) -> bool {
         matches!(self.data, MaterialData::Legacy(_))
     }
 
     /// Returns `true` if this is a Hogan (shader-based) material.
+    #[must_use]
     pub fn is_hogan(&self) -> bool {
         matches!(self.data, MaterialData::Hogan(_))
     }
 
     /// Returns a reference to the legacy data, or `None` if Hogan.
+    #[must_use]
     pub fn legacy(&self) -> Option<&LegacyMaterialData> {
         match &self.data {
             MaterialData::Legacy(l) => Some(l),
-            _ => None,
+            MaterialData::Hogan(_) => None,
         }
     }
 
@@ -319,15 +325,16 @@ impl Material {
     pub fn legacy_mut(&mut self) -> Option<&mut LegacyMaterialData> {
         match &mut self.data {
             MaterialData::Legacy(l) => Some(l),
-            _ => None,
+            MaterialData::Hogan(_) => None,
         }
     }
 
     /// Returns a reference to the Hogan data, or `None` if legacy.
+    #[must_use]
     pub fn hogan(&self) -> Option<&HoganMaterialData> {
         match &self.data {
             MaterialData::Hogan(h) => Some(h),
-            _ => None,
+            MaterialData::Legacy(_) => None,
         }
     }
 
@@ -335,7 +342,7 @@ impl Material {
     pub fn hogan_mut(&mut self) -> Option<&mut HoganMaterialData> {
         match &mut self.data {
             MaterialData::Hogan(h) => Some(h),
-            _ => None,
+            MaterialData::Legacy(_) => None,
         }
     }
 }

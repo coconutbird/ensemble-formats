@@ -1,6 +1,8 @@
 //! XTD data types.
 
+use alloc::vec;
 use alloc::vec::Vec;
+use nostdio::{Cursor, Read, ReadBe};
 
 /// Tessellation data for terrain patches.
 ///
@@ -15,7 +17,7 @@ pub struct TessellationData {
     pub num_z_patches: i32,
     /// Maximum tessellation level (computed from all patches).
     pub max_tess_level: u8,
-    /// Per-patch maximum tessellation levels (num_x_patches * num_z_patches).
+    /// Per-patch maximum tessellation levels (`num_x_patches` * `num_z_patches`).
     pub patch_tess_levels: Vec<u8>,
     /// Per-patch bounding boxes (min/max as [f32; 4] each).
     pub patch_bounding_boxes: Vec<PatchBoundingBox>,
@@ -23,25 +25,36 @@ pub struct TessellationData {
 
 impl TessellationData {
     /// Get the total number of patches.
+    #[must_use]
     pub fn num_patches(&self) -> usize {
-        (self.num_x_patches * self.num_z_patches) as usize
+        let x_count = usize::try_from(self.num_x_patches).unwrap_or_default();
+        let z_count = usize::try_from(self.num_z_patches).unwrap_or_default();
+        x_count.checked_mul(z_count).unwrap_or_default()
     }
 
     /// Get the tessellation level for a specific patch.
+    #[must_use]
     pub fn get_patch_tess_level(&self, x: i32, z: i32) -> Option<u8> {
         if x < 0 || x >= self.num_x_patches || z < 0 || z >= self.num_z_patches {
             return None;
         }
-        let index = (z * self.num_x_patches + x) as usize;
+        let x_index = usize::try_from(x).ok()?;
+        let z_index = usize::try_from(z).ok()?;
+        let row_width = usize::try_from(self.num_x_patches).ok()?;
+        let index = z_index.checked_mul(row_width)?.checked_add(x_index)?;
         self.patch_tess_levels.get(index).copied()
     }
 
     /// Get the bounding box for a specific patch.
+    #[must_use]
     pub fn get_patch_bbox(&self, x: i32, z: i32) -> Option<&PatchBoundingBox> {
         if x < 0 || x >= self.num_x_patches || z < 0 || z >= self.num_z_patches {
             return None;
         }
-        let index = (z * self.num_x_patches + x) as usize;
+        let x_index = usize::try_from(x).ok()?;
+        let z_index = usize::try_from(z).ok()?;
+        let row_width = usize::try_from(self.num_x_patches).ok()?;
+        let index = z_index.checked_mul(row_width)?.checked_add(x_index)?;
         self.patch_bounding_boxes.get(index)
     }
 }
@@ -93,7 +106,7 @@ pub struct XtdHeader {
 }
 
 impl XtdHeader {
-    /// Size of XTDHeader in bytes.
+    /// Size of `XTDHeader` in bytes.
     pub const SIZE: usize = 40;
 }
 
@@ -127,7 +140,7 @@ pub struct XtdVisualChunk {
 }
 
 impl XtdVisualChunk {
-    /// Size of XTDVisualChunkHeader in bytes (3*4 + 6*4 + 1 = 37).
+    /// Size of `XTDVisualChunkHeader` in bytes (3*4 + 6*4 + 1 = 37).
     pub const SIZE: usize = 37;
 }
 
@@ -172,7 +185,7 @@ pub struct XtdFile {
 impl Default for XtdFile {
     fn default() -> Self {
         Self {
-            ecf_file_id: 0x00077826,
+            ecf_file_id: 0x0007_7826,
             ecf_flags: 0,
             chunk_order: Vec::new(),
             header: XtdHeader::default(),
@@ -187,63 +200,52 @@ impl Default for XtdFile {
 }
 
 impl XtdFile {
-    /// Decode tessellation data from the raw tess_data chunk.
+    /// Decode tessellation data from the raw `tess_data` chunk.
     ///
     /// Returns None if there is no tessellation data.
+    #[must_use]
     pub fn decode_tessellation(&self) -> Option<TessellationData> {
         let data = &self.tess_data;
-        if data.len() < 8 {
+        let mut cursor = Cursor::new(data.as_slice());
+        let horizontal_count = cursor.read_i32_be().ok()?;
+        let vertical_count = cursor.read_i32_be().ok()?;
+        let x_patch_count = usize::try_from(horizontal_count).ok()?;
+        let z_patch_count = usize::try_from(vertical_count).ok()?;
+        let total_patches = x_patch_count.checked_mul(z_patch_count)?;
+        if total_patches == 0 {
             return None;
         }
-
-        let num_x_patches = i32::from_be_bytes(data[0..4].try_into().ok()?);
-        let num_z_patches = i32::from_be_bytes(data[4..8].try_into().ok()?);
-
-        let num_patches = (num_x_patches * num_z_patches) as usize;
-        if num_patches == 0 {
-            return None;
-        }
-
-        let mut pos = 8;
 
         // Read per-patch tessellation levels (1 byte each)
-        if pos + num_patches > data.len() {
-            return None;
-        }
-        let patch_tess_levels = data[pos..pos + num_patches].to_vec();
-        pos += num_patches;
+        let mut patch_tess_levels = vec![0; total_patches];
+        cursor.read_exact(&mut patch_tess_levels).ok()?;
 
         // Calculate max tessellation level
-        let max_tess_level = *patch_tess_levels.iter().max().unwrap_or(&0);
+        let max_tess_level = patch_tess_levels.iter().copied().max().unwrap_or_default();
 
         // Read per-patch bounding boxes (32 bytes each)
-        let mut patch_bounding_boxes = Vec::with_capacity(num_patches);
-        for _ in 0..num_patches {
-            if pos + PatchBoundingBox::SIZE > data.len() {
-                return None;
-            }
-            let read_f32 = |off: usize| f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
+        let mut patch_bounding_boxes = Vec::with_capacity(total_patches);
+        for _ in 0..total_patches {
             let bbox = PatchBoundingBox {
                 min: [
-                    read_f32(pos),
-                    read_f32(pos + 4),
-                    read_f32(pos + 8),
-                    read_f32(pos + 12),
+                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be().ok()?,
                 ],
                 max: [
-                    read_f32(pos + 16),
-                    read_f32(pos + 20),
-                    read_f32(pos + 24),
-                    read_f32(pos + 28),
+                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be().ok()?,
                 ],
             };
             patch_bounding_boxes.push(bbox);
-            pos += PatchBoundingBox::SIZE;
         }
 
         Some(TessellationData {
-            num_x_patches,
-            num_z_patches,
+            num_x_patches: horizontal_count,
+            num_z_patches: vertical_count,
             max_tess_level,
             patch_tess_levels,
             patch_bounding_boxes,

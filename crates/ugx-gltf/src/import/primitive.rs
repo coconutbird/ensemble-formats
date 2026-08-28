@@ -1,8 +1,22 @@
 //! Mesh primitive import from glTF.
 
+use gltf_json::mesh::Semantic;
+use gltf_json::validation::Checked::Valid;
+use num_traits::ToPrimitive;
 use ugx::{Error, MAX_UV, Result, UnpackedVertex};
 
 use super::accessor::read_accessor_f32;
+
+struct PrimitiveAttributes {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    tangents: Option<Vec<f32>>,
+    uv_sets: Vec<Vec<f32>>,
+    joints: Option<Vec<f32>>,
+    weights: Option<Vec<f32>>,
+    colors: Option<Vec<f32>>,
+    vertex_count: usize,
+}
 
 /// Import a single mesh primitive.
 pub(crate) fn import_primitive(
@@ -12,170 +26,219 @@ pub(crate) fn import_primitive(
     has_skeleton: bool,
     bone_count: usize,
 ) -> Result<(Vec<UnpackedVertex>, Vec<u16>, i32)> {
-    use gltf_json::mesh::Semantic;
-    use gltf_json::validation::Checked::Valid;
-
-    // Read positions
-    let (positions, vertex_count) =
-        if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Positions)) {
-            let acc = &root.accessors[acc_idx.value()];
-            let count = acc.count.0 as usize;
-            (read_accessor_f32(acc, root, buffer_bytes)?, count)
-        } else {
-            return Err(Error::UnsupportedFormat(
-                "Mesh primitive missing POSITION".into(),
-            ));
-        };
-
-    // Read normals
-    let normals = if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Normals)) {
-        let acc = &root.accessors[acc_idx.value()];
-        read_accessor_f32(acc, root, buffer_bytes)?
-    } else {
-        [0.0, 1.0, 0.0].repeat(vertex_count)
-    };
-
-    // Read tangents
-    let tangents = if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Tangents)) {
-        let acc = &root.accessors[acc_idx.value()];
-        Some(read_accessor_f32(acc, root, buffer_bytes)?)
-    } else {
-        None
-    };
-
-    // Read UV sets
-    let mut uv_sets: Vec<Vec<f32>> = Vec::new();
-    for i in 0..MAX_UV {
-        if let Some(acc_idx) = primitive
-            .attributes
-            .get(&Valid(Semantic::TexCoords(i as u32)))
-        {
-            let acc = &root.accessors[acc_idx.value()];
-            uv_sets.push(read_accessor_f32(acc, root, buffer_bytes)?);
-        } else {
-            break;
-        }
-    }
-
-    // Read joints
-    let joints = if has_skeleton {
-        if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Joints(0))) {
-            let acc = &root.accessors[acc_idx.value()];
-            Some(read_accessor_f32(acc, root, buffer_bytes)?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Read weights
-    let weights = if has_skeleton {
-        if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Weights(0))) {
-            let acc = &root.accessors[acc_idx.value()];
-            Some(read_accessor_f32(acc, root, buffer_bytes)?)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Read vertex colors (COLOR_0)
-    let colors = if let Some(acc_idx) = primitive.attributes.get(&Valid(Semantic::Colors(0))) {
-        let acc = &root.accessors[acc_idx.value()];
-        Some(read_accessor_f32(acc, root, buffer_bytes)?)
-    } else {
-        None
-    };
-
-    // Read indices
-    let indices = if let Some(ref idx_accessor) = primitive.indices {
-        let acc = &root.accessors[idx_accessor.value()];
-        let raw = read_accessor_f32(acc, root, buffer_bytes)?;
-        raw.iter().map(|&v| v as u16).collect::<Vec<_>>()
-    } else {
-        // No index buffer — generate sequential indices
-        (0..vertex_count as u16).collect()
-    };
-
-    // Build vertices
-    let mut vertices = Vec::with_capacity(vertex_count);
-    // HW1 vertex buffers may store bone indices up to bone_count (not
-    // bone_count-1), so use bone_count as the inclusive upper bound to
-    // avoid clamping valid indices.
-    let max_bone_idx = bone_count as u16;
-
-    #[allow(clippy::field_reassign_with_default)]
-    for i in 0..vertex_count {
-        let mut vertex = UnpackedVertex::default();
-
-        // Position
-        vertex.position = [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]];
-
-        // Normal
-        vertex.normal = [normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]];
-
-        // Tangent
-        if let Some(ref t) = tangents {
-            vertex.tangent = [t[i * 4], t[i * 4 + 1], t[i * 4 + 2], t[i * 4 + 3]];
-        }
-
-        // UVs
-        vertex.num_texcoords = uv_sets.len();
-        for (uv_idx, uv_data) in uv_sets.iter().enumerate() {
-            if uv_idx < MAX_UV {
-                vertex.texcoords[uv_idx] = [uv_data[i * 2], uv_data[i * 2 + 1]];
-            }
-        }
-
-        // Joints and weights
-        // glTF JOINTS_0 are 0-based, and UGX also uses 0-based global
-        // bone indices (both with bone_remap and without).
-        if let (Some(j), Some(w)) = (&joints, &weights) {
-            let mut bone_indices = [0u16; 4];
-            let mut bone_weights = [0.0f32; 4];
-
-            // First pass: find the first valid bone index for padding
-            let mut first_valid_bone: u16 = 0;
-            for k in 0..4 {
-                if w[i * 4 + k] > 0.0 {
-                    first_valid_bone = (j[i * 4 + k] as u16).min(max_bone_idx);
-                    break;
-                }
-            }
-
-            // Second pass: set bone indices and weights
-            for k in 0..4 {
-                let joint = (j[i * 4 + k] as u16).min(max_bone_idx);
-                bone_weights[k] = w[i * 4 + k];
-
-                if bone_weights[k] > 0.0 {
-                    bone_indices[k] = joint;
-                } else {
-                    // Use first valid bone for padding (game expects valid indices)
-                    bone_indices[k] = first_valid_bone;
-                }
-            }
-            vertex.bone_indices = bone_indices;
-            vertex.bone_weights = bone_weights;
-        }
-
-        // Vertex colors
-        if let Some(ref c) = colors {
-            // COLOR_0 can be Vec3 or Vec4; handle both
-            let stride = if c.len() == vertex_count * 4 { 4 } else { 3 };
-            vertex.diffuse[0] = c[i * stride];
-            vertex.diffuse[1] = c[i * stride + 1];
-            vertex.diffuse[2] = c[i * stride + 2];
-            vertex.diffuse[3] = if stride == 4 { c[i * stride + 3] } else { 1.0 };
-        }
-
-        vertices.push(vertex);
-    }
-
-    // Material index from primitive
-    let material_index = primitive.material.map(|m| m.value() as i32).unwrap_or(-1);
-
+    let attributes = read_attributes(primitive, root, buffer_bytes, has_skeleton)?;
+    let indices = read_indices(primitive, root, buffer_bytes, attributes.vertex_count)?;
+    let vertices = build_vertices(&attributes, bone_count)?;
+    let material_index = primitive.material.map_or(Ok(-1), |material| {
+        i32::try_from(material.value()).map_err(|_| Error::SizeOverflow("glTF material index"))
+    })?;
     Ok((vertices, indices, material_index))
+}
+
+fn read_attributes(
+    primitive: &gltf_json::mesh::Primitive,
+    root: &gltf_json::Root,
+    buffer_bytes: &[u8],
+    has_skeleton: bool,
+) -> Result<PrimitiveAttributes> {
+    let position_index = primitive
+        .attributes
+        .get(&Valid(Semantic::Positions))
+        .ok_or_else(|| Error::UnsupportedFormat("Mesh primitive missing POSITION".into()))?;
+    let position_accessor = root.accessors.get(position_index.value()).ok_or_else(|| {
+        Error::UnsupportedFormat("POSITION accessor index is out of bounds".into())
+    })?;
+    let vertex_count = usize::try_from(position_accessor.count.0)
+        .map_err(|_| Error::SizeOverflow("primitive vertex count"))?;
+    let positions = read_accessor_f32(position_accessor, root, buffer_bytes)?;
+    let normals = read_attribute(primitive, root, buffer_bytes, Semantic::Normals)?
+        .unwrap_or_else(|| [0.0, 1.0, 0.0].repeat(vertex_count));
+    let tangents = read_attribute(primitive, root, buffer_bytes, Semantic::Tangents)?;
+
+    let mut uv_sets = Vec::new();
+    for index in 0..MAX_UV {
+        let semantic_index = u32::try_from(index)
+            .map_err(|_| Error::SizeOverflow("texture-coordinate set index"))?;
+        let Some(values) = read_attribute(
+            primitive,
+            root,
+            buffer_bytes,
+            Semantic::TexCoords(semantic_index),
+        )?
+        else {
+            break;
+        };
+        uv_sets.push(values);
+    }
+
+    let joints = has_skeleton
+        .then(|| read_attribute(primitive, root, buffer_bytes, Semantic::Joints(0)))
+        .transpose()?
+        .flatten();
+    let weights = has_skeleton
+        .then(|| read_attribute(primitive, root, buffer_bytes, Semantic::Weights(0)))
+        .transpose()?
+        .flatten();
+    let colors = read_attribute(primitive, root, buffer_bytes, Semantic::Colors(0))?;
+
+    Ok(PrimitiveAttributes {
+        positions,
+        normals,
+        tangents,
+        uv_sets,
+        joints,
+        weights,
+        colors,
+        vertex_count,
+    })
+}
+
+fn read_attribute(
+    primitive: &gltf_json::mesh::Primitive,
+    root: &gltf_json::Root,
+    buffer_bytes: &[u8],
+    semantic: Semantic,
+) -> Result<Option<Vec<f32>>> {
+    let Some(accessor_index) = primitive.attributes.get(&Valid(semantic)) else {
+        return Ok(None);
+    };
+    let accessor = root.accessors.get(accessor_index.value()).ok_or_else(|| {
+        Error::UnsupportedFormat("Primitive accessor index is out of bounds".into())
+    })?;
+    read_accessor_f32(accessor, root, buffer_bytes).map(Some)
+}
+
+fn read_indices(
+    primitive: &gltf_json::mesh::Primitive,
+    root: &gltf_json::Root,
+    buffer_bytes: &[u8],
+    vertex_count: usize,
+) -> Result<Vec<u16>> {
+    if let Some(index_accessor) = primitive.indices {
+        let accessor = root
+            .accessors
+            .get(index_accessor.value())
+            .ok_or_else(|| Error::UnsupportedFormat("Index accessor is out of bounds".into()))?;
+        return read_accessor_f32(accessor, root, buffer_bytes)?
+            .into_iter()
+            .map(|value| checked_u16_float(value, "primitive index"))
+            .collect();
+    }
+    (0..vertex_count)
+        .map(|index| {
+            u16::try_from(index).map_err(|_| Error::SizeOverflow("sequential primitive index"))
+        })
+        .collect()
+}
+
+fn build_vertices(
+    attributes: &PrimitiveAttributes,
+    bone_count: usize,
+) -> Result<Vec<UnpackedVertex>> {
+    let max_bone_index =
+        u16::try_from(bone_count).map_err(|_| Error::SizeOverflow("primitive bone count"))?;
+    (0..attributes.vertex_count)
+        .map(|index| build_vertex(attributes, index, max_bone_index))
+        .collect()
+}
+
+fn build_vertex(
+    attributes: &PrimitiveAttributes,
+    index: usize,
+    max_bone_index: u16,
+) -> Result<UnpackedVertex> {
+    let position = components_at::<3>(&attributes.positions, index, "POSITION")?;
+    let normal = components_at::<3>(&attributes.normals, index, "NORMAL")?;
+    let tangent = attributes
+        .tangents
+        .as_ref()
+        .map_or(Ok([0.0; 4]), |values| {
+            components_at::<4>(values, index, "TANGENT")
+        })?;
+
+    let mut texcoords = [[0.0; 2]; MAX_UV];
+    for (destination, values) in texcoords.iter_mut().zip(&attributes.uv_sets) {
+        *destination = components_at::<2>(values, index, "TEXCOORD")?;
+    }
+    let (bone_indices, bone_weights) = read_skin(attributes, index, max_bone_index)?;
+    let diffuse = read_color(attributes, index)?;
+
+    Ok(UnpackedVertex {
+        position,
+        normal,
+        tangent,
+        texcoords,
+        num_texcoords: attributes.uv_sets.len(),
+        bone_indices,
+        bone_weights,
+        diffuse,
+        ..Default::default()
+    })
+}
+
+fn read_skin(
+    attributes: &PrimitiveAttributes,
+    index: usize,
+    max_bone_index: u16,
+) -> Result<([u16; 4], [f32; 4])> {
+    let (Some(joints), Some(weights)) = (&attributes.joints, &attributes.weights) else {
+        return Ok(([0; 4], [0.0; 4]));
+    };
+    let joint_values = components_at::<4>(joints, index, "JOINTS_0")?;
+    let bone_weights = components_at::<4>(weights, index, "WEIGHTS_0")?;
+    let mut converted = [0; 4];
+    for (output, value) in converted.iter_mut().zip(joint_values) {
+        *output = checked_u16_float(value, "joint index")?.min(max_bone_index);
+    }
+    let first_valid = converted
+        .iter()
+        .zip(bone_weights)
+        .find_map(|(&bone, weight)| (weight > 0.0).then_some(bone))
+        .unwrap_or(0);
+    for (bone, weight) in converted.iter_mut().zip(bone_weights) {
+        if weight <= 0.0 {
+            *bone = first_valid;
+        }
+    }
+    Ok((converted, bone_weights))
+}
+
+fn read_color(attributes: &PrimitiveAttributes, index: usize) -> Result<[f32; 4]> {
+    let Some(colors) = &attributes.colors else {
+        return Ok([0.0; 4]);
+    };
+    let vec4_length = attributes.vertex_count.checked_mul(4);
+    if vec4_length == Some(colors.len()) {
+        components_at::<4>(colors, index, "COLOR_0")
+    } else {
+        let color = components_at::<3>(colors, index, "COLOR_0")?;
+        Ok([color[0], color[1], color[2], 1.0])
+    }
+}
+
+fn components_at<const N: usize>(
+    values: &[f32],
+    index: usize,
+    semantic: &'static str,
+) -> Result<[f32; N]> {
+    let start = index
+        .checked_mul(N)
+        .ok_or(Error::SizeOverflow("primitive attribute offset"))?;
+    let end = start
+        .checked_add(N)
+        .ok_or(Error::SizeOverflow("primitive attribute range"))?;
+    values
+        .get(start..end)
+        .ok_or_else(|| Error::UnsupportedFormat(format!("{semantic} accessor is too short")))?
+        .try_into()
+        .map_err(|_| Error::UnsupportedFormat(format!("Invalid {semantic} component count")))
+}
+
+fn checked_u16_float(value: f32, context: &'static str) -> Result<u16> {
+    if !value.is_finite() || value.fract().abs() > f32::EPSILON {
+        return Err(Error::UnsupportedFormat(format!(
+            "{context} must be a finite integer, got {value}"
+        )));
+    }
+    value.to_u16().ok_or(Error::SizeOverflow(context))
 }

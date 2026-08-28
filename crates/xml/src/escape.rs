@@ -17,6 +17,7 @@ pub fn escape_into(buf: &mut String, s: &str) {
 }
 
 /// Return a new string with XML entities replaced by their characters.
+#[must_use]
 pub fn unescape(s: &str) -> String {
     if !s.contains('&') {
         return String::from(s);
@@ -27,7 +28,7 @@ pub fn unescape(s: &str) -> String {
         out.push_str(&rest[..pos]);
         rest = &rest[pos..];
         if let Some(end) = rest.find(';') {
-            let entity = &rest[..end + 1];
+            let entity = &rest[..=end];
             match entity {
                 "&amp;" => out.push('&'),
                 "&lt;" => out.push('<'),

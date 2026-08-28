@@ -106,28 +106,30 @@ impl ser::Serializer for ToVariant {
         Ok(Variant::Bool(v))
     }
     fn serialize_i8(self, v: i8) -> Result<Variant, Error> {
-        Ok(Variant::Int(v as i32))
+        Ok(Variant::Int(i32::from(v)))
     }
     fn serialize_i16(self, v: i16) -> Result<Variant, Error> {
-        Ok(Variant::Int(v as i32))
+        Ok(Variant::Int(i32::from(v)))
     }
     fn serialize_i32(self, v: i32) -> Result<Variant, Error> {
         Ok(Variant::Int(v))
     }
     fn serialize_i64(self, v: i64) -> Result<Variant, Error> {
-        Ok(Variant::Int(v as i32))
+        let value = i32::try_from(v).map_err(|_| Error::new("i64 is outside BDT i32 range"))?;
+        Ok(Variant::Int(value))
     }
     fn serialize_u8(self, v: u8) -> Result<Variant, Error> {
-        Ok(Variant::UInt(v as u32))
+        Ok(Variant::UInt(u32::from(v)))
     }
     fn serialize_u16(self, v: u16) -> Result<Variant, Error> {
-        Ok(Variant::UInt(v as u32))
+        Ok(Variant::UInt(u32::from(v)))
     }
     fn serialize_u32(self, v: u32) -> Result<Variant, Error> {
         Ok(Variant::UInt(v))
     }
     fn serialize_u64(self, v: u64) -> Result<Variant, Error> {
-        Ok(Variant::UInt(v as u32))
+        let value = u32::try_from(v).map_err(|_| Error::new("u64 is outside BDT u32 range"))?;
+        Ok(Variant::UInt(value))
     }
     fn serialize_f32(self, v: f32) -> Result<Variant, Error> {
         Ok(Variant::Float(v))
@@ -239,7 +241,7 @@ impl ser::Serializer for ToVariant {
 /// Serializer that produces a single [`Node`] with the given element name.
 ///
 /// Only `serialize_struct` is meaningful here — the struct fields drive
-/// attribute/text/child population via [`NodeStructSerializer`].
+/// attribute/text/child population via the internal `NodeStructSerializer`.
 pub struct NodeSerializer {
     pub(crate) name: String,
 }
@@ -259,28 +261,30 @@ impl ser::Serializer for NodeSerializer {
         Ok(leaf_node(self.name, Variant::Bool(v)))
     }
     fn serialize_i8(self, v: i8) -> Result<Node, Error> {
-        Ok(leaf_node(self.name, Variant::Int(v as i32)))
+        Ok(leaf_node(self.name, Variant::Int(i32::from(v))))
     }
     fn serialize_i16(self, v: i16) -> Result<Node, Error> {
-        Ok(leaf_node(self.name, Variant::Int(v as i32)))
+        Ok(leaf_node(self.name, Variant::Int(i32::from(v))))
     }
     fn serialize_i32(self, v: i32) -> Result<Node, Error> {
         Ok(leaf_node(self.name, Variant::Int(v)))
     }
     fn serialize_i64(self, v: i64) -> Result<Node, Error> {
-        Ok(leaf_node(self.name, Variant::Int(v as i32)))
+        let value = i32::try_from(v).map_err(|_| Error::new("i64 is outside BDT i32 range"))?;
+        Ok(leaf_node(self.name, Variant::Int(value)))
     }
     fn serialize_u8(self, v: u8) -> Result<Node, Error> {
-        Ok(leaf_node(self.name, Variant::UInt(v as u32)))
+        Ok(leaf_node(self.name, Variant::UInt(u32::from(v))))
     }
     fn serialize_u16(self, v: u16) -> Result<Node, Error> {
-        Ok(leaf_node(self.name, Variant::UInt(v as u32)))
+        Ok(leaf_node(self.name, Variant::UInt(u32::from(v))))
     }
     fn serialize_u32(self, v: u32) -> Result<Node, Error> {
         Ok(leaf_node(self.name, Variant::UInt(v)))
     }
     fn serialize_u64(self, v: u64) -> Result<Node, Error> {
-        Ok(leaf_node(self.name, Variant::UInt(v as u32)))
+        let value = u32::try_from(v).map_err(|_| Error::new("u64 is outside BDT u32 range"))?;
+        Ok(leaf_node(self.name, Variant::UInt(value)))
     }
     fn serialize_f32(self, v: f32) -> Result<Node, Error> {
         Ok(leaf_node(self.name, Variant::Float(v)))
@@ -443,28 +447,30 @@ impl ser::Serializer for ChildrenSerializer {
         Ok(vec![leaf_node(self.name, Variant::Bool(v))])
     }
     fn serialize_i8(self, v: i8) -> Result<Vec<Node>, Error> {
-        Ok(vec![leaf_node(self.name, Variant::Int(v as i32))])
+        Ok(vec![leaf_node(self.name, Variant::Int(i32::from(v)))])
     }
     fn serialize_i16(self, v: i16) -> Result<Vec<Node>, Error> {
-        Ok(vec![leaf_node(self.name, Variant::Int(v as i32))])
+        Ok(vec![leaf_node(self.name, Variant::Int(i32::from(v)))])
     }
     fn serialize_i32(self, v: i32) -> Result<Vec<Node>, Error> {
         Ok(vec![leaf_node(self.name, Variant::Int(v))])
     }
     fn serialize_i64(self, v: i64) -> Result<Vec<Node>, Error> {
-        Ok(vec![leaf_node(self.name, Variant::Int(v as i32))])
+        let value = i32::try_from(v).map_err(|_| Error::new("i64 is outside BDT i32 range"))?;
+        Ok(vec![leaf_node(self.name, Variant::Int(value))])
     }
     fn serialize_u8(self, v: u8) -> Result<Vec<Node>, Error> {
-        Ok(vec![leaf_node(self.name, Variant::UInt(v as u32))])
+        Ok(vec![leaf_node(self.name, Variant::UInt(u32::from(v)))])
     }
     fn serialize_u16(self, v: u16) -> Result<Vec<Node>, Error> {
-        Ok(vec![leaf_node(self.name, Variant::UInt(v as u32))])
+        Ok(vec![leaf_node(self.name, Variant::UInt(u32::from(v)))])
     }
     fn serialize_u32(self, v: u32) -> Result<Vec<Node>, Error> {
         Ok(vec![leaf_node(self.name, Variant::UInt(v))])
     }
     fn serialize_u64(self, v: u64) -> Result<Vec<Node>, Error> {
-        Ok(vec![leaf_node(self.name, Variant::UInt(v as u32))])
+        let value = u32::try_from(v).map_err(|_| Error::new("u64 is outside BDT u32 range"))?;
+        Ok(vec![leaf_node(self.name, Variant::UInt(value))])
     }
     fn serialize_f32(self, v: f32) -> Result<Vec<Node>, Error> {
         Ok(vec![leaf_node(self.name, Variant::Float(v))])

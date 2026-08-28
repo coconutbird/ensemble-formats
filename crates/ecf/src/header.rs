@@ -13,13 +13,13 @@
 //! | Offset | Size | Field                  |
 //! |--------|------|------------------------|
 //! | 0      | 4    | magic (`0xDABA7737`)   |
-//! | 4      | 4    | header_size            |
+//! | 4      | 4    | `header_size`            |
 //! | 8      | 4    | adler32                |
-//! | 12     | 4    | file_size              |
-//! | 16     | 2    | num_chunks             |
+//! | 12     | 4    | `file_size`              |
+//! | 16     | 2    | `num_chunks`             |
 //! | 18     | 2    | flags                  |
 //! | 20     | 4    | id (user file-type ID) |
-//! | 24     | 2    | chunk_extra_data_size  |
+//! | 24     | 2    | `chunk_extra_data_size`  |
 //! | 26     | 6    | padding                |
 //!
 //! ## Chunk header layout (24 bytes)
@@ -50,8 +50,8 @@ pub struct EcfHeaderRaw {
     pub flags: [u8; 2],
     pub id: [u8; 4],
     pub chunk_extra_data_size: [u8; 2],
-    pub _pad0: [u8; 2],
-    pub _pad1: [u8; 4],
+    pub pad0: [u8; 2],
+    pub pad1: [u8; 4],
 }
 
 /// Raw on-disk ECF chunk header (24 bytes, big-endian).
@@ -93,6 +93,11 @@ impl EcfHeader {
     pub const SIZE: usize = 32;
 
     /// Parse an ECF header from a byte slice (zero-copy).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedEof`] if `data` is shorter than the header,
+    /// or [`Error::InvalidMagic`] if its signature is not recognized.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let (raw, _): (Ref<_, EcfHeaderRaw>, _) =
             Ref::from_prefix(data).map_err(|_| Error::UnexpectedEof)?;
@@ -118,6 +123,7 @@ impl EcfHeader {
     }
 
     /// Serialize this header to a 32-byte big-endian buffer.
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; 32] {
         let mut buf = [0u8; 32];
         buf[0..4].copy_from_slice(&self.magic.to_be_bytes());
@@ -157,6 +163,11 @@ impl EcfChunkHeader {
     pub const SIZE: usize = 24;
 
     /// Parse a chunk header from a byte slice (zero-copy).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedEof`] if `data` is shorter than a complete
+    /// chunk header.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let (raw, _): (Ref<_, EcfChunkHeaderRaw>, _) =
             Ref::from_prefix(data).map_err(|_| Error::UnexpectedEof)?;
@@ -173,6 +184,7 @@ impl EcfChunkHeader {
     }
 
     /// Serialize this chunk header to a 24-byte big-endian buffer.
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; 24] {
         let mut buf = [0u8; 24];
         buf[0..8].copy_from_slice(&self.id.to_be_bytes());
@@ -186,11 +198,13 @@ impl EcfChunkHeader {
     }
 
     /// Get the alignment in bytes.
+    #[must_use]
     pub fn alignment(&self) -> usize {
         1 << self.alignment_log2
     }
 
     /// Get the compression method from flags.
+    #[must_use]
     pub fn compression_method(&self) -> CompressionMethod {
         CompressionMethod::from_flags(self.flags)
     }

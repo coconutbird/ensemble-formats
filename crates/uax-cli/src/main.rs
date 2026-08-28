@@ -109,7 +109,7 @@ fn print_dump(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     for (gi, tg) in anim.track_groups.iter().enumerate() {
         let tg_name = tg.name.as_deref().unwrap_or("?");
-        println!("TrackGroup[{}] '{}'", gi, tg_name);
+        println!("TrackGroup[{gi}] '{tg_name}'");
         println!("  flags: 0x{:X}", tg.flags);
         let p = &tg.initial_placement;
         println!(
@@ -129,7 +129,7 @@ fn print_dump(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
         for (ti, tt) in tg.transform_tracks.iter().enumerate() {
             let bone = tt.name.as_deref().unwrap_or("?");
-            println!("    [{:3}] '{}' flags={}", ti, bone, tt.flags,);
+            println!("    [{:3}] '{}' flags={}", ti, bone, tt.flags);
             print_curve_detail("      O", &tt.orientation);
             print_curve_detail("      P", &tt.position);
             print_curve_detail("      S", &tt.scale_shear);
@@ -177,21 +177,14 @@ fn print_curve_detail(prefix: &str, cd: &CurveData) {
             one_over_knot_scale,
             knots_controls,
             ..
-        } => {
-            println!(
-                "{prefix}: D4nK16uC15u(deg={}, ooks={:.4}, kc={}B)",
-                cd.degree,
-                one_over_knot_scale,
-                knots_controls.len()
-            );
         }
-        CurvePayload::D4nK8uC7u {
+        | CurvePayload::D4nK8uC7u {
             one_over_knot_scale,
             knots_controls,
             ..
         } => {
             println!(
-                "{prefix}: D4nK8uC7u(deg={}, ooks={:.4}, kc={}B)",
+                "{prefix}: D4nK*(deg={}, ooks={:.4}, kc={}B)",
                 cd.degree,
                 one_over_knot_scale,
                 knots_controls.len()
@@ -202,37 +195,21 @@ fn print_curve_detail(prefix: &str, cd: &CurveData) {
             control_offsets,
             knots_controls,
             ..
-        } => {
-            println!(
-                "{prefix}: D3K16uC16u(deg={}, kc={}B, scales={:?}, offsets={:?})",
-                cd.degree,
-                knots_controls.len(),
-                control_scales,
-                control_offsets
-            );
         }
-        CurvePayload::D3K8uC8u {
+        | CurvePayload::D3K8uC8u {
+            control_scales,
+            control_offsets,
+            knots_controls,
+            ..
+        }
+        | CurvePayload::D3I1K8uC8u {
             control_scales,
             control_offsets,
             knots_controls,
             ..
         } => {
             println!(
-                "{prefix}: D3K8uC8u(deg={}, kc={}B, scales={:?}, offsets={:?})",
-                cd.degree,
-                knots_controls.len(),
-                control_scales,
-                control_offsets
-            );
-        }
-        CurvePayload::D3I1K8uC8u {
-            control_scales,
-            control_offsets,
-            knots_controls,
-            ..
-        } => {
-            println!(
-                "{prefix}: D3I1K8uC8u(deg={}, kc={}B, scales={:?}, offsets={:?})",
+                "{prefix}: D3K*(deg={}, kc={}B, scales={:?}, offsets={:?})",
                 cd.degree,
                 knots_controls.len(),
                 control_scales,

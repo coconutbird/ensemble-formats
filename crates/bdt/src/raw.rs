@@ -1,4 +1,4 @@
-//! Zero-copy binary structures for BBinaryDataTree packed formats.
+//! Zero-copy binary structures for `BBinaryDataTree` packed formats.
 //!
 //! These structs map directly to the on-disk binary layout and can be
 //! interpreted in-place from a byte slice via [`zerocopy::Ref`].
@@ -9,7 +9,7 @@
 //!   - [`XmxHeaderLe`] / [`XmxNodeLe`] — PC / Definitive Edition (64-bit pointers, 48-byte nodes)
 //!   - [`XmxHeaderBe`] / [`XmxNodeBe`] — Xbox 360 (32-bit pointers, 28-byte nodes)
 //!
-//! - **Compact** (BPackedHeader format): used by material chunks and other
+//! - **Compact** (`BPackedHeader` format): used by material chunks and other
 //!   non-XMB packed data.
 //!   - [`BPackedHeader`] — 28-byte header with section sizes
 //!   - [`CompactNodeRaw`] — 8-byte node with 16-bit indices
@@ -34,23 +34,27 @@ pub struct XmxHeaderLe {
 
 impl XmxHeaderLe {
     /// Number of nodes in the tree.
+    #[must_use]
     pub fn nodes_size(&self) -> u32 {
         u32::from_le_bytes(self.nodes_size)
     }
 
     /// Absolute byte offset to the node array.
-    pub fn nodes_ptr(&self) -> usize {
-        u64::from_le_bytes(self.nodes_ptr) as usize
+    #[must_use]
+    pub fn nodes_ptr(&self) -> Option<usize> {
+        usize::try_from(u64::from_le_bytes(self.nodes_ptr)).ok()
     }
 
     /// Size of the variant data table in bytes.
+    #[must_use]
     pub fn variant_size(&self) -> u32 {
         u32::from_le_bytes(self.variant_size)
     }
 
     /// Absolute byte offset to the variant data table.
-    pub fn variant_ptr(&self) -> usize {
-        u64::from_le_bytes(self.variant_ptr) as usize
+    #[must_use]
+    pub fn variant_ptr(&self) -> Option<usize> {
+        usize::try_from(u64::from_le_bytes(self.variant_ptr)).ok()
     }
 }
 
@@ -71,32 +75,39 @@ pub struct XmxNodeLe {
 }
 
 impl XmxNodeLe {
+    #[must_use]
     pub fn parent_node(&self) -> u32 {
         u32::from_le_bytes(self.parent_node)
     }
 
+    #[must_use]
     pub fn name_variant(&self) -> u32 {
         u32::from_le_bytes(self.name_variant)
     }
 
+    #[must_use]
     pub fn text_variant(&self) -> u32 {
         u32::from_le_bytes(self.text_variant)
     }
 
+    #[must_use]
     pub fn attrs_size(&self) -> u32 {
         u32::from_le_bytes(self.attrs_size)
     }
 
-    pub fn attrs_ptr(&self) -> usize {
-        u64::from_le_bytes(self.attrs_ptr) as usize
+    #[must_use]
+    pub fn attrs_ptr(&self) -> Option<usize> {
+        usize::try_from(u64::from_le_bytes(self.attrs_ptr)).ok()
     }
 
+    #[must_use]
     pub fn children_size(&self) -> u32 {
         u32::from_le_bytes(self.children_size)
     }
 
-    pub fn children_ptr(&self) -> usize {
-        u64::from_le_bytes(self.children_ptr) as usize
+    #[must_use]
+    pub fn children_ptr(&self) -> Option<usize> {
+        usize::try_from(u64::from_le_bytes(self.children_ptr)).ok()
     }
 }
 
@@ -112,21 +123,25 @@ pub struct XmxHeaderBe {
 
 impl XmxHeaderBe {
     /// Number of nodes in the tree.
+    #[must_use]
     pub fn nodes_size(&self) -> u32 {
         u32::from_be_bytes(self.nodes_size)
     }
 
     /// Absolute byte offset to the node array.
+    #[must_use]
     pub fn nodes_ptr(&self) -> usize {
         u32::from_be_bytes(self.nodes_ptr) as usize
     }
 
     /// Size of the variant data table in bytes.
+    #[must_use]
     pub fn variant_size(&self) -> u32 {
         u32::from_be_bytes(self.variant_size)
     }
 
     /// Absolute byte offset to the variant data table.
+    #[must_use]
     pub fn variant_ptr(&self) -> usize {
         u32::from_be_bytes(self.variant_ptr) as usize
     }
@@ -146,30 +161,37 @@ pub struct XmxNodeBe {
 }
 
 impl XmxNodeBe {
+    #[must_use]
     pub fn parent_node(&self) -> u32 {
         u32::from_be_bytes(self.parent_node)
     }
 
+    #[must_use]
     pub fn name_variant(&self) -> u32 {
         u32::from_be_bytes(self.name_variant)
     }
 
+    #[must_use]
     pub fn text_variant(&self) -> u32 {
         u32::from_be_bytes(self.text_variant)
     }
 
+    #[must_use]
     pub fn attrs_size(&self) -> u32 {
         u32::from_be_bytes(self.attrs_size)
     }
 
+    #[must_use]
     pub fn attrs_ptr(&self) -> usize {
         u32::from_be_bytes(self.attrs_ptr) as usize
     }
 
+    #[must_use]
     pub fn children_size(&self) -> u32 {
         u32::from_be_bytes(self.children_size)
     }
 
+    #[must_use]
     pub fn children_ptr(&self) -> usize {
         u32::from_be_bytes(self.children_ptr) as usize
     }
@@ -183,7 +205,7 @@ pub struct AttrPairRaw {
     pub value_var: [u8; 4],
 }
 
-/// BPackedHeader (28 bytes). First 4 bytes are single-byte fields.
+/// `BPackedHeader` (28 bytes). First 4 bytes are single-byte fields.
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct BPackedHeader {
@@ -210,21 +232,25 @@ impl BPackedHeader {
     }
 
     /// Size of the node section in bytes (each node is 8 bytes).
+    #[must_use]
     pub fn node_section_size(&self, big_endian: bool) -> usize {
         Self::read_u32(self.node_section_size, big_endian) as usize
     }
 
     /// Size of the name-value section in bytes (each entry is 8 bytes).
+    #[must_use]
     pub fn nv_section_size(&self, big_endian: bool) -> usize {
         Self::read_u32(self.nv_section_size, big_endian) as usize
     }
 
     /// Size of the name data section (null-terminated strings).
+    #[must_use]
     pub fn name_data_size(&self, big_endian: bool) -> usize {
         Self::read_u32(self.name_data_size, big_endian) as usize
     }
 
     /// Size of the value data section (typed values, 16-byte aligned).
+    #[must_use]
     pub fn value_data_size(&self, big_endian: bool) -> usize {
         Self::read_u32(self.value_data_size, big_endian) as usize
     }
@@ -243,6 +269,7 @@ pub struct CompactNodeRaw {
 
 impl CompactNodeRaw {
     /// Index of this node's parent (`0xFFFF` for root).
+    #[must_use]
     pub fn parent_index(&self, big_endian: bool) -> u16 {
         if big_endian {
             u16::from_be_bytes(self.parent_index)
@@ -252,6 +279,7 @@ impl CompactNodeRaw {
     }
 
     /// Index of this node's first child in the node array.
+    #[must_use]
     pub fn child_node_index(&self, big_endian: bool) -> u16 {
         if big_endian {
             u16::from_be_bytes(self.child_node_index)
@@ -261,6 +289,7 @@ impl CompactNodeRaw {
     }
 
     /// Offset into the name-value array for this node's first entry.
+    #[must_use]
     pub fn name_value_ofs(&self, big_endian: bool) -> u16 {
         if big_endian {
             u16::from_be_bytes(self.name_value_ofs)
@@ -281,6 +310,7 @@ pub struct CompactNvRaw {
 
 impl CompactNvRaw {
     /// Raw value field (interpretation depends on type flags).
+    #[must_use]
     pub fn value(&self, big_endian: bool) -> u32 {
         if big_endian {
             u32::from_be_bytes(self.value)
@@ -290,6 +320,7 @@ impl CompactNvRaw {
     }
 
     /// Offset into the name data section for this entry's name string.
+    #[must_use]
     pub fn name_ofs(&self, big_endian: bool) -> u16 {
         if big_endian {
             u16::from_be_bytes(self.name_ofs)
@@ -298,7 +329,8 @@ impl CompactNvRaw {
         }
     }
 
-    /// Type and encoding flags (see [`compact::nv_flags`](crate::compact) for bit definitions).
+    /// Type and encoding flags; `compact::nv_flags` defines the internal bit layout.
+    #[must_use]
     pub fn flags(&self, big_endian: bool) -> u16 {
         if big_endian {
             u16::from_be_bytes(self.flags)

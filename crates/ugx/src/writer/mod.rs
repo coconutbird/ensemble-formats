@@ -5,9 +5,9 @@
 //! 0x703 (granny bones), 0x704 (materials), and optionally 0x705 (AABB tree).
 //!
 //! Version differences:
-//! - HW1 (v4): Signature `0xC2340004`, 152-byte sections with UnivertPacker,
+//! - HW1 (v4): Signature `0xC2340004`, 152-byte sections with `UnivertPacker`,
 //!   i32 index valid accessories, includes AABB tree chunk (0x705).
-//! - HW2 (v6): Signature `0xC2340006`, 72-byte sections (no UnivertPacker),
+//! - HW2 (v6): Signature `0xC2340006`, 72-byte sections (no `UnivertPacker`),
 //!   i32 index valid accessories, no AABB tree chunk.
 
 mod aabb_tree;
@@ -20,7 +20,10 @@ use alloc::vec::Vec;
 
 use nostdio::WriteLe;
 
-use crate::constants::*;
+use crate::constants::{
+    ECF_AABB_TREE_CHUNK_ID, ECF_CACHED_DATA_CHUNK_ID, ECF_GRANNY_CHUNK_ID, ECF_IB_CHUNK_ID,
+    ECF_MATERIAL_CHUNK_ID, ECF_VB_CHUNK_ID,
+};
 use crate::error::Result;
 use crate::types::{UgxGeom, UgxVersion};
 
@@ -29,6 +32,11 @@ pub struct Writer;
 
 impl Writer {
     /// Write a UGX geometry to a byte vector using the specified version format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the geometry exceeds UGX field limits or any chunk
+    /// cannot be serialized.
     pub fn write(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
         write_ugx(geom, version)
     }
@@ -36,11 +44,21 @@ impl Writer {
 
 impl UgxGeom {
     /// Serialize this geometry to UGX HW1 (v4) binary format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the geometry exceeds UGX field limits or any chunk
+    /// cannot be serialized.
     pub fn to_bytes_hw1(&self) -> Result<Vec<u8>> {
         write_ugx(self, UgxVersion::Hw1)
     }
 
     /// Serialize this geometry to UGX HW2 (v6) binary format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the geometry exceeds UGX field limits or any chunk
+    /// cannot be serialized.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         write_ugx(self, UgxVersion::Hw2)
     }
@@ -58,7 +76,7 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
     let ib_data = build_index_buffer(geom)?;
 
     // ECF file ID 0xAAC93746 is required for UGX files - the game validates this in BGrannyModel::load
-    let mut ecf = ecf::Writer::new(0xAAC93746);
+    let mut ecf = ecf::Writer::new(0xAAC9_3746);
 
     // Chunk order: granny → cached → VB → IB → materials [→ AABB]
     // This matches the original engine output ordering.

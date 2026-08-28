@@ -54,6 +54,7 @@ pub struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     /// Create a new reader from an XML string.
+    #[must_use]
     pub fn new(xml: &'a str) -> Self {
         Self {
             tokenizer: Tokenizer::from(xml),
@@ -71,7 +72,7 @@ impl Iterator for Reader<'_> {
                 Ok(t) => t,
                 Err(e) => {
                     return Some(Err(Error {
-                        message: alloc::format!("XML parse error: {}", e),
+                        message: alloc::format!("XML parse error: {e}"),
                     }));
                 }
             };

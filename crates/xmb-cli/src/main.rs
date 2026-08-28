@@ -1,6 +1,7 @@
 //! XMB CLI - Convert between XMB and XML formats.
 
 use clap::{Parser, Subcommand, ValueEnum};
+use nostdio::{Cursor, Endian, ReadEndian, ReadLe, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use xmb::{Document, Format, Node, Reader, Writer};
 
@@ -86,7 +87,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // If files are provided without a subcommand, use drag-and-drop mode
     if cli.command.is_none() && !cli.files.is_empty() {
-        return process_files(&cli.files, cli.format, cli.overwrite, !cli.no_compress);
+        process_files(&cli.files, cli.format, cli.overwrite, !cli.no_compress);
+        return Ok(());
     }
 
     match cli.command {
@@ -156,8 +158,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn print_deflate_stream(raw: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    if raw.len() < ecf::deflate_stream::HEADER_SIZE {
+        return Ok(());
+    }
+
+    let mut cursor = Cursor::new(raw);
+    let signature = cursor.read_u32_le()?;
+    let endian = if signature == ecf::deflate_stream::SIGNATURE_INVERTED {
+        Endian::Big
+    } else {
+        Endian::Little
+    };
+    cursor.seek(SeekFrom::Start(12))?;
+    let source_bytes = cursor.read_u64(endian)?;
+    let compressed_bytes = cursor.read_u64(endian)?;
+    let source_adler = cursor.read_u32(endian)?;
+    let compressed_adler = cursor.read_u32(endian)?;
+
+    println!();
+    println!("  --- BDeflateStream ---");
+    println!(
+        "  signature:      0x{signature:08X} ({})",
+        if endian == Endian::Big {
+            "big-endian"
+        } else {
+            "little-endian"
+        }
+    );
+    println!("  src_bytes:      {source_bytes} (decompressed)");
+    println!("  dst_bytes:      {compressed_bytes} (compressed)");
+    println!("  src_adler32:    0x{source_adler:08X}");
+    println!("  dst_adler32:    0x{compressed_adler:08X}");
+    if source_bytes > 0 {
+        let ratio_tenths = u128::from(compressed_bytes) * 1000 / u128::from(source_bytes);
+        println!(
+            "  ratio:          {}.{}%",
+            ratio_tenths / 10,
+            ratio_tenths % 10
+        );
+    }
+    Ok(())
+}
+
+fn count_nodes(node: &Node) -> usize {
+    1 + node.children.iter().map(count_nodes).sum::<usize>()
+}
+
+fn print_decompressed_payload(file_data: &[u8], decompressed: &[u8]) {
+    println!();
+    println!("  --- Decompressed payload ---");
+    println!("  size: {} bytes", decompressed.len());
+    if decompressed.len() >= 4 {
+        let mut cursor = Cursor::new(decompressed);
+        let signature = cursor.read_u32_le().expect("length checked above");
+        println!("  xmb_signature:  0x{signature:08X} (LE)");
+        if signature == xmb::SIGNATURE {
+            println!("  format:         PC (little-endian BDT, 48-byte nodes)");
+        } else if signature.swap_bytes() == xmb::SIGNATURE {
+            println!("  format:         Xbox 360 (big-endian BDT, 28-byte nodes)");
+        }
+    }
+    if let Ok(doc) = Reader::read(file_data) {
+        println!("  bdt_format:     {:?}", doc.format());
+        if let Some(root) = doc.root() {
+            println!("  root_element:   <{}>", root.name);
+            println!("  root_attrs:     {}", root.attributes.len());
+            println!("  root_children:  {}", root.children.len());
+            println!("  total_nodes:    {}", count_nodes(root));
+        }
+    }
+}
+
 /// Print detailed info about an XMB file: ECF header, chunk metadata,
-/// BDeflateStream compression details, and BDT format.
+/// `BDeflateStream` compression details, and BDT format.
 fn print_info(path: &Path, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     println!("File: {}", path.display());
     println!("Size: {} bytes", data.len());
@@ -178,7 +252,7 @@ fn print_info(path: &Path, data: &[u8]) -> Result<(), Box<dyn std::error::Error>
     println!();
 
     for (i, ch) in ecf.chunks().iter().enumerate() {
-        println!("=== Chunk {} ===", i);
+        println!("=== Chunk {i} ===");
         println!("  id:             0x{:016X}", ch.id);
         println!("  offset:         {}", ch.offset);
         println!("  size:           {} bytes", ch.size);
@@ -192,87 +266,20 @@ fn print_info(path: &Path, data: &[u8]) -> Result<(), Box<dyn std::error::Error>
         println!("  resource_flags: 0x{:04X}", ch.resource_flags);
 
         let is_compressed = (ch.resource_flags & ecf::resource_flags::IS_DEFLATE_STREAM) != 0;
-        println!("  compressed:     {}", is_compressed);
+        println!("  compressed:     {is_compressed}");
 
         if is_compressed {
             let raw = ecf.raw_chunk_data(i)?;
-            if raw.len() >= ecf::deflate_stream::HEADER_SIZE {
-                let sig = u32::from_le_bytes(raw[0..4].try_into().unwrap());
-                let big_endian = sig == ecf::deflate_stream::SIGNATURE_INVERTED;
-                let endian_label = if big_endian {
-                    "big-endian"
-                } else {
-                    "little-endian"
-                };
-
-                let read_u64 = |off: usize| -> u64 {
-                    let b: [u8; 8] = raw[off..off + 8].try_into().unwrap();
-                    if big_endian {
-                        u64::from_be_bytes(b)
-                    } else {
-                        u64::from_le_bytes(b)
-                    }
-                };
-                let read_u32 = |off: usize| -> u32 {
-                    let b: [u8; 4] = raw[off..off + 4].try_into().unwrap();
-                    if big_endian {
-                        u32::from_be_bytes(b)
-                    } else {
-                        u32::from_le_bytes(b)
-                    }
-                };
-
-                let src_bytes = read_u64(12);
-                let dst_bytes = read_u64(20);
-                let src_adler = read_u32(28);
-                let dst_adler = read_u32(32);
-
-                println!();
-                println!("  --- BDeflateStream ---");
-                println!("  signature:      0x{:08X} ({})", sig, endian_label);
-                println!("  src_bytes:      {} (decompressed)", src_bytes);
-                println!("  dst_bytes:      {} (compressed)", dst_bytes);
-                println!("  src_adler32:    0x{:08X}", src_adler);
-                println!("  dst_adler32:    0x{:08X}", dst_adler);
-                if src_bytes > 0 {
-                    let ratio = dst_bytes as f64 / src_bytes as f64 * 100.0;
-                    println!("  ratio:          {:.1}%", ratio);
-                }
-            }
+            print_deflate_stream(raw)?;
         }
 
         // Decompress and inspect XMB/BDT payload
         match ecf.chunk_data(i) {
             Ok(decompressed) => {
-                println!();
-                println!("  --- Decompressed payload ---");
-                println!("  size: {} bytes", decompressed.len());
-                if decompressed.len() >= 4 {
-                    let sig = u32::from_le_bytes(decompressed[0..4].try_into().unwrap());
-                    println!("  xmb_signature:  0x{:08X} (LE)", sig);
-                    let sig_be = u32::from_be_bytes(decompressed[0..4].try_into().unwrap());
-                    if sig == xmb::SIGNATURE {
-                        println!("  format:         PC (little-endian BDT, 48-byte nodes)");
-                    } else if sig_be == xmb::SIGNATURE {
-                        println!("  format:         Xbox 360 (big-endian BDT, 28-byte nodes)");
-                    }
-                }
-                // Parse as XMB document for node summary
-                if let Ok(doc) = Reader::read(data) {
-                    println!("  bdt_format:     {:?}", doc.format());
-                    if let Some(root) = doc.root() {
-                        fn count_nodes(node: &Node) -> usize {
-                            1 + node.children.iter().map(count_nodes).sum::<usize>()
-                        }
-                        println!("  root_element:   <{}>", root.name);
-                        println!("  root_attrs:     {}", root.attributes.len());
-                        println!("  root_children:  {}", root.children.len());
-                        println!("  total_nodes:    {}", count_nodes(root));
-                    }
-                }
+                print_decompressed_payload(data, &decompressed);
             }
             Err(e) => {
-                println!("  decompress error: {}", e);
+                println!("  decompress error: {e}");
             }
         }
         println!();
@@ -285,7 +292,7 @@ fn print_info(path: &Path, data: &[u8]) -> Result<(), Box<dyn std::error::Error>
 /// If `overwrite` is false and the file exists, adds "_1", "_2", etc.
 fn output_path(base: &Path, new_ext: &str, overwrite: bool) -> PathBuf {
     let base_name = base.as_os_str().to_string_lossy();
-    let output_name = format!("{}.{}", base_name, new_ext);
+    let output_name = format!("{base_name}.{new_ext}");
     let output = PathBuf::from(&output_name);
 
     if overwrite || !output.exists() {
@@ -293,7 +300,7 @@ fn output_path(base: &Path, new_ext: &str, overwrite: bool) -> PathBuf {
     }
 
     for i in 1..1000 {
-        let candidate = PathBuf::from(format!("{}_{}.{}", base_name, i, new_ext));
+        let candidate = PathBuf::from(format!("{base_name}_{i}.{new_ext}"));
         if !candidate.exists() {
             return candidate;
         }
@@ -303,12 +310,7 @@ fn output_path(base: &Path, new_ext: &str, overwrite: bool) -> PathBuf {
 }
 
 /// Process files in drag-and-drop mode.
-fn process_files(
-    files: &[PathBuf],
-    format: FormatArg,
-    overwrite: bool,
-    compress: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn process_files(files: &[PathBuf], format: FormatArg, overwrite: bool, compress: bool) {
     let mut success_count = 0;
     let mut error_count = 0;
 
@@ -340,13 +342,11 @@ fn process_files(
     }
 
     println!();
-    println!("Done! {} converted, {} errors", success_count, error_count);
+    println!("Done! {success_count} converted, {error_count} errors");
 
     if error_count > 0 {
         std::process::exit(1);
     }
-
-    Ok(())
 }
 
 /// Convert an XML file to XMB.

@@ -25,7 +25,7 @@ pub mod exit_code {
 
 /// Convert a byte slice to a lowercase hex string
 fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    hex::encode(bytes)
 }
 
 /// Format a byte size as a human-readable string
@@ -35,14 +35,28 @@ fn format_size(bytes: u64) -> String {
     const GB: u64 = 1024 * MB;
 
     if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
+        format_scaled_size(bytes, GB, "GB")
     } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
+        format_scaled_size(bytes, MB, "MB")
     } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
+        format_scaled_size(bytes, KB, "KB")
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
+}
+
+fn format_scaled_size(bytes: u64, unit: u64, suffix: &str) -> String {
+    let whole = bytes / unit;
+    let tenths = (bytes % unit) * 10 / unit;
+    format!("{whole}.{tenths} {suffix}")
+}
+
+fn format_ratio(numerator: u64, denominator: u64) -> String {
+    if denominator == 0 {
+        return "100.0".to_string();
+    }
+    let tenths = u128::from(numerator) * 1000 / u128::from(denominator);
+    format!("{}.{}", tenths / 10, tenths % 10)
 }
 
 #[derive(Parser)]
@@ -149,14 +163,42 @@ struct ListEntry {
     tiger128: String,
 }
 
+type ArchiveReader = Reader<era::crypto::decrypt::Reader<std::io::BufReader<std::fs::File>>>;
+
+fn build_list_entries(archive: &ArchiveReader) -> Vec<ListEntry> {
+    archive
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let compressed_size = entry.compressed_size();
+            let decompressed_size = entry.decompressed_size();
+            let compression_ratio = if decompressed_size > 0 {
+                (f64::from(compressed_size) / f64::from(decompressed_size)) * 100.0
+            } else {
+                100.0
+            };
+            ListEntry {
+                index,
+                filename: if index == 0 {
+                    Some("<filename table>".to_string())
+                } else {
+                    entry.filename.clone()
+                },
+                compressed_size,
+                decompressed_size,
+                compression_ratio,
+                tiger128: bytes_to_hex(&entry.extra.comp_tiger128),
+            }
+        })
+        .collect()
+}
+
 /// Read and decrypt an ERA file into a byte buffer.
-fn open_archive(
-    path: &str,
-) -> Result<Reader<era::crypto::decrypt::Reader<std::io::BufReader<std::fs::File>>>, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
+fn open_archive(path: &str) -> Result<ArchiveReader, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open {path}: {e}"))?;
     let buf = std::io::BufReader::new(file);
     Reader::from_encrypted(buf, TeaKeys::default_archive_keys())
-        .map_err(|e| format!("Failed to parse archive: {}", e))
+        .map_err(|e| format!("Failed to parse archive: {e}"))
 }
 
 fn list_archive(path: &str, json: bool) -> i32 {
@@ -164,41 +206,15 @@ fn list_archive(path: &str, json: bool) -> i32 {
         Ok(a) => a,
         Err(e) => {
             if json {
-                eprintln!(r#"{{"error": "{}"}}"#, e);
+                eprintln!(r#"{{"error": "{e}"}}"#);
             } else {
-                eprintln!("Error opening archive: {}", e);
+                eprintln!("Error opening archive: {e}");
             }
             return exit_code::FILE_NOT_FOUND;
         }
     };
 
-    let entries: Vec<ListEntry> = archive
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            let comp = entry.compressed_size();
-            let decomp = entry.decompressed_size();
-            let ratio = if decomp > 0 {
-                (comp as f64 / decomp as f64) * 100.0
-            } else {
-                100.0
-            };
-            // Index 0 is always the filename table (no filename of its own)
-            let filename = if i == 0 {
-                Some("<filename table>".to_string())
-            } else {
-                entry.filename.clone()
-            };
-            ListEntry {
-                index: i,
-                filename,
-                compressed_size: comp,
-                decompressed_size: decomp,
-                compression_ratio: ratio,
-                tiger128: bytes_to_hex(&entry.extra.comp_tiger128),
-            }
-        })
-        .collect();
+    let entries = build_list_entries(&archive);
 
     if json {
         let output = ListOutput {
@@ -208,7 +224,7 @@ fn list_archive(path: &str, json: bool) -> i32 {
         };
         println!("{}", serde_json::to_string(&output).unwrap());
     } else {
-        println!("Files in {}:", path);
+        println!("Files in {path}:");
         println!();
 
         // Find the longest filename for alignment
@@ -246,8 +262,8 @@ fn list_archive(path: &str, json: bool) -> i32 {
             println!(
                 "{:>5}  {:>10}  {:>12}  {:>5.1}%  {:<width$}  {}",
                 entry.index,
-                format_size(entry.compressed_size as u64),
-                format_size(entry.decompressed_size as u64),
+                format_size(u64::from(entry.compressed_size)),
+                format_size(u64::from(entry.decompressed_size)),
                 entry.compression_ratio,
                 name,
                 entry.tiger128,
@@ -256,17 +272,13 @@ fn list_archive(path: &str, json: bool) -> i32 {
         }
 
         // Calculate totals
-        let total_compressed: u64 = entries.iter().map(|e| e.compressed_size as u64).sum();
-        let total_decompressed: u64 = entries.iter().map(|e| e.decompressed_size as u64).sum();
-        let total_ratio = if total_decompressed > 0 {
-            (total_compressed as f64 / total_decompressed as f64) * 100.0
-        } else {
-            100.0
-        };
+        let total_compressed: u64 = entries.iter().map(|e| u64::from(e.compressed_size)).sum();
+        let total_decompressed: u64 = entries.iter().map(|e| u64::from(e.decompressed_size)).sum();
+        let total_ratio = format_ratio(total_compressed, total_decompressed);
 
         println!();
         println!(
-            "Total: {} entries, {} -> {} ({:.1}%)",
+            "Total: {} entries, {} -> {} ({}%)",
             archive.len(),
             format_size(total_compressed),
             format_size(total_decompressed),
@@ -306,9 +318,9 @@ fn info_archive(path: &str, json: bool) -> i32 {
         Ok(a) => a,
         Err(e) => {
             if json {
-                eprintln!(r#"{{"error": "{}"}}"#, e);
+                eprintln!(r#"{{"error": "{e}"}}"#);
             } else {
-                eprintln!("Error opening archive: {}", e);
+                eprintln!("Error opening archive: {e}");
             }
             return exit_code::FILE_NOT_FOUND;
         }
@@ -336,27 +348,23 @@ fn info_archive(path: &str, json: bool) -> i32 {
         let mut total_compressed: u64 = 0;
         let mut total_decompressed: u64 = 0;
         for entry in archive.iter().skip(1) {
-            total_compressed += entry.compressed_size() as u64;
-            total_decompressed += entry.decompressed_size() as u64;
+            total_compressed += u64::from(entry.compressed_size());
+            total_decompressed += u64::from(entry.decompressed_size());
         }
         let file_count = archive.len().saturating_sub(1); // exclude filename table
-        let ratio = if total_decompressed > 0 {
-            (total_compressed as f64 / total_decompressed as f64) * 100.0
-        } else {
-            100.0
-        };
+        let ratio = format_ratio(total_compressed, total_decompressed);
 
-        println!("Archive: {}", path);
+        println!("Archive: {path}");
         println!();
         println!("ECF Header");
         println!("  Magic              0x{:08X}", archive.ecf_header.magic);
         println!(
             "  Header Size        {}",
-            format_size(archive.ecf_header.header_size as u64)
+            format_size(u64::from(archive.ecf_header.header_size))
         );
         println!(
             "  File Size          {}",
-            format_size(archive.ecf_header.file_size as u64)
+            format_size(u64::from(archive.ecf_header.file_size))
         );
         println!("  Chunks             {}", archive.ecf_header.num_chunks);
         println!();
@@ -367,14 +375,14 @@ fn info_archive(path: &str, json: bool) -> i32 {
         );
         println!(
             "  Signature Size     {}",
-            format_size(archive.archive_header.signature_size as u64)
+            format_size(u64::from(archive.archive_header.signature_size))
         );
         println!();
         println!("Summary");
-        println!("  Files              {}", file_count);
+        println!("  Files              {file_count}");
         println!("  Compressed         {}", format_size(total_compressed));
         println!("  Decompressed       {}", format_size(total_decompressed));
-        println!("  Ratio              {:.1}%", ratio);
+        println!("  Ratio              {ratio}%");
     }
 
     exit_code::SUCCESS
@@ -398,6 +406,88 @@ struct ExtractedFile {
     error: Option<String>,
 }
 
+fn matches_filter(
+    filename: &str,
+    pattern: Option<&glob::Pattern>,
+    specific_files: &[String],
+) -> bool {
+    let normalized = filename.replace('\\', "/");
+    if specific_files.is_empty() {
+        pattern.is_none_or(|candidate| candidate.matches(&normalized))
+    } else {
+        specific_files.iter().any(|candidate| {
+            let candidate = candidate.replace('\\', "/");
+            normalized == candidate || normalized.ends_with(&format!("/{candidate}"))
+        })
+    }
+}
+
+fn extract_entry(
+    archive: &mut ArchiveReader,
+    index: usize,
+    filename: &str,
+    outdir: &Path,
+    json: bool,
+    quiet: bool,
+    files: &mut Vec<ExtractedFile>,
+) -> bool {
+    let data = match archive.read_entry(index) {
+        Ok(data) => data,
+        Err(error) => {
+            if json {
+                files.push(ExtractedFile {
+                    filename: filename.to_string(),
+                    success: false,
+                    error: Some(format!("Read error: {error}")),
+                });
+            } else if !quiet {
+                eprintln!("  Error reading {filename}: {error}");
+            }
+            return false;
+        }
+    };
+
+    let file_path = outdir.join(filename.replace('\\', "/"));
+    if let Some(parent) = file_path.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        if json {
+            files.push(ExtractedFile {
+                filename: filename.to_string(),
+                success: false,
+                error: Some(format!("Directory creation error: {error}")),
+            });
+        } else if !quiet {
+            eprintln!("  Error creating directory for {filename}: {error}");
+        }
+        return false;
+    }
+
+    if let Err(error) = fs::write(&file_path, data) {
+        if json {
+            files.push(ExtractedFile {
+                filename: filename.to_string(),
+                success: false,
+                error: Some(format!("Write error: {error}")),
+            });
+        } else if !quiet {
+            eprintln!("  Error writing {filename}: {error}");
+        }
+        return false;
+    }
+
+    if json {
+        files.push(ExtractedFile {
+            filename: filename.to_string(),
+            success: true,
+            error: None,
+        });
+    } else if !quiet {
+        println!("  {filename}");
+    }
+    true
+}
+
 fn extract_archive(
     path: &str,
     outdir: Option<&str>,
@@ -410,9 +500,9 @@ fn extract_archive(
         Ok(a) => a,
         Err(e) => {
             if json {
-                eprintln!(r#"{{"error": "{}"}}"#, e);
+                eprintln!(r#"{{"error": "{e}"}}"#);
             } else {
-                eprintln!("Error opening archive: {}", e);
+                eprintln!("Error opening archive: {e}");
             }
             return exit_code::FILE_NOT_FOUND;
         }
@@ -421,7 +511,7 @@ fn extract_archive(
     // Compile glob pattern if provided
     let pattern = filter.map(|f| {
         glob::Pattern::new(f).unwrap_or_else(|e| {
-            eprintln!("Invalid glob pattern '{}': {}", f, e);
+            eprintln!("Invalid glob pattern '{f}': {e}");
             std::process::exit(exit_code::ERROR);
         })
     });
@@ -429,17 +519,16 @@ fn extract_archive(
     // Default output directory is the archive name without extension
     let default_outdir = Path::new(path)
         .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "output".to_string());
+        .map_or_else(|| "output".to_string(), |s| s.to_string_lossy().to_string());
     let outdir_str = outdir.unwrap_or(&default_outdir);
     let outdir = Path::new(outdir_str);
 
     // Create output directory
     if let Err(e) = fs::create_dir_all(outdir) {
         if json {
-            eprintln!(r#"{{"error": "Failed to create output directory: {}"}}"#, e);
+            eprintln!(r#"{{"error": "Failed to create output directory: {e}"}}"#);
         } else {
-            eprintln!("Error creating output directory: {}", e);
+            eprintln!("Error creating output directory: {e}");
         }
         return exit_code::IO_ERROR;
     }
@@ -454,94 +543,20 @@ fn extract_archive(
 
     // Skip entry 0 (filename table)
     for i in 1..archive.len() {
-        let entry = archive.entry(i).unwrap().clone();
+        let Some(entry) = archive.entry(i) else {
+            continue;
+        };
         let filename = entry.filename.as_deref().unwrap_or("<unnamed>").to_string();
 
-        // Normalize filename for matching (use forward slashes)
-        let normalized = filename.replace('\\', "/");
+        if !matches_filter(&filename, pattern.as_ref(), specific_files) {
+            continue;
+        }
 
-        // Check if file matches filter criteria
-        let matches = if !specific_files.is_empty() {
-            // Check against specific file list
-            specific_files.iter().any(|f| {
-                let f_normalized = f.replace('\\', "/");
-                normalized == f_normalized || normalized.ends_with(&format!("/{}", f_normalized))
-            })
-        } else if let Some(ref pat) = pattern {
-            // Check against glob pattern
-            pat.matches(&normalized)
+        if extract_entry(&mut archive, i, &filename, outdir, json, quiet, &mut files) {
+            success += 1;
         } else {
-            // No filter, extract all
-            true
-        };
-
-        if !matches {
-            continue;
-        }
-
-        // Read entry data
-        let data = match archive.read_entry(i) {
-            Ok(d) => d,
-            Err(e) => {
-                if json {
-                    files.push(ExtractedFile {
-                        filename,
-                        success: false,
-                        error: Some(format!("Read error: {}", e)),
-                    });
-                } else if !quiet {
-                    eprintln!("  Error reading {}: {}", filename, e);
-                }
-                errors += 1;
-                continue;
-            }
-        };
-
-        // Build output path
-        let file_path = outdir.join(filename.replace('\\', "/"));
-
-        // Create parent directories
-        if let Some(parent) = file_path.parent()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            if json {
-                files.push(ExtractedFile {
-                    filename,
-                    success: false,
-                    error: Some(format!("Directory creation error: {}", e)),
-                });
-            } else if !quiet {
-                eprintln!("  Error creating directory for {}: {}", filename, e);
-            }
             errors += 1;
-            continue;
         }
-
-        // Write file
-        if let Err(e) = fs::write(&file_path, &data) {
-            if json {
-                files.push(ExtractedFile {
-                    filename,
-                    success: false,
-                    error: Some(format!("Write error: {}", e)),
-                });
-            } else if !quiet {
-                eprintln!("  Error writing {}: {}", filename, e);
-            }
-            errors += 1;
-            continue;
-        }
-
-        if json {
-            files.push(ExtractedFile {
-                filename,
-                success: true,
-                error: None,
-            });
-        } else if !quiet {
-            println!("  {}", filename);
-        }
-        success += 1;
     }
 
     if json {
@@ -555,7 +570,7 @@ fn extract_archive(
         println!("{}", serde_json::to_string(&output).unwrap());
     } else if !quiet {
         println!();
-        println!("Extracted {} files ({} errors)", success, errors);
+        println!("Extracted {success} files ({errors} errors)");
     }
 
     if errors > 0 {
@@ -586,17 +601,17 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
                 input_dir: input_dir.to_string(),
                 files_added: 0,
                 success: false,
-                error: Some(format!("{} is not a directory", input_dir)),
+                error: Some(format!("{input_dir} is not a directory")),
             };
             println!("{}", serde_json::to_string(&output).unwrap());
         } else {
-            eprintln!("Error: {} is not a directory", input_dir);
+            eprintln!("Error: {input_dir} is not a directory");
         }
         return exit_code::FILE_NOT_FOUND;
     }
 
     if !quiet && !json {
-        println!("Creating {} from {}...", output_path, input_dir);
+        println!("Creating {output_path} from {input_dir}...");
     }
 
     let mut writer = Writer::new();
@@ -610,17 +625,17 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
                 input_dir: input_dir.to_string(),
                 files_added: file_count,
                 success: false,
-                error: Some(format!("Error collecting files: {}", e)),
+                error: Some(format!("Error collecting files: {e}")),
             };
             println!("{}", serde_json::to_string(&output).unwrap());
         } else {
-            eprintln!("Error collecting files: {}", e);
+            eprintln!("Error collecting files: {e}");
         }
         return exit_code::IO_ERROR;
     }
 
     if !quiet && !json {
-        println!("  Collected {} files", file_count);
+        println!("  Collected {file_count} files");
     }
 
     // Build, encrypt, and stream directly to file
@@ -631,11 +646,11 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
             .create(true)
             .truncate(true)
             .open(output_path)
-            .map_err(|e| format!("Failed to create {}: {}", output_path, e))?;
+            .map_err(|e| format!("Failed to create {output_path}: {e}"))?;
         let keys = TeaKeys::default_archive_keys();
         writer
             .write_to_encrypted(file, keys)
-            .map_err(|e| format!("Error writing archive: {}", e))?;
+            .map_err(|e| format!("Error writing archive: {e}"))?;
         Ok(())
     })();
 
@@ -650,7 +665,7 @@ fn create_archive(output_path: &str, input_dir: &str, json: bool, quiet: bool) -
             };
             println!("{}", serde_json::to_string(&output).unwrap());
         } else {
-            eprintln!("{}", e);
+            eprintln!("{e}");
         }
         return exit_code::IO_ERROR;
     }

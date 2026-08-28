@@ -1,27 +1,4 @@
-//! XML writer — builds an indented XML document into a [`String`].
-//!
-//! # Example
-//!
-//! ```
-//! use xml::Writer;
-//!
-//! let mut w = Writer::new();
-//! w.declaration();
-//! w.open("root");
-//! w.attr("version", "1");
-//! w.close();
-//! w.open("child");
-//! w.close();
-//! w.text("hello");
-//! w.end("child");
-//! w.empty("leaf");
-//! w.end("root");
-//!
-//! let xml = w.finish();
-//! assert!(xml.contains("<root version=\"1\">"));
-//! assert!(xml.contains("    <child>hello</child>"));
-//! assert!(xml.contains("    <leaf/>"));
-//! ```
+//! XML writer implementation for the public [`crate::Writer`] type.
 
 use crate::escape::escape_into;
 use alloc::string::String;
@@ -39,6 +16,7 @@ pub struct Writer {
 
 impl Writer {
     /// Create a new writer with 4-space indentation.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             buf: String::new(),
@@ -61,7 +39,6 @@ impl Writer {
     /// - [`close`](Self::close) to emit `>` (expects children/text + [`end`](Self::end))
     /// - [`close_empty`](Self::close_empty) to emit `/>` (self-closing, no [`end`](Self::end))
     pub fn open(&mut self, name: &str) {
-        self.finish_open_tag_if_needed(true);
         self.write_indent();
         self.buf.push('<');
         self.buf.push_str(name);
@@ -126,11 +103,13 @@ impl Writer {
     }
 
     /// Consume the writer and return the accumulated XML string.
+    #[must_use]
     pub fn finish(self) -> String {
         self.buf
     }
 
     /// Returns a reference to the accumulated output so far.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.buf
     }
@@ -139,10 +118,6 @@ impl Writer {
         for _ in 0..self.depth {
             self.buf.push_str(self.indent);
         }
-    }
-
-    fn finish_open_tag_if_needed(&mut self, _newline: bool) {
-        // No-op — open tags are always closed explicitly via close() or close_empty().
     }
 }
 

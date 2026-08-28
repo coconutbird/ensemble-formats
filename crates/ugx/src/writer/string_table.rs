@@ -8,6 +8,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::{Error, Result};
+
 /// A deferred string offset that will be patched once the string table is built.
 pub(crate) struct StringFixup {
     /// Byte position in the output buffer where a u64 LE offset should be written.
@@ -35,20 +37,16 @@ impl StringTable {
     /// Append the deduplicated string table to `buf` and patch all fixup positions
     /// with the final u64 LE offsets.
     ///
-    /// Strings are null-terminated. No alignment padding is applied — callers that
-    /// need alignment (e.g. cached data uses 2-byte alignment) should pad the buffer
-    /// before calling this, or use [`Self::write_aligned`].
-    pub fn write(self, buf: &mut Vec<u8>) {
-        self.write_inner(buf, 1);
+    /// Strings are null-terminated and no alignment padding is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a string offset or fixup range cannot be represented.
+    pub fn write(self, buf: &mut Vec<u8>) -> Result<()> {
+        self.write_inner(buf, 1)
     }
 
-    /// Like [`Self::write`], but pads each string entry to `align`-byte boundaries.
-    #[allow(dead_code)]
-    pub fn write_aligned(self, buf: &mut Vec<u8>, align: usize) {
-        self.write_inner(buf, align);
-    }
-
-    fn write_inner(self, buf: &mut Vec<u8>, align: usize) {
+    fn write_inner(self, buf: &mut Vec<u8>, align: usize) -> Result<()> {
         let mut offsets: Vec<(String, usize)> = Vec::new();
 
         for fixup in &self.fixups {
@@ -66,8 +64,26 @@ impl StringTable {
         }
 
         for fixup in &self.fixups {
-            let offset = offsets.iter().find(|(s, _)| s == &fixup.string).unwrap().1 as u64;
-            buf[fixup.position..fixup.position + 8].copy_from_slice(&offset.to_le_bytes());
+            let offset = offsets
+                .iter()
+                .find(|(string, _)| string == &fixup.string)
+                .map(|(_, offset)| *offset)
+                .ok_or_else(|| Error::UnsupportedFormat("missing string-table entry".into()))?;
+            let end = fixup
+                .position
+                .checked_add(core::mem::size_of::<u64>())
+                .ok_or(Error::SizeOverflow("string-table fixup"))?;
+            let destination =
+                buf.get_mut(fixup.position..end)
+                    .ok_or_else(|| Error::UnexpectedEof {
+                        context: "string-table fixup".into(),
+                    })?;
+            destination.copy_from_slice(
+                &u64::try_from(offset)
+                    .map_err(|_| Error::SizeOverflow("string-table offset"))?
+                    .to_le_bytes(),
+            );
         }
+        Ok(())
     }
 }

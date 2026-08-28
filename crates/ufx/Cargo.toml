@@ -7,8 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 d3dasm.workspace = true
 cfglib.workspace = true
-cfglib-dxbc.workspace = true
 nostdio.workspace = true

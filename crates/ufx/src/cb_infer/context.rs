@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 
 use cfglib::Cfg;
 use cfglib::block::BlockId;
-use cfglib_dxbc::Sm4Instruction;
 use d3dasm::dxbc::shex::{Instruction, Opcode, Operand, OperandIndex, RegisterType};
 
+use super::instruction::Sm4Instruction;
 use super::operand::{is_sample_op, read_mask, temp_index, write_mask};
 
 /// Context for analyzing an instruction within a basic block of the CFG.
@@ -24,7 +24,7 @@ impl<'a> BlockCtx<'a> {
 
     /// The current instruction.
     pub fn insn(&self) -> &'a Instruction {
-        &self.block_insns()[self.local_idx].0
+        self.block_insns()[self.local_idx].instruction()
     }
 
     /// Instructions *after* the current one in this block.
@@ -42,7 +42,7 @@ impl<'a> BlockCtx<'a> {
         let mut out = Vec::new();
         for succ_id in self.cfg.successors(self.block_id) {
             for sm4 in self.cfg.block(succ_id).instructions() {
-                out.push(&sm4.0);
+                out.push(sm4.instruction());
             }
         }
         out
@@ -53,7 +53,7 @@ impl<'a> BlockCtx<'a> {
         let mut out = Vec::new();
         for pred_id in self.cfg.predecessors(self.block_id) {
             for sm4 in self.cfg.block(pred_id).instructions() {
-                out.push(&sm4.0);
+                out.push(sm4.instruction());
             }
         }
         out
@@ -63,12 +63,11 @@ impl<'a> BlockCtx<'a> {
 /// Check if the current instruction's result feeds an output register,
 /// searching within the block and then one level of CFG successors.
 pub(super) fn feeds_output(ctx: &BlockCtx<'_>) -> bool {
-    let dest = match ctx.insn().operands().first().and_then(temp_index) {
-        Some(r) => r,
-        None => return false,
+    let Some(dest) = ctx.insn().operands().first().and_then(temp_index) else {
+        return false;
     };
     for sm4 in ctx.later_in_block() {
-        let ops = sm4.0.operands();
+        let ops = sm4.instruction().operands();
         for src in ops.iter().skip(1) {
             if temp_index(src) == Some(dest)
                 && let Some(d) = ops.first()
@@ -94,13 +93,12 @@ pub(super) fn feeds_output(ctx: &BlockCtx<'_>) -> bool {
 
 /// Check if the current instruction's result is used in a subsequent mad.
 pub(super) fn feeds_mad_addend(ctx: &BlockCtx<'_>) -> bool {
-    let dest = match ctx.insn().operands().first().and_then(temp_index) {
-        Some(r) => r,
-        None => return false,
+    let Some(dest) = ctx.insn().operands().first().and_then(temp_index) else {
+        return false;
     };
     for sm4 in ctx.later_in_block() {
-        if matches!(sm4.0.opcode, Opcode::Mad) {
-            let ops = sm4.0.operands();
+        if matches!(sm4.instruction().opcode, Opcode::Mad) {
+            let ops = sm4.instruction().operands();
             if ops.len() >= 4 && ops[1..].iter().any(|o| temp_index(o) == Some(dest)) {
                 return true;
             }
@@ -119,13 +117,12 @@ pub(super) fn feeds_mad_addend(ctx: &BlockCtx<'_>) -> bool {
 
 /// Check if the dest register feeds a sample instruction.
 pub(super) fn feeds_sample(ctx: &BlockCtx<'_>, dest: &Operand) -> bool {
-    let dest_reg = match temp_index(dest) {
-        Some(r) => r,
-        None => return false,
+    let Some(dest_reg) = temp_index(dest) else {
+        return false;
     };
     let dest_comps = write_mask(dest);
     for sm4 in ctx.later_in_block() {
-        if check_sample_use(&sm4.0, dest_reg, dest_comps) {
+        if check_sample_use(sm4.instruction(), dest_reg, dest_comps) {
             return true;
         }
     }
@@ -153,9 +150,8 @@ fn check_sample_use(insn: &Instruction, dest_reg: u32, dest_comps: u8) -> bool {
 
 /// Find ALL texture resource slots sampled using a given dest register.
 pub(super) fn find_sampled_texture_slots(ctx: &BlockCtx<'_>, dest: &Operand) -> Vec<u32> {
-    let dest_reg = match temp_index(dest) {
-        Some(r) => r,
-        None => return Vec::new(),
+    let Some(dest_reg) = temp_index(dest) else {
+        return Vec::new();
     };
     let dest_comps = write_mask(dest);
     let mut slots: Vec<u32> = Vec::new();
@@ -177,7 +173,7 @@ pub(super) fn find_sampled_texture_slots(ctx: &BlockCtx<'_>, dest: &Operand) -> 
     };
 
     for sm4 in ctx.later_in_block() {
-        collect(&sm4.0);
+        collect(sm4.instruction());
     }
     for insn in ctx.successor_insns() {
         collect(insn);
@@ -187,13 +183,12 @@ pub(super) fn find_sampled_texture_slots(ctx: &BlockCtx<'_>, dest: &Operand) -> 
 
 /// Check if a register was written by a sample instruction (looking backward).
 pub(super) fn was_sampled(ctx: &BlockCtx<'_>, src: &Operand) -> bool {
-    let src_reg = match temp_index(src) {
-        Some(r) => r,
-        None => return false,
+    let Some(src_reg) = temp_index(src) else {
+        return false;
     };
     for sm4 in ctx.earlier_in_block() {
-        if is_sample_op(sm4.0.opcode) {
-            let ops = sm4.0.operands();
+        if is_sample_op(sm4.instruction().opcode) {
+            let ops = sm4.instruction().operands();
             if !ops.is_empty() && temp_index(&ops[0]) == Some(src_reg) {
                 return true;
             }

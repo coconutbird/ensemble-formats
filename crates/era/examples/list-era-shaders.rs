@@ -1,15 +1,17 @@
+//! Lists shader files stored in an ERA archive.
+
 use era::{Reader, TeaKeys, crypto};
 use std::env;
 use std::io::Read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    let era_path = args
-        .get(1)
-        .map(|s| s.as_str())
-        .unwrap_or("/Users/dev/Documents/steamcmd/halo_wars/root.era");
+    let era_path = args.get(1).map_or(
+        "/Users/dev/Documents/steamcmd/halo_wars/root.era",
+        std::string::String::as_str,
+    );
 
-    println!("Opening ERA: {}", era_path);
+    println!("Opening ERA: {era_path}");
 
     let file = std::fs::File::open(era_path)?;
     let keys = TeaKeys::default_archive_keys();
@@ -24,8 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, entry) in archive.iter().enumerate() {
         if let Some(name) = &entry.filename {
             let lower = name.to_lowercase();
-            if lower.contains("terrain") || lower.contains("shader") || lower.ends_with(".bin") {
-                println!("[{:4}] {}", i, name);
+            let is_bin = std::path::Path::new(name)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("bin"));
+            if lower.contains("terrain") || lower.contains("shader") || is_bin {
+                println!("[{i:4}] {name}");
             }
         }
     }

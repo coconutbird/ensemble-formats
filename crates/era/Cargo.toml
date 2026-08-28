@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 default = ["std"]
 std = ["rayon", "ecf/std"]
@@ -18,7 +21,7 @@ thiserror.workspace = true
 zerocopy.workspace = true
 sha1 = { workspace = true, default-features = false }
 tiger = { workspace = true, default-features = false }
-miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+miniz_oxide.workspace = true
 
 # Optional std-only dependencies
 rayon = { workspace = true, optional = true }

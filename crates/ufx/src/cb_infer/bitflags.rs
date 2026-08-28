@@ -38,8 +38,10 @@
 //! }
 //! ```
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt::Write;
 
 /// A parsed 64-bit Hogan feature flag word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +54,7 @@ impl HoganFlags {
     }
 
     /// Extract from a Hogan filename like `hogan_standard_00080000a8000960.ufx`.
+    #[must_use]
     pub fn from_filename(name: &str) -> Option<Self> {
         let stem = name.strip_suffix(".ufx").unwrap_or(name);
         let hex_part = stem.rsplit('_').next()?;
@@ -60,11 +63,13 @@ impl HoganFlags {
 
     /// Test whether a specific bit is set.
     #[inline]
+    #[must_use]
     pub fn has(self, bit: u32) -> bool {
         self.0 & (1u64 << bit) != 0
     }
 
     /// Return all feature descriptors for the set bits.
+    #[must_use]
     pub fn features(self) -> Vec<Feature> {
         decode_features(self)
     }
@@ -83,6 +88,198 @@ pub struct Feature {
     pub description: String,
     /// Whether this feature requires other bits to be active.
     pub requires_bits: Vec<u32>,
+}
+
+struct FeatureDef {
+    bit: u32,
+    cb_slot: u32,
+    name: &'static str,
+    description: &'static str,
+    requires_bits: &'static [u32],
+    activation_bits: &'static [u32],
+}
+
+const FEATURE_DEFS: &[FeatureDef] = &[
+    FeatureDef {
+        bit: 23,
+        cb_slot: 7,
+        name: "height_blend",
+        description: "Height-based blending: adds height_blend_range and color_gradient to cb7",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 27,
+        cb_slot: 8,
+        name: "extra_texture_t4",
+        description: "Extra texture layer: adds uv_scale_t4 to cb8",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 41,
+        cb_slot: 7,
+        name: "vertex_anim_a",
+        description: "Vertex animation mode A: adds vertex_anim params (cb7[0].zw, cb7[1].xy)",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 44,
+        cb_slot: 7,
+        name: "vertex_anim_b",
+        description: "Vertex animation mode B: adds vertex_anim params (cb7[0].zw, cb7[1].x)",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 49,
+        cb_slot: 8,
+        name: "material_overrides",
+        description: "Material overrides: detail_blend, spec_override, override_strength, roughness_override",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 50,
+        cb_slot: 8,
+        name: "overlay_texture",
+        description: "Overlay texture: adds uv_scale_t4_t0 to cb8",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 28,
+        cb_slot: 8,
+        name: "roughness_channel",
+        description: "Roughness override: adds roughness_override_value to cb8",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 29,
+        cb_slot: 8,
+        name: "emissive_layer_a",
+        description: "Emissive layer (mode A): adds emissive_intensity to cb8 (with bit 27)",
+        requires_bits: &[27],
+        activation_bits: &[27],
+    },
+    FeatureDef {
+        bit: 30,
+        cb_slot: 8,
+        name: "emissive_layer_b",
+        description: "Emissive layer (mode B): adds emissive_intensity to cb8 (with bit 27)",
+        requires_bits: &[27],
+        activation_bits: &[27],
+    },
+    FeatureDef {
+        bit: 32,
+        cb_slot: 8,
+        name: "emissive_texture",
+        description: "Emissive texture layer: adds emissive_intensity and uv_scale_t4/t5 to cb8",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 35,
+        cb_slot: 8,
+        name: "scroll_animation",
+        description: "Scroll animation: adds scroll_phase, scroll_period, uv_scroll_speed",
+        requires_bits: &[32],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 38,
+        cb_slot: 8,
+        name: "per_channel_uv",
+        description: "Per-channel UV scales: splits paired uv_scale into individual components",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 33,
+        cb_slot: 8,
+        name: "emissive_submode",
+        description: "Emissive sub-mode: changes instruction ordering (no new params)",
+        requires_bits: &[32],
+        activation_bits: &[32],
+    },
+    FeatureDef {
+        bit: 34,
+        cb_slot: 8,
+        name: "special_instance",
+        description: "SpecialInstanceSC: adds LayerEffectData/ReflectionPlane/EmissiveTintSlot cbuffer, swaps UV channel order",
+        requires_bits: &[32],
+        activation_bits: &[32],
+    },
+    FeatureDef {
+        bit: 39,
+        cb_slot: 7,
+        name: "extra_texcoord",
+        description: "Extra TEXCOORD interpolant: adds TEXCOORD5 VS output and PS input",
+        requires_bits: &[32],
+        activation_bits: &[32],
+    },
+    FeatureDef {
+        bit: 40,
+        cb_slot: 7,
+        name: "skinning",
+        description: "Skinning: adds BLENDINDICES and BLENDWEIGHT vertex inputs",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 52,
+        cb_slot: 12,
+        name: "constant_colour",
+        description: "Constant colour: adds ConstantColourXSC cbuffer (slot 12)",
+        requires_bits: &[51],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 46,
+        cb_slot: 8,
+        name: "simplified_texturing",
+        description: "Simplified texturing: removes normal_intensity and InstanceSC from PS, reorders UV naming",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 48,
+        cb_slot: 8,
+        name: "opacity_blend",
+        description: "Opacity blend: adds opacity_blend parameter (requires 23+32+38+49)",
+        requires_bits: &[23, 32, 38, 49],
+        activation_bits: &[],
+    },
+    FeatureDef {
+        bit: 53,
+        cb_slot: 8,
+        name: "reduced_texturing",
+        description: "Reduced texturing: removes normal/BRDF/specular texture maps, much smaller PS",
+        requires_bits: &[],
+        activation_bits: &[],
+    },
+];
+
+fn feature(definition: &FeatureDef) -> Feature {
+    Feature {
+        name: String::from(definition.name),
+        bit: definition.bit,
+        cb_slot: definition.cb_slot,
+        description: String::from(definition.description),
+        requires_bits: definition.requires_bits.to_vec(),
+    }
+}
+
+fn uv_feature(bit: u32, name: &'static str, description: &'static str) -> Feature {
+    Feature {
+        name: String::from(name),
+        bit,
+        cb_slot: 8,
+        description: String::from(description),
+        requires_bits: Vec::new(),
+    }
 }
 
 /// Known bit → feature definitions derived from single-bit-flip analysis
@@ -106,258 +303,16 @@ pub struct Feature {
 /// |  32 | 20, 21   |  8 | Emissive + t4 layer  |
 /// |  35 | 32       |  8 | Scroll animation     |
 /// |  38 | —        |  8 | Per-channel UV scale |
+#[must_use]
 pub fn decode_features(flags: HoganFlags) -> Vec<Feature> {
-    let mut out = Vec::new();
-
-    // --- Single-bit features ---
-
-    if flags.has(23) {
-        out.push(Feature {
-            name: String::from("height_blend"),
-            bit: 23,
-            cb_slot: 7,
-            description: String::from(
-                "Height-based blending: adds height_blend_range and color_gradient to cb7",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(27) {
-        out.push(Feature {
-            name: String::from("extra_texture_t4"),
-            bit: 27,
-            cb_slot: 8,
-            description: String::from("Extra texture layer: adds uv_scale_t4 to cb8"),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(41) {
-        out.push(Feature {
-            name: String::from("vertex_anim_a"),
-            bit: 41,
-            cb_slot: 7,
-            description: String::from(
-                "Vertex animation mode A: adds vertex_anim params (cb7[0].zw, cb7[1].xy)",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(44) {
-        out.push(Feature {
-            name: String::from("vertex_anim_b"),
-            bit: 44,
-            cb_slot: 7,
-            description: String::from(
-                "Vertex animation mode B: adds vertex_anim params (cb7[0].zw, cb7[1].x)",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(49) {
-        out.push(Feature {
-            name: String::from("material_overrides"),
-            bit: 49,
-            cb_slot: 8,
-            description: String::from(
-                "Material overrides: detail_blend, spec_override, override_strength, roughness_override",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(50) {
-        out.push(Feature {
-            name: String::from("overlay_texture"),
-            bit: 50,
-            cb_slot: 8,
-            description: String::from("Overlay texture: adds uv_scale_t4_t0 to cb8"),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    // --- Compound / multi-bit features ---
-    //
-    // Cross-validation across 679 variants shows these bits interact:
-    //
-    // Bit 28: roughness_override_value (appears with 27+28, independent of bit 49)
-    // Bit 29: emissive_intensity (with bit 27; also adds uv_scale variants)
-    // Bit 30: emissive_intensity (with bit 27; similar to 29)
-    // Bit 32: emissive + extra texture layer (adds uv_scale_t4/t5 + emissive)
-    // Bit 35: scroll animation (requires bit 32)
-
-    if flags.has(28) {
-        out.push(Feature {
-            name: String::from("roughness_channel"),
-            bit: 28,
-            cb_slot: 8,
-            description: String::from("Roughness override: adds roughness_override_value to cb8"),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(29) && flags.has(27) {
-        out.push(Feature {
-            name: String::from("emissive_layer_a"),
-            bit: 29,
-            cb_slot: 8,
-            description: String::from(
-                "Emissive layer (mode A): adds emissive_intensity to cb8 (with bit 27)",
-            ),
-            requires_bits: alloc::vec![27],
-        });
-    }
-
-    if flags.has(30) && flags.has(27) {
-        out.push(Feature {
-            name: String::from("emissive_layer_b"),
-            bit: 30,
-            cb_slot: 8,
-            description: String::from(
-                "Emissive layer (mode B): adds emissive_intensity to cb8 (with bit 27)",
-            ),
-            requires_bits: alloc::vec![27],
-        });
-    }
-
-    if flags.has(32) {
-        out.push(Feature {
-            name: String::from("emissive_texture"),
-            bit: 32,
-            cb_slot: 8,
-            description: String::from(
-                "Emissive texture layer: adds emissive_intensity and uv_scale_t4/t5 to cb8",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(35) {
-        out.push(Feature {
-            name: String::from("scroll_animation"),
-            bit: 35,
-            cb_slot: 8,
-            description: String::from(
-                "Scroll animation: adds scroll_phase, scroll_period, uv_scroll_speed",
-            ),
-            requires_bits: alloc::vec![32],
-        });
-    }
-
-    if flags.has(38) {
-        out.push(Feature {
-            name: String::from("per_channel_uv"),
-            bit: 38,
-            cb_slot: 8,
-            description: String::from(
-                "Per-channel UV scales: splits paired uv_scale into individual components",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    // --- Emissive / texture sub-modes (require bit 32) ---
-
-    if flags.has(33) && flags.has(32) {
-        out.push(Feature {
-            name: String::from("emissive_submode"),
-            bit: 33,
-            cb_slot: 8,
-            description: String::from(
-                "Emissive sub-mode: changes instruction ordering (no new params)",
-            ),
-            requires_bits: alloc::vec![32],
-        });
-    }
-
-    if flags.has(34) && flags.has(32) {
-        out.push(Feature {
-            name: String::from("special_instance"),
-            bit: 34,
-            cb_slot: 8,
-            description: String::from(
-                "SpecialInstanceSC: adds LayerEffectData/ReflectionPlane/EmissiveTintSlot cbuffer, swaps UV channel order",
-            ),
-            requires_bits: alloc::vec![32],
-        });
-    }
-
-    if flags.has(39) && flags.has(32) {
-        out.push(Feature {
-            name: String::from("extra_texcoord"),
-            bit: 39,
-            cb_slot: 7,
-            description: String::from(
-                "Extra TEXCOORD interpolant: adds TEXCOORD5 VS output and PS input",
-            ),
-            requires_bits: alloc::vec![32],
-        });
-    }
-
-    // --- Skinning and color ---
-
-    if flags.has(40) {
-        out.push(Feature {
-            name: String::from("skinning"),
-            bit: 40,
-            cb_slot: 7,
-            description: String::from("Skinning: adds BLENDINDICES and BLENDWEIGHT vertex inputs"),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(52) {
-        out.push(Feature {
-            name: String::from("constant_colour"),
-            bit: 52,
-            cb_slot: 12,
-            description: String::from("Constant colour: adds ConstantColourXSC cbuffer (slot 12)"),
-            requires_bits: alloc::vec![51],
-        });
-    }
-
-    // --- Texture reduction / modification ---
-
-    if flags.has(46) {
-        out.push(Feature {
-            name: String::from("simplified_texturing"),
-            bit: 46,
-            cb_slot: 8,
-            description: String::from(
-                "Simplified texturing: removes normal_intensity and InstanceSC from PS, reorders UV naming",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    if flags.has(48) {
-        out.push(Feature {
-            name: String::from("opacity_blend"),
-            bit: 48,
-            cb_slot: 8,
-            description: String::from(
-                "Opacity blend: adds opacity_blend parameter (requires 23+32+38+49)",
-            ),
-            requires_bits: alloc::vec![23, 32, 38, 49],
-        });
-    }
-
-    if flags.has(53) {
-        out.push(Feature {
-            name: String::from("reduced_texturing"),
-            bit: 53,
-            cb_slot: 8,
-            description: String::from(
-                "Reduced texturing: removes normal/BRDF/specular texture maps, much smaller PS",
-            ),
-            requires_bits: Vec::new(),
-        });
-    }
-
-    // --- Lighting model ---
+    let mut out: Vec<_> = FEATURE_DEFS
+        .iter()
+        .filter(|definition| {
+            flags.has(definition.bit)
+                && definition.activation_bits.iter().all(|&bit| flags.has(bit))
+        })
+        .map(feature)
+        .collect();
 
     if flags.has(20) {
         let model = if flags.has(21) {
@@ -378,50 +333,43 @@ pub fn decode_features(flags: HoganFlags) -> Vec<Feature> {
         });
     }
 
-    // --- UV addressing mode ---
-
-    if flags.has(5) {
-        out.push(Feature {
-            name: String::from("uv_paired"),
-            bit: 5,
-            cb_slot: 8,
-            description: String::from("UV mode: standard paired channels (t0_t1, t2_t3)"),
-            requires_bits: Vec::new(),
-        });
+    let uv_mode = if flags.has(5) {
+        Some((
+            5,
+            "uv_paired",
+            "UV mode: standard paired channels (t0_t1, t2_t3)",
+        ))
     } else if flags.has(2) {
-        out.push(Feature {
-            name: String::from("uv_mode_a"),
-            bit: 2,
-            cb_slot: 8,
-            description: String::from("UV mode A: alternative addressing (exclusive with bit 5)"),
-            requires_bits: Vec::new(),
-        });
+        Some((
+            2,
+            "uv_mode_a",
+            "UV mode A: alternative addressing (exclusive with bit 5)",
+        ))
     } else if flags.has(3) {
-        out.push(Feature {
-            name: String::from("uv_mode_b"),
-            bit: 3,
-            cb_slot: 8,
-            description: String::from("UV mode B: alternative addressing (exclusive with bit 5)"),
-            requires_bits: Vec::new(),
-        });
+        Some((
+            3,
+            "uv_mode_b",
+            "UV mode B: alternative addressing (exclusive with bit 5)",
+        ))
     } else if flags.has(4) {
-        out.push(Feature {
-            name: String::from("uv_mode_c"),
-            bit: 4,
-            cb_slot: 8,
-            description: String::from("UV mode C: alternative addressing (exclusive with bit 5)"),
-            requires_bits: Vec::new(),
-        });
+        Some((
+            4,
+            "uv_mode_c",
+            "UV mode C: alternative addressing (exclusive with bit 5)",
+        ))
+    } else {
+        None
+    };
+    if let Some((bit, name, description)) = uv_mode {
+        out.push(uv_feature(bit, name, description));
     }
 
     if flags.has(6) {
-        out.push(Feature {
-            name: String::from("uv_mode_individual"),
-            bit: 6,
-            cb_slot: 8,
-            description: String::from("UV mode: individual scale per texture (uv_scale_t0)"),
-            requires_bits: Vec::new(),
-        });
+        out.push(uv_feature(
+            6,
+            "uv_mode_individual",
+            "UV mode: individual scale per texture (uv_scale_t0)",
+        ));
     }
 
     out
@@ -431,12 +379,14 @@ pub fn decode_features(flags: HoganFlags) -> Vec<Feature> {
 ///
 /// Returns the hex string (without `0x` prefix) from names like
 /// `hogan_standard_00080000a8000960` or `hogan_standard_00080000a8000960.ufx`.
+#[must_use]
 pub fn extract_hex_from_name(name: &str) -> Option<&str> {
     let stem = name.strip_suffix(".ufx").unwrap_or(name);
     stem.rsplit('_').next()
 }
 
 /// Summary of all active feature bits for display purposes.
+#[must_use]
 pub fn flags_summary(flags: HoganFlags) -> String {
     let mut bits: Vec<u32> = Vec::new();
     for b in 0..64u32 {
@@ -444,8 +394,6 @@ pub fn flags_summary(flags: HoganFlags) -> String {
             bits.push(b);
         }
     }
-    use alloc::format;
-    use core::fmt::Write;
     let mut s = format!("0x{:016x} ({} bits set: ", flags.0, bits.len());
     for (i, b) in bits.iter().enumerate() {
         if i > 0 {
@@ -464,6 +412,7 @@ pub fn flags_summary(flags: HoganFlags) -> String {
 /// even if the pattern matcher can't find them (dead code elimination, etc.).
 ///
 /// Useful for cross-validation against [`super::infer_cb_params`] results.
+#[must_use]
 pub fn predicted_semantics(flags: HoganFlags) -> Vec<&'static str> {
     let mut sems = Vec::new();
 

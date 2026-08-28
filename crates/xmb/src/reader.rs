@@ -3,21 +3,11 @@
 //! [`Reader::read`] auto-detects the format: if the input starts with `<`
 //! (or a UTF-8 BOM followed by `<`) it is parsed as XML text; otherwise it
 //! is treated as a binary ECF-wrapped XMB file.
-//!
-//! # Example
-//!
-//! ```no_run
-//! use xmb::Reader;
-//!
-//! // Works with both binary XMB and XML text
-//! let data = std::fs::read("example.xmb").unwrap();
-//! let doc = Reader::read(&data).unwrap();
-//! println!("root: {}", doc.root().unwrap().name);
-//! ```
 
 use crate::document::{Document, Format};
 use crate::error::{Error, Result};
 use crate::{ECF_FILE_ID, PACKED_DATA_CHUNK_ID, SIGNATURE};
+use nostdio::{Cursor, ReadLe};
 
 /// UTF-8 BOM prefix.
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
@@ -30,6 +20,11 @@ impl Reader {
     ///
     /// - If the data starts with `<` or a UTF-8 BOM, it is parsed as XML text.
     /// - Otherwise it is parsed as a binary ECF-wrapped XMB file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if text input is invalid UTF-8 or XML, or if binary
+    /// input has an invalid ECF/XMB header, checksum, or packed BDT document.
     pub fn read(data: &[u8]) -> Result<Document> {
         if Self::looks_like_xml(data) {
             let s = core::str::from_utf8(data)?;
@@ -42,6 +37,11 @@ impl Reader {
     /// Read a binary ECF-wrapped XMB file from a byte slice.
     ///
     /// Use this when you know the input is a binary XMB (skips XML detection).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container, file ID, required chunk, XMB
+    /// signature, or packed BDT document is invalid.
     pub fn read_ecf(data: &[u8]) -> Result<Document> {
         let ecf = ecf::Reader::new(data)?;
 
@@ -67,12 +67,19 @@ impl Reader {
     ///
     /// This is useful when you already have the raw packed bytes (e.g. from
     /// a custom ECF reader or an ERA archive).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the signature is missing or invalid or the packed
+    /// BDT document is malformed.
     pub fn parse_packed_data(data: &[u8]) -> Result<Document> {
         if data.len() < 4 {
             return Err(Error::UnexpectedEof);
         }
 
-        let sig_bytes = u32::from_le_bytes(data[..4].try_into().unwrap());
+        let sig_bytes = Cursor::new(data)
+            .read_u32_le()
+            .map_err(|_| Error::UnexpectedEof)?;
         let is_big_endian = sig_bytes == SIGNATURE.swap_bytes();
 
         let signature = if is_big_endian {

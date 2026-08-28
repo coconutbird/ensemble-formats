@@ -1,7 +1,7 @@
 //! ECF container reader — zero-copy, operates on a borrowed byte slice.
 //!
 //! [`Reader`] parses the file and chunk headers up-front, then provides
-//! indexed or ID-based access to chunk data. Compressed chunks (BDeflateStream)
+//! indexed or ID-based access to chunk data. Compressed chunks (`BDeflateStream`)
 //! are decompressed transparently by [`Reader::chunk_data`].
 //!
 //! ```ignore
@@ -27,11 +27,21 @@ pub struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     /// Parse an ECF container from a byte slice, validating checksums.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a header is truncated or invalid, a chunk lies
+    /// outside `data`, or a header or chunk checksum does not match.
     pub fn new(data: &'a [u8]) -> Result<Self> {
         Self::parse(data, true)
     }
 
     /// Parse an ECF container from a byte slice, skipping checksum validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a header is truncated or invalid or a chunk lies
+    /// outside `data`.
     pub fn new_unchecked(data: &'a [u8]) -> Result<Self> {
         Self::parse(data, false)
     }
@@ -96,21 +106,29 @@ impl<'a> Reader<'a> {
     }
 
     /// The parsed ECF header.
+    #[must_use]
     pub fn header(&self) -> &EcfHeader {
         &self.header
     }
 
     /// The parsed chunk headers.
+    #[must_use]
     pub fn chunks(&self) -> &[EcfChunkHeader] {
         &self.chunks
     }
 
     /// Find a chunk header by ID.
+    #[must_use]
     pub fn find_chunk(&self, id: u64) -> Option<&EcfChunkHeader> {
         self.chunks.iter().find(|c| c.id == id)
     }
 
     /// Get raw (possibly compressed) chunk bytes by index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ChunkNotFound`] when `index` is out of range, or
+    /// [`Error::UnexpectedEof`] if the chunk range lies outside the container.
     pub fn raw_chunk_data(&self, index: usize) -> Result<&'a [u8]> {
         let chunk = self
             .chunks
@@ -126,6 +144,11 @@ impl<'a> Reader<'a> {
     }
 
     /// Get chunk data by index, automatically decompressing if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `index` is invalid, the chunk range is truncated,
+    /// or a compressed chunk cannot be decompressed.
     pub fn chunk_data(&self, index: usize) -> Result<Vec<u8>> {
         let raw = self.raw_chunk_data(index)?;
         let chunk = &self.chunks[index];
@@ -138,6 +161,11 @@ impl<'a> Reader<'a> {
     }
 
     /// Get chunk data by ID, automatically decompressing if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ChunkNotFound`] if no chunk has `id`, or propagates an
+    /// error while reading or decompressing the selected chunk.
     pub fn chunk_data_by_id(&self, id: u64) -> Result<Vec<u8>> {
         let index = self
             .chunks
@@ -148,6 +176,7 @@ impl<'a> Reader<'a> {
     }
 
     /// The underlying byte slice.
+    #[must_use]
     pub fn as_bytes(&self) -> &'a [u8] {
         self.data
     }

@@ -43,7 +43,7 @@ fn hogan_texture_name(map_type: MapType) -> Option<&'static str> {
     }
 }
 
-/// Specular_Reflectance is always paired with BRDF_Parameter_Map in Hogan shaders.
+/// `Specular_Reflectance` is always paired with `BRDF_Parameter_Map` in Hogan shaders.
 /// This constant is used when Gloss is present to add both.
 const SPECULAR_REFLECTANCE: &str = "Specular_Reflectance";
 
@@ -60,11 +60,9 @@ const SPECULAR_REFLECTANCE: &str = "Specular_Reflectance";
 // exact permutation set.
 
 /// A single shader permutation entry: `(name, hash)`.
-#[allow(dead_code)]
 pub type PermEntry = (&'static str, u32);
 
 /// A permutation set: 1–4 quality-level entries used together by a material.
-#[allow(dead_code)]
 pub type PermSet = &'static [PermEntry];
 
 // ---------------------------------------------------------------------------
@@ -84,7 +82,7 @@ fn select_standard_perm_set(needed: &[&str]) -> usize {
     let mut best_idx = 6; // fallback: base PBR, 4-slot (former DEFAULT_STATIC_PERMS)
     let mut best_score = i32::MIN;
 
-    for (i, perm_textures) in HOGAN_STANDARD_PERM_TEXTURES.iter().enumerate() {
+    for (index, perm_textures) in HOGAN_STANDARD_PERM_TEXTURES.iter().enumerate() {
         // Count how many needed textures are present in this perm set
         let matched = needed.iter().filter(|n| perm_textures.contains(n)).count();
         // Count extra textures in this perm set that we don't need
@@ -94,20 +92,21 @@ fn select_standard_perm_set(needed: &[&str]) -> usize {
             continue;
         }
         // Prefer fewer extra textures (tighter match)
-        let mut score: i32 = 100 - (extra as i32 * 10);
+        let extra_penalty = i32::try_from(extra).unwrap_or(i32::MAX).saturating_mul(10);
+        let mut score = 100i32.saturating_sub(extra_penalty);
         // Prefer multi-slot perm sets (4 quality levels)
-        let num_slots = HOGAN_STANDARD_PERM_SETS[i].len();
+        let num_slots = HOGAN_STANDARD_PERM_SETS[index].len();
         if num_slots >= 4 {
             score += 20;
         } else if num_slots >= 2 {
             score += 10;
         }
         // Prefer more frequently used perm sets (earlier index = more common)
-        score -= i as i32;
+        score = score.saturating_sub(i32::try_from(index).unwrap_or(i32::MAX));
 
         if score > best_score {
             best_score = score;
-            best_idx = i;
+            best_idx = index;
         }
     }
     best_idx
@@ -157,12 +156,10 @@ fn parse_perm_flags(name: &str) -> Option<u64> {
     u64::from_str_radix(hex_part, 16).ok()
 }
 
-/// CB layout entry: name, float-offset, component count.
-#[allow(dead_code)]
+/// CB layout entry: name and float offset.
 struct CbEntry {
     name: &'static str,
     offset: u32,
-    components: u8,
 }
 
 /// Sequential layout builder (mirrors `hogan_cb_layout::LayoutBuilder`).
@@ -183,9 +180,8 @@ impl CbBuilder {
         self.entries.push(CbEntry {
             name,
             offset: self.pos,
-            components,
         });
-        self.pos += components as u32;
+        self.pos += u32::from(components);
     }
 
     /// Advance to next register boundary (multiple of 4 floats).
@@ -204,9 +200,12 @@ impl CbBuilder {
 /// This must match the layout produced by `hogan_cb_layout.rs::predict_cb8`
 /// exactly, so that round-trip through glTF named parameters is lossless.
 fn predict_ps_layout(flags: u64) -> CbBuilder {
-    let mut b = CbBuilder::new();
+    use HoganFlag::{
+        Emissive, EmissiveSubA, EmissiveSubB, ExtraTextureLayer, MaterialOverride, PerChannelUv,
+        ReducedTexturing, RoughnessChannel, ScrollAnim, SimplifiedTexturing,
+    };
 
-    use HoganFlag::*;
+    let mut b = CbBuilder::new();
 
     // --- Group A: Core texturing (sequential packing) ---
     b.push("uv_scale_t0_t1", 2);
@@ -276,7 +275,7 @@ fn build_ps_cb_data(flags: u64, legacy: &LegacyMaterialData) -> Vec<u8> {
         return Vec::new();
     }
 
-    let total_floats = regs as usize * 4;
+    let total_floats = usize::try_from(regs).unwrap_or_default() * 4;
     let mut floats = vec![0.0f32; total_floats];
 
     let has_emissive = legacy.maps[MapType::Emissive as usize]
@@ -285,27 +284,21 @@ fn build_ps_cb_data(flags: u64, legacy: &LegacyMaterialData) -> Vec<u8> {
     let roughness = 1.0 - (legacy.spec_power / 100.0).clamp(0.0, 1.0);
 
     for entry in &layout.entries {
-        let off = entry.offset as usize;
+        let off = usize::try_from(entry.offset).unwrap_or_default();
         match entry.name {
-            "uv_scale_t0_t1" => {
+            "uv_scale_t0_t1" | "uv_scale_t2_t3" => {
                 floats[off] = 1.0;
                 floats[off + 1] = 1.0;
             }
-            "uv_scale_t2_t3" => {
+            "normal_intensity" | "uv_scale_t4" | "uv_scale_t5" | "scroll_period" => {
                 floats[off] = 1.0;
-                floats[off + 1] = 1.0;
             }
-            "normal_intensity" => floats[off] = 1.0,
-            "uv_scale_t4" => floats[off] = 1.0,
-            "uv_scale_t5" => floats[off] = 1.0,
             "emissive_intensity" => floats[off] = if has_emissive { 1.0 } else { 0.0 },
-            "scroll_period" => floats[off] = 1.0,
-            "scroll_phase" => floats[off] = 0.0,
+            "scroll_phase" | "detail_blend" | "override_strength" | "override_bias" => {
+                floats[off] = 0.0;
+            }
             "fresnel_power" => floats[off] = legacy.env_fresnel_power,
             "roughness_channel_value" | "roughness_override" => floats[off] = roughness,
-            "detail_blend" => floats[off] = 0.0,
-            "override_strength" => floats[off] = 0.0,
-            "override_bias" => floats[off] = 0.0,
             "spec_override_color" => {
                 floats[off] = legacy.spec_color[0];
                 floats[off + 1] = legacy.spec_color[1];
@@ -343,6 +336,7 @@ fn build_ps_cb_data(flags: u64, legacy: &LegacyMaterialData) -> Vec<u8> {
 ///
 /// Vertex/hull/domain/geometry CB blobs remain empty (the common permutations
 /// selected by this converter don't require VS CB parameters).
+#[must_use]
 pub fn legacy_to_hogan(legacy: &LegacyMaterialData, skinned: bool) -> HoganMaterialData {
     let textures = build_hogan_textures(legacy);
     let needed = needed_hogan_textures(legacy);
@@ -367,7 +361,7 @@ pub fn legacy_to_hogan(legacy: &LegacyMaterialData, skinned: bool) -> HoganMater
     HoganMaterialData {
         shader_permutations,
         ufx_version: DEFAULT_UFX_VERSION,
-        blend_mode: legacy.blend_type as u32,
+        blend_mode: u32::from(legacy.blend_type),
         shadow_requires_consts: false,
         skinned,
         terrain_blending: false,
@@ -387,9 +381,10 @@ pub fn legacy_to_hogan(legacy: &LegacyMaterialData, skinned: bool) -> HoganMater
 /// - `blend_mode` → `blend_type`.
 /// - Specular and other Legacy properties use defaults since Hogan
 ///   doesn't carry equivalent data.
+#[must_use]
 pub fn hogan_to_legacy(hogan: &HoganMaterialData) -> LegacyMaterialData {
     let mut legacy = LegacyMaterialData {
-        blend_type: hogan.blend_mode as u8,
+        blend_type: u8::try_from(hogan.blend_mode).unwrap_or_default(),
         ..LegacyMaterialData::default()
     };
 
@@ -443,6 +438,7 @@ pub fn hogan_to_legacy(hogan: &HoganMaterialData) -> LegacyMaterialData {
 /// - If the material is already in the target format, it is cloned unchanged.
 /// - `to_hogan = true`: Legacy → Hogan; `to_hogan = false`: Hogan → Legacy.
 /// - `skinned`: whether this material is used on a skinned mesh section.
+#[must_use]
 pub fn convert_material(mat: &Material, to_hogan: bool, skinned: bool) -> Material {
     let data = match (&mat.data, to_hogan) {
         (MaterialData::Legacy(l), true) => {
@@ -459,30 +455,35 @@ pub fn convert_material(mat: &Material, to_hogan: bool, skinned: bool) -> Materi
     }
 }
 
-/// Determine whether each material in a [`UgxGeom`] is skinned.
+/// Determine whether each material in a [`crate::UgxGeom`] is skinned.
 ///
 /// A material is considered skinned if *any* section referencing it
 /// has bone-weight skinning (`!rigid_only && max_bones > 0`).
 ///
 /// Returns a `Vec<bool>` with one entry per material index.
+#[must_use]
 pub fn material_skinned_flags(geom: &super::UgxGeom) -> Vec<bool> {
     let n = geom.materials.len();
     let mut flags = alloc::vec![false; n];
     for section in &geom.sections {
-        let idx = section.material_index as usize;
-        if idx < n && !section.rigid_only && section.max_bones > 0 {
-            flags[idx] = true;
+        if let Ok(index) = usize::try_from(section.material_index)
+            && index < n
+            && !section.rigid_only
+            && section.max_bones > 0
+        {
+            flags[index] = true;
         }
     }
     flags
 }
 
-/// Convert all materials in a [`UgxGeom`], automatically determining
+/// Convert all materials in a [`crate::UgxGeom`], automatically determining
 /// the `skinned` flag for each material from section data.
 ///
 /// - `to_hogan = true`: Legacy → Hogan; `to_hogan = false`: Hogan → Legacy.
 ///
 /// Returns a new `Vec<Material>` with converted materials.
+#[must_use]
 pub fn convert_geom_materials(geom: &super::UgxGeom, to_hogan: bool) -> Vec<Material> {
     let skinned_flags = material_skinned_flags(geom);
     geom.materials
@@ -522,7 +523,9 @@ fn build_hogan_textures(legacy: &LegacyMaterialData) -> String {
     {
         let path = &diffuse_map.name;
         // Strip file extension
-        let stem = path.rfind('.').map(|i| &path[..i]).unwrap_or(path);
+        let stem = path
+            .rfind('.')
+            .map_or(path.as_str(), |index| &path[..index]);
         // Strip common diffuse suffixes to get the base name
         let base = strip_suffix_ci(stem, "_diff")
             .or_else(|| strip_suffix_ci(stem, "_al"))
@@ -585,14 +588,14 @@ fn parse_textures_string(textures: &str) -> ParsedTextures {
     // Check for HW2 bracket pattern: `base_[al]`
     if let Some(bracket_pos) = textures.find("[al]") {
         let base = &textures[..bracket_pos];
-        parsed.diffuse = Some(alloc::format!("{}diff.ddx", base));
-        parsed.normal = Some(alloc::format!("{}norm.ddx", base));
+        parsed.diffuse = Some(alloc::format!("{base}diff.ddx"));
+        parsed.normal = Some(alloc::format!("{base}norm.ddx"));
         return parsed;
     }
     // Check for `[nm]` pattern (normal-only, e.g. water shaders)
     if let Some(bracket_pos) = textures.find("[nm]") {
         let base = &textures[..bracket_pos];
-        parsed.normal = Some(alloc::format!("{}nm.ddx", base));
+        parsed.normal = Some(alloc::format!("{base}nm.ddx"));
         return parsed;
     }
 
@@ -603,7 +606,9 @@ fn parse_textures_string(textures: &str) -> ParsedTextures {
             continue;
         }
         let lower = trimmed.to_lowercase();
-        let stem = lower.rfind('.').map(|i| &lower[..i]).unwrap_or(&lower);
+        let stem = lower
+            .rfind('.')
+            .map_or(lower.as_str(), |index| &lower[..index]);
 
         if stem.ends_with("_diff")
             || stem.ends_with("_al")
@@ -641,473 +646,5 @@ fn parse_textures_string(textures: &str) -> ParsedTextures {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_legacy_to_hogan_produces_al_pattern() {
-        let mut legacy = LegacyMaterialData::default();
-        legacy.maps[MapType::Diffuse as usize] = vec![Map {
-            name: String::from("art\\textures\\grass_diff.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        legacy.blend_type = 1;
-
-        let hogan = legacy_to_hogan(&legacy, false);
-        assert_eq!(hogan.ufx_version, DEFAULT_UFX_VERSION);
-        assert_eq!(hogan.blend_mode, 1);
-        assert!(!hogan.skinned);
-        assert_eq!(hogan.shader_permutations.len(), 4);
-        // Should produce HW2-style [al] texture pattern
-        assert_eq!(hogan.textures, "art\\textures\\grass_[al]");
-        // PS CB data should now be populated (not empty)
-        assert!(
-            !hogan.ps_cb_data.is_empty(),
-            "ps_cb_data should be populated from legacy properties"
-        );
-        // VS CB data stays empty (no height-blend or vertex-anim in standard perms)
-        assert!(hogan.vs_cb_data.is_empty());
-    }
-
-    #[test]
-    fn test_hogan_to_legacy_bracket_pattern() {
-        let hogan = HoganMaterialData {
-            shader_permutations: vec![ShaderPermutation {
-                name: String::from("HOGAN_STANDARD_00000000003009A0"),
-                hash: 0xE0EE_7237,
-            }],
-            ufx_version: 9,
-            blend_mode: 2,
-            shadow_requires_consts: false,
-            skinned: false,
-            terrain_blending: false,
-            vs_cb_data: Vec::new(),
-            ps_cb_data: Vec::new(),
-            hs_cb_data: Vec::new(),
-            ds_cb_data: Vec::new(),
-            gs_cb_data: Vec::new(),
-            textures: String::from("bespoke\\units\\scorpion\\scorpion_[al]"),
-        };
-        let legacy = hogan_to_legacy(&hogan);
-        assert_eq!(legacy.blend_type, 2);
-        assert_eq!(
-            legacy.maps[MapType::Diffuse as usize][0].name,
-            "bespoke\\units\\scorpion\\scorpion_diff.ddx"
-        );
-        assert_eq!(
-            legacy.maps[MapType::Normal as usize][0].name,
-            "bespoke\\units\\scorpion\\scorpion_norm.ddx"
-        );
-    }
-
-    #[test]
-    fn test_hogan_to_legacy_semicolon_fallback() {
-        let hogan = HoganMaterialData {
-            shader_permutations: vec![],
-            ufx_version: 9,
-            blend_mode: 0,
-            shadow_requires_consts: false,
-            skinned: false,
-            terrain_blending: false,
-            vs_cb_data: Vec::new(),
-            ps_cb_data: Vec::new(),
-            hs_cb_data: Vec::new(),
-            ds_cb_data: Vec::new(),
-            gs_cb_data: Vec::new(),
-            textures: String::from("art\\grass_diff.ddx;art\\grass_norm.ddx"),
-        };
-        let legacy = hogan_to_legacy(&hogan);
-        assert_eq!(legacy.maps[MapType::Diffuse as usize].len(), 1);
-        assert_eq!(legacy.maps[MapType::Normal as usize].len(), 1);
-    }
-
-    #[test]
-    fn test_hogan_to_legacy_empty() {
-        let hogan = HoganMaterialData {
-            shader_permutations: vec![],
-            ufx_version: 9,
-            blend_mode: 0,
-            shadow_requires_consts: false,
-            skinned: false,
-            terrain_blending: false,
-            vs_cb_data: Vec::new(),
-            ps_cb_data: Vec::new(),
-            hs_cb_data: Vec::new(),
-            ds_cb_data: Vec::new(),
-            gs_cb_data: Vec::new(),
-            textures: String::new(),
-        };
-        let legacy = hogan_to_legacy(&hogan);
-        for maps in &legacy.maps {
-            assert!(maps.is_empty());
-        }
-    }
-
-    #[test]
-    fn test_hogan_to_legacy_nm_pattern() {
-        let hogan = HoganMaterialData {
-            shader_permutations: vec![],
-            ufx_version: 9,
-            blend_mode: 8,
-            shadow_requires_consts: false,
-            skinned: false,
-            terrain_blending: false,
-            vs_cb_data: Vec::new(),
-            ps_cb_data: Vec::new(),
-            hs_cb_data: Vec::new(),
-            ds_cb_data: Vec::new(),
-            gs_cb_data: Vec::new(),
-            textures: String::from("environment_tiling\\water\\fx_water_01[nm]"),
-        };
-        let legacy = hogan_to_legacy(&hogan);
-        assert!(legacy.maps[MapType::Diffuse as usize].is_empty());
-        assert_eq!(
-            legacy.maps[MapType::Normal as usize][0].name,
-            "environment_tiling\\water\\fx_water_01nm.ddx"
-        );
-    }
-
-    #[test]
-    fn test_convert_material_roundtrip() {
-        let mut ld = LegacyMaterialData::default();
-        ld.maps[MapType::Diffuse as usize] = vec![Map {
-            name: String::from("art\\model_diff.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        let mat = Material {
-            name: String::from("test"),
-            material_version: 4,
-            data: MaterialData::Legacy(Box::new(ld)),
-        };
-        let to_h = convert_material(&mat, true, false);
-        assert!(to_h.is_hogan());
-        assert_eq!(to_h.hogan().unwrap().textures, "art\\model_[al]");
-        let back = convert_material(&to_h, false, false);
-        assert!(back.is_legacy());
-        assert!(
-            back.legacy().unwrap().maps[MapType::Diffuse as usize][0]
-                .name
-                .contains("model_diff")
-        );
-    }
-
-    #[test]
-    fn test_convert_noop() {
-        let mat = Material {
-            name: String::from("h"),
-            material_version: 4,
-            data: MaterialData::Hogan(Box::new(HoganMaterialData {
-                shader_permutations: vec![],
-                ufx_version: 9,
-                blend_mode: 0,
-                shadow_requires_consts: false,
-                skinned: false,
-                terrain_blending: false,
-                vs_cb_data: Vec::new(),
-                ps_cb_data: Vec::new(),
-                hs_cb_data: Vec::new(),
-                ds_cb_data: Vec::new(),
-                gs_cb_data: Vec::new(),
-                textures: String::from("x"),
-            })),
-        };
-        let result = convert_material(&mat, true, false);
-        assert!(result.is_hogan());
-        assert_eq!(result.hogan().unwrap().textures, "x");
-    }
-
-    #[test]
-    fn test_parse_textures_multiple_types() {
-        let parsed = parse_textures_string("m_diff.ddx;m_norm.ddx;m_spec.ddx;m_em.ddx");
-        assert!(parsed.diffuse.is_some());
-        assert!(parsed.normal.is_some());
-        assert!(parsed.gloss.is_some());
-        assert!(parsed.emissive.is_some());
-    }
-
-    #[test]
-    fn test_strip_suffix_ci() {
-        assert_eq!(strip_suffix_ci("foo_Diff", "_diff"), Some("foo"));
-        assert_eq!(strip_suffix_ci("foo_DIFF", "_diff"), Some("foo"));
-        assert_eq!(strip_suffix_ci("foo_bar", "_diff"), None);
-        assert_eq!(strip_suffix_ci("x", "_diff"), None);
-    }
-
-    #[test]
-    fn test_select_perm_set_base_pbr() {
-        // Diffuse+Normal+Gloss → Base PBR (index 5, 4-slot, most frequent)
-        let needed = &[
-            "Albedo_Map",
-            "BRDF_Parameter_Map",
-            "Normal_Map",
-            "Specular_Reflectance",
-        ];
-        let idx = select_standard_perm_set(needed);
-        assert_eq!(HOGAN_STANDARD_PERM_SETS[idx].len(), 4);
-        // Should be a base PBR set (no Sand/Emissive)
-        let tex = HOGAN_STANDARD_PERM_TEXTURES[idx];
-        assert!(!tex.contains(&"Sand_Map"));
-        assert!(!tex.contains(&"Emissive_Map"));
-    }
-
-    #[test]
-    fn test_select_perm_set_emissive() {
-        // Diffuse+Normal+Gloss+Emissive → Base PBR + Emissive (index 10)
-        let needed = &[
-            "Albedo_Map",
-            "BRDF_Parameter_Map",
-            "Emissive_Map",
-            "Normal_Map",
-            "Specular_Reflectance",
-        ];
-        let idx = select_standard_perm_set(needed);
-        let tex = HOGAN_STANDARD_PERM_TEXTURES[idx];
-        assert!(tex.contains(&"Emissive_Map"));
-    }
-
-    #[test]
-    fn test_select_perm_set_albedo_only_fallback() {
-        // Albedo only → no exact match, falls back to base PBR (smallest superset)
-        let needed = &["Albedo_Map"];
-        let idx = select_standard_perm_set(needed);
-        assert!(HOGAN_STANDARD_PERM_TEXTURES[idx].contains(&"Albedo_Map"));
-    }
-
-    #[test]
-    fn test_needed_hogan_textures_diffuse_normal_gloss() {
-        let mut legacy = LegacyMaterialData::default();
-        legacy.maps[MapType::Diffuse as usize] = vec![Map {
-            name: String::from("tex_diff.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        legacy.maps[MapType::Normal as usize] = vec![Map {
-            name: String::from("tex_norm.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        legacy.maps[MapType::Gloss as usize] = vec![Map {
-            name: String::from("tex_spec.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        let needed = needed_hogan_textures(&legacy);
-        assert!(needed.contains(&"Albedo_Map"));
-        assert!(needed.contains(&"Normal_Map"));
-        assert!(needed.contains(&"BRDF_Parameter_Map"));
-        assert!(needed.contains(&"Specular_Reflectance"));
-    }
-
-    #[test]
-    fn test_needed_hogan_textures_auto_adds_brdf() {
-        // Diffuse+Normal without Gloss should still get BRDF+Specular
-        let mut legacy = LegacyMaterialData::default();
-        legacy.maps[MapType::Diffuse as usize] = vec![Map {
-            name: String::from("tex_diff.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        legacy.maps[MapType::Normal as usize] = vec![Map {
-            name: String::from("tex_norm.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        let needed = needed_hogan_textures(&legacy);
-        assert!(needed.contains(&"BRDF_Parameter_Map"));
-        assert!(needed.contains(&"Specular_Reflectance"));
-    }
-
-    #[test]
-    fn test_legacy_to_hogan_emissive_selects_right_perm() {
-        let mut legacy = LegacyMaterialData::default();
-        legacy.maps[MapType::Diffuse as usize] = vec![Map {
-            name: String::from("unit_diff.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        legacy.maps[MapType::Normal as usize] = vec![Map {
-            name: String::from("unit_norm.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        legacy.maps[MapType::Emissive as usize] = vec![Map {
-            name: String::from("unit_em.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        let hogan = legacy_to_hogan(&legacy, false);
-        // Should pick the emissive perm set
-        assert!(!hogan.shader_permutations.is_empty());
-        // The permutation name should come from perm set 10 (emissive)
-        let first_name = &hogan.shader_permutations[0].name;
-        assert!(
-            first_name.starts_with("HOGAN_STANDARD_"),
-            "Expected HOGAN_STANDARD permutation, got: {first_name}"
-        );
-    }
-
-    #[test]
-    fn test_legacy_to_hogan_skinned_flag() {
-        let mut legacy = LegacyMaterialData::default();
-        legacy.maps[MapType::Diffuse as usize] = vec![Map {
-            name: String::from("unit_diff.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-        let hogan_static = legacy_to_hogan(&legacy, false);
-        assert!(!hogan_static.skinned);
-        let hogan_skinned = legacy_to_hogan(&legacy, true);
-        assert!(hogan_skinned.skinned);
-    }
-
-    // --- CB data population tests ---
-
-    /// Helper: decode the first N floats from LE CB bytes.
-    fn cb_floats(data: &[u8]) -> Vec<f32> {
-        data.chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect()
-    }
-
-    #[test]
-    fn test_parse_perm_flags() {
-        assert_eq!(
-            parse_perm_flags("HOGAN_STANDARD_00020000A83009A0"),
-            Some(0x00020000A83009A0)
-        );
-        assert_eq!(
-            parse_perm_flags("HOGAN_STANDARD_00000000003009A0"),
-            Some(0x00000000003009A0)
-        );
-        assert!(parse_perm_flags("").is_none());
-    }
-
-    #[test]
-    fn test_ps_cb_data_uv_scales_default() {
-        // A basic permutation with no special features should still have
-        // UV scales and normal_intensity.
-        let flags = 0x00000000003009A0u64; // base PBR, bits: 5,7,8,11,12,13,20,21
-        let legacy = LegacyMaterialData::default();
-        let data = build_ps_cb_data(flags, &legacy);
-        let floats = cb_floats(&data);
-
-        // First 4 floats: uv_scale_t0_t1 (1,1) + uv_scale_t2_t3 (1,1)
-        assert_eq!(floats[0], 1.0, "uv_scale_t0_t1.x");
-        assert_eq!(floats[1], 1.0, "uv_scale_t0_t1.y");
-        assert_eq!(floats[2], 1.0, "uv_scale_t2_t3.x");
-        assert_eq!(floats[3], 1.0, "uv_scale_t2_t3.y");
-        // Next: normal_intensity = 1.0
-        assert_eq!(floats[4], 1.0, "normal_intensity");
-    }
-
-    #[test]
-    fn test_ps_cb_data_roughness_from_spec_power() {
-        // A permutation with bit 28 (roughness channel).
-        // Bit 28 = 0x10000000, combine with base bits (5,7,8,11)
-        let flags = 0x10000000u64 | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
-        let legacy = LegacyMaterialData {
-            spec_power: 50.0, // → roughness = 1.0 - 0.5 = 0.5
-            ..LegacyMaterialData::default()
-        };
-
-        let data = build_ps_cb_data(flags, &legacy);
-        let floats = cb_floats(&data);
-
-        // Find roughness_channel_value — it's in Group B after align.
-        // Group A: uv_scale_t0_t1(2) + uv_scale_t2_t3(2) + normal_intensity(1) = 5 floats
-        // Aligned to register: pos 8 (next multiple of 4 after 5)
-        assert!(
-            (floats[8] - 0.5).abs() < 0.001,
-            "roughness should be 0.5, got {}",
-            floats[8]
-        );
-    }
-
-    #[test]
-    fn test_ps_cb_data_spec_color_from_legacy() {
-        // Permutation with bit 49 (material overrides) — includes spec_override_color.
-        let flags = (1u64 << 49) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
-        let legacy = LegacyMaterialData {
-            spec_color: [0.8, 0.6, 0.4],
-            ..LegacyMaterialData::default()
-        };
-
-        let data = build_ps_cb_data(flags, &legacy);
-        let floats = cb_floats(&data);
-
-        // Group A: 5 floats (t0_t1=2, t2_t3=2, normal=1), aligned to 8
-        // Group B: detail_blend(1), roughness_override(1), override_strength(1), aligned to 12
-        //          spec_override_color(3) at offset 12, override_bias(1) at 15
-        assert!(
-            (floats[12] - 0.8).abs() < 0.001,
-            "spec_color.r = {}, expected 0.8",
-            floats[12]
-        );
-        assert!(
-            (floats[13] - 0.6).abs() < 0.001,
-            "spec_color.g = {}, expected 0.6",
-            floats[13]
-        );
-        assert!(
-            (floats[14] - 0.4).abs() < 0.001,
-            "spec_color.b = {}, expected 0.4",
-            floats[14]
-        );
-    }
-
-    #[test]
-    fn test_ps_cb_data_emissive_present() {
-        // Permutation with bit 32 (emissive+t4), plus base bits.
-        let flags =
-            (1u64 << 32) | (1 << 20) | (1 << 21) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
-        let mut legacy = LegacyMaterialData::default();
-        legacy.maps[MapType::Emissive as usize] = vec![Map {
-            name: String::from("unit_em.ddx"),
-            channel: 0,
-            flags: 7,
-        }];
-
-        let data = build_ps_cb_data(flags, &legacy);
-        let floats = cb_floats(&data);
-
-        // Layout: uv_scale_t0_t1(2), uv_scale_t2_t3(2), normal_intensity(1),
-        //         uv_scale_t4(1), emissive_intensity(1)
-        assert_eq!(floats[5], 1.0, "uv_scale_t4");
-        assert_eq!(
-            floats[6], 1.0,
-            "emissive_intensity should be 1.0 when emissive map present"
-        );
-    }
-
-    #[test]
-    fn test_ps_cb_data_no_emissive_map_zero_intensity() {
-        // Same flags as above but no emissive map → emissive_intensity = 0.0
-        let flags =
-            (1u64 << 32) | (1 << 20) | (1 << 21) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 11);
-        let legacy = LegacyMaterialData::default();
-
-        let data = build_ps_cb_data(flags, &legacy);
-        let floats = cb_floats(&data);
-
-        assert_eq!(
-            floats[6], 0.0,
-            "emissive_intensity should be 0.0 without emissive map"
-        );
-    }
-
-    #[test]
-    fn test_ps_cb_data_register_aligned_size() {
-        // CB data size should always be a multiple of 16 bytes (one float4 register).
-        let flags = 0x00020000A83009A0u64;
-        let legacy = LegacyMaterialData::default();
-        let data = build_ps_cb_data(flags, &legacy);
-        assert_eq!(
-            data.len() % 16,
-            0,
-            "CB data size {} is not register-aligned",
-            data.len()
-        );
-    }
-}
+#[path = "convert_tests.rs"]
+mod tests;

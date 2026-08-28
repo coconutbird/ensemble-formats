@@ -2,9 +2,10 @@
 
 use crate::format::DataFormat;
 use crate::{Error, Result};
+use nostdio::{Cursor, ReadLe};
 
 /// DDX header magic number.
-pub const DDX_HEADER_MAGIC: u32 = 0xDDBB7738;
+pub const DDX_HEADER_MAGIC: u32 = 0xDDBB_7738;
 
 /// Minimum required DDX version.
 pub const DDX_MIN_REQUIRED_VERSION: u16 = 6;
@@ -13,16 +14,16 @@ pub const DDX_MIN_REQUIRED_VERSION: u16 = 6;
 pub const DDX_CURRENT_VERSION: u16 = 7;
 
 /// DDX ECF file ID.
-pub const DDX_ECF_FILE_ID: u32 = 0x13CF5D01;
+pub const DDX_ECF_FILE_ID: u32 = 0x13CF_5D01;
 
 /// DDX header chunk ID (64-bit).
-pub const DDX_HEADER_CHUNK_ID: u64 = 0x1D8828C6ECAF45F2;
+pub const DDX_HEADER_CHUNK_ID: u64 = 0x1D88_28C6_ECAF_45F2;
 
 /// DDX mip0 chunk ID (64-bit).
-pub const DDX_MIP0_CHUNK_ID: u64 = 0x3F74B8E87D2B44BF;
+pub const DDX_MIP0_CHUNK_ID: u64 = 0x3F74_B8E8_7D2B_44BF;
 
 /// DDX mip chain chunk ID (64-bit).
-pub const DDX_MIPCHAIN_CHUNK_ID: u64 = 0x46F1FD3F394348B8;
+pub const DDX_MIPCHAIN_CHUNK_ID: u64 = 0x46F1_FD3F_3943_48B8;
 
 /// DDX resource type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub enum ResourceType {
 
 impl ResourceType {
     /// Parse from u32 value.
+    #[must_use]
     pub fn from_u32(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::RegularMap),
@@ -60,6 +62,7 @@ pub enum Platform {
 
 impl Platform {
     /// Parse from u8 value.
+    #[must_use]
     pub fn from_u8(value: u8) -> Self {
         match value {
             1 => Self::Xbox,
@@ -76,7 +79,7 @@ pub mod flags {
 
 /// DDX file header.
 ///
-/// This corresponds to BDDXHeader from the original source.
+/// This corresponds to `BDDXHeader` from the original source.
 #[derive(Debug, Clone)]
 pub struct DdxHeader {
     /// Header magic (should be 0xDDBB7738).
@@ -89,9 +92,9 @@ pub struct DdxHeader {
     pub creator_version: u16,
     /// Minimum required version to read.
     pub min_required_version: u16,
-    /// Width as power of 2 (actual width = 1 << dimension_pow2[0]).
+    /// Width as power of 2 (actual width = 1 << `dimension_pow2[0]`).
     pub width_pow2: u8,
-    /// Height as power of 2 (actual height = 1 << dimension_pow2[1]).
+    /// Height as power of 2 (actual height = 1 << `dimension_pow2[1]`).
     pub height_pow2: u8,
     /// Number of mipmap levels in the mip chain (not including mip0).
     pub mip_chain_size: u8,
@@ -112,6 +115,11 @@ impl DdxHeader {
     pub const SIZE: usize = 36;
 
     /// Parse header from bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` is truncated or contains an invalid magic,
+    /// version, data format, or resource type.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() < Self::SIZE {
             return Err(Error::HeaderTooShort {
@@ -120,15 +128,16 @@ impl DdxHeader {
             });
         }
 
-        let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+        let mut cursor = Cursor::new(data);
+        let magic = cursor.read_u32_le()?;
         if magic != DDX_HEADER_MAGIC {
             return Err(Error::InvalidMagic(magic));
         }
 
-        let header_size = u32::from_le_bytes(data[4..8].try_into().unwrap());
-        let header_adler32 = u32::from_le_bytes(data[8..12].try_into().unwrap());
-        let creator_version = u16::from_le_bytes(data[12..14].try_into().unwrap());
-        let min_required_version = u16::from_le_bytes(data[14..16].try_into().unwrap());
+        let header_size = cursor.read_u32_le()?;
+        let header_adler32 = cursor.read_u32_le()?;
+        let creator_version = cursor.read_u16_le()?;
+        let min_required_version = cursor.read_u16_le()?;
 
         if min_required_version > DDX_CURRENT_VERSION {
             return Err(Error::UnsupportedVersion(
@@ -137,21 +146,21 @@ impl DdxHeader {
             ));
         }
 
-        let width_pow2 = data[16];
-        let height_pow2 = data[17];
-        let mip_chain_size = data[18];
-        let platform = Platform::from_u8(data[19]);
+        let width_pow2 = cursor.read_u8_le()?;
+        let height_pow2 = cursor.read_u8_le()?;
+        let mip_chain_size = cursor.read_u8_le()?;
+        let platform = Platform::from_u8(cursor.read_u8_le()?);
 
-        let data_format_raw = u32::from_le_bytes(data[20..24].try_into().unwrap());
+        let data_format_raw = cursor.read_u32_le()?;
         let data_format = DataFormat::from_u32(data_format_raw)
             .ok_or(Error::InvalidDataFormat(data_format_raw))?;
 
-        let resource_type_raw = u32::from_le_bytes(data[24..28].try_into().unwrap());
+        let resource_type_raw = cursor.read_u32_le()?;
         let resource_type = ResourceType::from_u32(resource_type_raw)
             .ok_or(Error::InvalidResourceType(resource_type_raw))?;
 
-        let flags = u32::from_le_bytes(data[28..32].try_into().unwrap());
-        let hdr_scale = f32::from_le_bytes(data[32..36].try_into().unwrap());
+        let flags = cursor.read_u32_le()?;
+        let hdr_scale = cursor.read_f32_le()?;
 
         Ok(Self {
             magic,
@@ -171,26 +180,31 @@ impl DdxHeader {
     }
 
     /// Get actual width in pixels.
+    #[must_use]
     pub fn width(&self) -> u32 {
         1 << self.width_pow2
     }
 
     /// Get actual height in pixels.
+    #[must_use]
     pub fn height(&self) -> u32 {
         1 << self.height_pow2
     }
 
     /// Returns true if the texture has alpha.
+    #[must_use]
     pub fn has_alpha(&self) -> bool {
         (self.flags & flags::HAS_ALPHA) != 0
     }
 
     /// Get number of mip levels (including mip0).
+    #[must_use]
     pub fn num_mip_levels(&self) -> u32 {
-        1 + self.mip_chain_size as u32
+        1 + u32::from(self.mip_chain_size)
     }
 
     /// Get number of faces (6 for cubemaps, 1 otherwise).
+    #[must_use]
     pub fn num_faces(&self) -> u32 {
         if self.resource_type == ResourceType::CubeMap {
             6

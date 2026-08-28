@@ -27,7 +27,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use nostdio::{NoProgress, Progress, Read, Seek, SeekFrom, SliceCursor};
+use nostdio::{Cursor, NoProgress, Progress, Read, Seek, SeekFrom};
 
 use crate::header::{MAGIC, MAX_FILENAME_LEN, MAX_VERSION};
 use crate::{Error, Result};
@@ -59,10 +59,11 @@ pub struct Reader<R> {
 }
 
 /// Compute FNV-1a 64-bit hash (matches engine behaviour).
+#[must_use]
 pub fn fnv1a_64(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xCBF2_9CE4_8422_2325;
     for &b in bytes {
-        hash ^= b as u64;
+        hash ^= u64::from(b);
         hash = hash.wrapping_mul(0x0100_0000_01B3);
     }
     hash
@@ -81,6 +82,11 @@ impl<R: Read + Seek> Reader<R> {
     /// Reads all headers and the entry table up-front.
     /// Entry data is **not** read until [`read_entry`](Self::read_entry)
     /// is called.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot be read or sought, the header is
+    /// invalid, or a declared count or filename length is unsupported.
     pub fn new(mut inner: R) -> Result<Self> {
         // Read and validate magic.
         let mut magic = [0u8; 6];
@@ -96,7 +102,9 @@ impl<R: Read + Seek> Reader<R> {
 
         let entry_count = read_u64_le(&mut inner)?;
 
-        let mut entries = Vec::with_capacity(entry_count as usize);
+        let entry_capacity =
+            usize::try_from(entry_count).map_err(|_| Error::SizeOverflow("entry count"))?;
+        let mut entries = Vec::with_capacity(entry_capacity);
         for _ in 0..entry_count {
             let filename_len = read_u64_le(&mut inner)?;
             if filename_len > MAX_FILENAME_LEN {
@@ -104,7 +112,9 @@ impl<R: Read + Seek> Reader<R> {
             }
 
             // Read filename bytes.
-            let mut raw_name = vec![0u8; filename_len as usize];
+            let filename_len = usize::try_from(filename_len)
+                .map_err(|_| Error::SizeOverflow("filename length"))?;
+            let mut raw_name = vec![0u8; filename_len];
             inner.read_exact(&mut raw_name)?;
 
             // Normalise: lowercase, / → \, strip leading \.
@@ -190,6 +200,11 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     /// Read the raw data for entry at `index`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index` is out of bounds, the entry is too large for
+    /// memory on this platform, or the underlying source cannot be read or sought.
     pub fn read_entry(&mut self, index: usize) -> Result<Vec<u8>> {
         let entry = self
             .entries
@@ -199,7 +214,8 @@ impl<R: Read + Seek> Reader<R> {
                 count: self.entries.len(),
             })?;
         let offset = self.data_section_offset + entry.data_offset;
-        let size = entry.data_size as usize;
+        let size =
+            usize::try_from(entry.data_size).map_err(|_| Error::SizeOverflow("entry data size"))?;
 
         self.inner.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0u8; size];
@@ -208,10 +224,17 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     /// Read the raw data for an entry by reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry is too large for memory on this platform
+    /// or the underlying source cannot be read or sought.
     pub fn read_entry_data(&mut self, entry: &PkgEntry) -> Result<Vec<u8>> {
         let offset = self.data_section_offset + entry.data_offset;
         self.inner.seek(SeekFrom::Start(offset))?;
-        let mut buf = vec![0u8; entry.data_size as usize];
+        let size =
+            usize::try_from(entry.data_size).map_err(|_| Error::SizeOverflow("entry data size"))?;
+        let mut buf = vec![0u8; size];
         self.inner.read_exact(&mut buf)?;
         Ok(buf)
     }
@@ -219,6 +242,10 @@ impl<R: Read + Seek> Reader<R> {
     /// Read all entries sequentially, invoking `handler` for each.
     ///
     /// Equivalent to `read_all_with_progress` with [`NoProgress`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error encountered while reading an entry.
     pub fn read_all(&mut self, handler: impl FnMut(usize, &PkgEntry, Vec<u8>)) -> Result<()> {
         self.read_all_with_progress(handler, &mut NoProgress)
     }
@@ -229,6 +256,11 @@ impl<R: Read + Seek> Reader<R> {
     /// The [`Progress`] implementation receives `(bytes_read, total_bytes)`
     /// and should return `true` to continue or `false` to cancel.
     /// The `handler` receives `(index, &PkgEntry, data)` for each entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first entry-read error, or [`Error::Cancelled`] when the
+    /// progress callback requests cancellation.
     pub fn read_all_with_progress(
         &mut self,
         mut handler: impl FnMut(usize, &PkgEntry, Vec<u8>),
@@ -276,11 +308,16 @@ impl<R: Read + Seek> Reader<R> {
     }
 }
 
-impl<'a> Reader<SliceCursor<'a>> {
+impl<'a> Reader<Cursor<&'a [u8]>> {
     /// Parse a PKG archive from a byte slice.
     ///
-    /// Wraps the slice in a [`SliceCursor`] so no copy is made.
+    /// Wraps the slice in a [`Cursor`] so no copy is made.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive header or entry table is truncated or
+    /// invalid.
     pub fn from_bytes(data: &'a [u8]) -> Result<Self> {
-        Self::new(SliceCursor::new(data))
+        Self::new(Cursor::new(data))
     }
 }

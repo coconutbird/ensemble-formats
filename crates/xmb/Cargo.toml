@@ -2,11 +2,18 @@
 name = "xmb"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 description = "XMB binary XML format reader/writer for Halo Wars (Ensemble Studios)"
+
+[lints]
+workspace = true
 
 [dependencies]
 bdt.workspace = true
 ecf.workspace = true
+nostdio.workspace = true
 xml.workspace = true
 thiserror.workspace = true
 zerocopy.workspace = true

@@ -3,8 +3,8 @@
 //! The atlas chunk contains packed vertex positions and normals.
 //! This module provides functions to decode them for rendering.
 //!
-//! The DE (PC) version stores data as LittleEndian with PC R10G10B10A2 bit layout.
-//! The original Xbox 360 data was BigEndian with tiled (swizzled) textures.
+//! The DE (PC) version stores data as `LittleEndian` with PC R10G10B10A2 bit layout.
+//! The original Xbox 360 data was `BigEndian` with tiled (swizzled) textures.
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -12,64 +12,18 @@ use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use nostdio::{Cursor, ReadBe, ReadLe};
+use num_traits::ToPrimitive;
+
 use crate::{Error, Result, XtdFile};
 
-/// Xbox 360 texture tile size for 32-bit formats (R11G11B10, etc.)
-/// Kept for potential future use with original Xbox 360 data.
-#[allow(dead_code)]
-const TILE_SIZE: usize = 32;
-
-/// Un-tile Xbox 360 texture data.
-///
-/// Xbox 360 textures are stored in a tiled format for GPU cache efficiency.
-/// This function converts tiled data back to linear row-major order.
-///
-/// For 32-bit formats, tiles are 32x32 pixels.
-///
-/// Note: The DE (PC) version appears to already use linear layout,
-/// so this function may not be needed. Kept for potential future use.
-#[allow(dead_code)]
-fn untile_texture(tiled: &[u32], width: usize, height: usize) -> Vec<u32> {
-    let mut linear = vec![0u32; width * height];
-
-    let tiles_x = width / TILE_SIZE;
-    let tiles_y = height / TILE_SIZE;
-
-    for tile_y in 0..tiles_y {
-        for tile_x in 0..tiles_x {
-            // Calculate base offset for this tile in the tiled data
-            let tile_index = tile_y * tiles_x + tile_x;
-            let tile_base = tile_index * TILE_SIZE * TILE_SIZE;
-
-            // Un-tile each pixel within the tile
-            for local_y in 0..TILE_SIZE {
-                for local_x in 0..TILE_SIZE {
-                    // Calculate the swizzled index within the tile
-                    // Xbox 360 uses Morton code (Z-order curve) within tiles
-                    let swizzled_idx = morton_index(local_x, local_y);
-                    let tiled_idx = tile_base + swizzled_idx;
-
-                    // Calculate linear destination
-                    let global_x = tile_x * TILE_SIZE + local_x;
-                    let global_y = tile_y * TILE_SIZE + local_y;
-                    let linear_idx = global_y * width + global_x;
-
-                    if tiled_idx < tiled.len() && linear_idx < linear.len() {
-                        linear[linear_idx] = tiled[tiled_idx];
-                    }
-                }
-            }
-        }
-    }
-
-    linear
-}
+mod auxiliary_textures;
+pub use auxiliary_textures::LightingData;
 
 /// Calculate Morton code (Z-order curve) for 2D coordinates.
 ///
 /// This interleaves the bits of x and y to create the swizzled index.
-/// Used by `untile_texture` for Xbox 360 tiled data.
-#[allow(dead_code)]
+/// Used by the Xbox 360 R8 texture decoder.
 #[inline]
 fn morton_index(x: usize, y: usize) -> usize {
     let mut result = 0;
@@ -150,6 +104,10 @@ impl AtlasHeader {
     pub const SIZE: usize = 32;
 
     /// Parse atlas header from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` is shorter than the 32-byte atlas header.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() < Self::SIZE {
             return Err(Error::InvalidChunkData(format!(
@@ -159,41 +117,48 @@ impl AtlasHeader {
             )));
         }
 
-        let f = |off: usize| f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
+        let mut cursor = Cursor::new(data);
+        let mut values = [0.0; 8];
+        for value in &mut values {
+            *value = cursor.read_f32_be()?;
+        }
         Ok(Self {
-            mid: [f(0), f(4), f(8)],
-            // Skip padding at bytes 12-15
-            range: [f(16), f(20), f(24)],
-            // Skip padding at bytes 28-31
+            mid: [values[0], values[1], values[2]],
+            range: [values[4], values[5], values[6]],
         })
     }
 }
 
+fn ten_bit_component(value: u32) -> f32 {
+    f32::from(u16::try_from(value & 0x3FF).unwrap_or_default())
+}
+
 /// Unpack a 32-bit R10G10B10A2 packed position into a displacement vector.
 ///
-/// DE/PC data format (DXGI_FORMAT_R10G10B10A2_UNORM), consumed as `.zyx` by
+/// DE/PC data format (`DXGI_FORMAT_R10G10B10A2_UNORM`), consumed as `.zyx` by
 /// the PC terrain shaders:
 /// - R: bits 0-9   (10 bits) → Z displacement
 /// - G: bits 10-19 (10 bits) → Y displacement (height)
 /// - B: bits 20-29 (10 bits) → X displacement
 /// - A: bits 30-31 (2 bits)  → unused
 ///
-/// Data is stored as LittleEndian in the DE PC files.
+/// Data is stored as `LittleEndian` in the DE PC files.
 ///
 /// The unpacked value represents a displacement from the base grid position.
 /// Formula: `displacement = (sample.zyx - [0, 1/2048, 0]) * range - mid`.
 /// The normalized Y bias is the exact `g_yOffset` default in the PC terrain
 /// vertex and domain shaders.
 #[inline]
+#[must_use]
 pub fn unpack_position(packed: u32, mid: &[f32; 3], range: &[f32; 3]) -> [f32; 3] {
     const BIT_MAX_10: f32 = 1023.0;
     const NORMALIZED_Y_OFFSET: f32 = 1.0 / 2048.0;
 
     // The texture's R/G/B components occupy low/middle/high bits. The shader's
     // `.zyx` swizzle makes the high component world X and the low component Z.
-    let z_bits = (packed & 0x3FF) as f32;
-    let y_bits = ((packed >> 10) & 0x3FF) as f32;
-    let x_bits = ((packed >> 20) & 0x3FF) as f32;
+    let z_bits = ten_bit_component(packed);
+    let y_bits = ten_bit_component(packed >> 10);
+    let x_bits = ten_bit_component(packed >> 20);
 
     // Convert to normalized [0, 1] range, then apply range and offset
     [
@@ -213,7 +178,7 @@ mod position_tests {
         let decoded = unpack_position(packed, &[0.0; 3], &[10.0, 20.0, 30.0]);
         let expected_y = (512.0 / 1023.0 - 1.0 / 2048.0) * 20.0;
 
-        assert_eq!(decoded[0], 10.0);
+        assert_eq!(decoded[0].to_bits(), 10.0f32.to_bits());
         assert!((decoded[1] - expected_y).abs() < f32::EPSILON * 16.0);
         assert!((decoded[2] - 30.0 / 1023.0).abs() < f32::EPSILON * 16.0);
     }
@@ -225,12 +190,13 @@ mod position_tests {
 /// shaders consume it as `.zyx * 2 - 1`. Consequently the high ten bits are
 /// world X, the middle ten bits are world Y, and the low ten bits are world Z.
 #[inline]
+#[must_use]
 pub fn unpack_normal(packed: u32) -> [f32; 3] {
     const BIT_MAX_10: f32 = 1023.0;
 
-    let x_bits = ((packed >> 20) & 0x3FF) as f32;
-    let y_bits = ((packed >> 10) & 0x3FF) as f32;
-    let z_bits = (packed & 0x3FF) as f32;
+    let x_bits = ten_bit_component(packed >> 20);
+    let y_bits = ten_bit_component(packed >> 10);
+    let z_bits = ten_bit_component(packed);
 
     [
         (x_bits / BIT_MAX_10) * 2.0 - 1.0,
@@ -248,9 +214,9 @@ mod normal_tests {
         let packed = (1023_u32 << 20) | (512_u32 << 10);
         let decoded = unpack_normal(packed);
 
-        assert_eq!(decoded[0], 1.0);
+        assert_eq!(decoded[0].to_bits(), 1.0f32.to_bits());
         assert!((decoded[1] - (512.0 / 1023.0 * 2.0 - 1.0)).abs() < f32::EPSILON * 4.0);
-        assert_eq!(decoded[2], -1.0);
+        assert_eq!(decoded[2].to_bits(), (-1.0f32).to_bits());
     }
 }
 
@@ -293,59 +259,89 @@ pub struct RawTerrainData {
     pub world_max: [f32; 3],
 }
 
+struct PackedAtlas {
+    header: AtlasHeader,
+    width: usize,
+    positions: Vec<u32>,
+    normals: Vec<u32>,
+}
+
+fn nonnegative_usize(value: i32, field: &'static str) -> Result<usize> {
+    usize::try_from(value).map_err(|_| Error::InvalidChunkData(format!("Invalid {field}: {value}")))
+}
+
+fn parse_packed_atlas(file: &XtdFile) -> Result<PackedAtlas> {
+    if file.atlas_data.is_empty() {
+        return Err(Error::InvalidChunkData("Atlas chunk is empty".to_string()));
+    }
+
+    let header = AtlasHeader::from_bytes(&file.atlas_data)?;
+    let width = nonnegative_usize(file.header.num_x_verts, "terrain vertex count")?;
+    if width == 0 {
+        return Err(Error::InvalidChunkData(
+            "Terrain vertex count must be positive".to_string(),
+        ));
+    }
+    let vertex_count = width
+        .checked_mul(width)
+        .ok_or(Error::SizeOverflow("terrain vertex count"))?;
+    let payload_size = vertex_count
+        .checked_mul(8)
+        .ok_or(Error::SizeOverflow("terrain atlas payload"))?;
+    let expected_size = AtlasHeader::SIZE
+        .checked_add(payload_size)
+        .ok_or(Error::SizeOverflow("terrain atlas"))?;
+    if file.atlas_data.len() < expected_size {
+        return Err(Error::InvalidChunkData(format!(
+            "Atlas data too small: {} < {} (expected {} verts)",
+            file.atlas_data.len(),
+            expected_size,
+            vertex_count
+        )));
+    }
+
+    let payload = file
+        .atlas_data
+        .get(AtlasHeader::SIZE..expected_size)
+        .ok_or(Error::UnexpectedEof)?;
+    let mut cursor = Cursor::new(payload);
+    let mut positions = Vec::with_capacity(vertex_count);
+    for _ in 0..vertex_count {
+        positions.push(cursor.read_u32_le()?);
+    }
+    let mut normals = Vec::with_capacity(vertex_count);
+    for _ in 0..vertex_count {
+        normals.push(cursor.read_u32_le()?);
+    }
+
+    Ok(PackedAtlas {
+        header,
+        width,
+        positions,
+        normals,
+    })
+}
+
 impl XtdFile {
     /// Extract raw packed terrain data for GPU tessellation.
     ///
     /// This returns the packed position/normal data that can be uploaded
     /// as GPU textures and decoded in the vertex shader.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the atlas is missing, truncated, has invalid
+    /// dimensions, or describes an allocation that overflows.
     pub fn extract_raw_data(&self) -> Result<RawTerrainData> {
-        if self.atlas_data.is_empty() {
-            return Err(Error::InvalidChunkData("Atlas chunk is empty".to_string()));
-        }
-
-        let header = AtlasHeader::from_bytes(&self.atlas_data)?;
-        let width = self.header.num_x_verts as usize;
-        let num_verts = width * width;
-
-        // Expected size: header + positions + normals
-        let expected_size = AtlasHeader::SIZE + num_verts * 4 + num_verts * 4;
-        if self.atlas_data.len() < expected_size {
-            return Err(Error::InvalidChunkData(format!(
-                "Atlas data too small: {} < {} (expected {} verts)",
-                self.atlas_data.len(),
-                expected_size,
-                num_verts
-            )));
-        }
-
-        let pos_start = AtlasHeader::SIZE;
-        let norm_start = pos_start + num_verts * 4;
-
-        let mut packed_positions = Vec::with_capacity(num_verts);
-        let mut packed_normals = Vec::with_capacity(num_verts);
-
-        for i in 0..num_verts {
-            let pos_offset = pos_start + i * 4;
-            packed_positions.push(u32::from_le_bytes(
-                self.atlas_data[pos_offset..pos_offset + 4]
-                    .try_into()
-                    .unwrap(),
-            ));
-
-            let norm_offset = norm_start + i * 4;
-            packed_normals.push(u32::from_le_bytes(
-                self.atlas_data[norm_offset..norm_offset + 4]
-                    .try_into()
-                    .unwrap(),
-            ));
-        }
+        let packed = parse_packed_atlas(self)?;
 
         Ok(RawTerrainData {
-            packed_positions,
-            packed_normals,
-            num_verts_per_axis: width as u32,
-            mid: header.mid,
-            range: header.range,
+            packed_positions: packed.positions,
+            packed_normals: packed.normals,
+            num_verts_per_axis: u32::try_from(packed.width)
+                .map_err(|_| Error::SizeOverflow("terrain width"))?,
+            mid: packed.header.mid,
+            range: packed.header.range,
             tile_scale: self.header.tile_scale,
             world_min: self.header.world_min,
             world_max: self.header.world_max,
@@ -355,49 +351,20 @@ impl XtdFile {
     /// Decode terrain vertices from the atlas chunk.
     ///
     /// Returns positions and normals as Vec<[f32; 3]>.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the atlas is missing, truncated, has invalid
+    /// dimensions, or describes coordinates that cannot be represented.
     pub fn decode_vertices(&self) -> Result<TerrainVertices> {
-        if self.atlas_data.is_empty() {
-            return Err(Error::InvalidChunkData("Atlas chunk is empty".to_string()));
-        }
-
-        let header = AtlasHeader::from_bytes(&self.atlas_data)?;
-
-        let width = self.header.num_x_verts as usize;
-        let num_verts = width * width;
-
-        // Expected size: header + positions + normals
-        let expected_size = AtlasHeader::SIZE + num_verts * 4 + num_verts * 4;
-        if self.atlas_data.len() < expected_size {
-            return Err(Error::InvalidChunkData(format!(
-                "Atlas data too small: {} < {} (expected {} verts)",
-                self.atlas_data.len(),
-                expected_size,
-                num_verts
-            )));
-        }
-
-        let pos_start = AtlasHeader::SIZE;
-        let norm_start = pos_start + num_verts * 4;
-
-        // DE (PC) version uses LittleEndian byte order and linear (non-tiled) layout
-        let mut packed_positions = Vec::with_capacity(num_verts);
-        let mut packed_normals = Vec::with_capacity(num_verts);
-
-        for i in 0..num_verts {
-            let pos_offset = pos_start + i * 4;
-            packed_positions.push(u32::from_le_bytes(
-                self.atlas_data[pos_offset..pos_offset + 4]
-                    .try_into()
-                    .unwrap(),
-            ));
-
-            let norm_offset = norm_start + i * 4;
-            packed_normals.push(u32::from_le_bytes(
-                self.atlas_data[norm_offset..norm_offset + 4]
-                    .try_into()
-                    .unwrap(),
+        let packed = parse_packed_atlas(self)?;
+        let width = packed.width;
+        if width < 2 {
+            return Err(Error::InvalidChunkData(
+                "Terrain atlas must be at least 2x2".to_string(),
             ));
         }
+        let num_verts = packed.positions.len();
 
         // Unpack positions, normals, and compute UVs
         // The packed data stores DISPLACEMENTS from the base grid position.
@@ -406,7 +373,9 @@ impl XtdFile {
         let mut positions = Vec::with_capacity(num_verts);
         let mut normals = Vec::with_capacity(num_verts);
         let mut uvs = Vec::with_capacity(num_verts);
-        let width_f = (width - 1) as f32;
+        let width_f = (width - 1)
+            .to_f32()
+            .ok_or(Error::SizeOverflow("terrain width"))?;
 
         for world_z_index in 0..width {
             for world_x_index in 0..width {
@@ -415,14 +384,21 @@ impl XtdFile {
                 // byte stream stores source (x, z) at x * width + z, so this
                 // conversion reads source (world_z, world_x).
                 let source_index = world_z_index * width + world_x_index;
-                let world_x = world_x_index as f32;
-                let world_z = world_z_index as f32;
+                let world_x = world_x_index
+                    .to_f32()
+                    .ok_or(Error::SizeOverflow("terrain X coordinate"))?;
+                let world_z = world_z_index
+                    .to_f32()
+                    .ok_or(Error::SizeOverflow("terrain Z coordinate"))?;
 
                 // The packed data contains position data that needs to be combined with grid position.
                 // X/Z: grid position provides the base, packed data adds displacement
                 // Y: comes entirely from the packed data (height)
-                let unpacked =
-                    unpack_position(packed_positions[source_index], &header.mid, &header.range);
+                let unpacked = unpack_position(
+                    packed.positions[source_index],
+                    &packed.header.mid,
+                    &packed.header.range,
+                );
 
                 // Mirror the complete position, including the packed X/Z
                 // displacement. Moving only the height texel applies lateral
@@ -433,7 +409,7 @@ impl XtdFile {
                     world_z * tile_scale + unpacked[0],
                 ]);
 
-                let source_normal = unpack_normal(packed_normals[source_index]);
+                let source_normal = unpack_normal(packed.normals[source_index]);
                 normals.push([source_normal[2], source_normal[1], source_normal[0]]);
 
                 // UV coordinates: Z→U, X→V (matching the game's convention).
@@ -450,7 +426,7 @@ impl XtdFile {
         }
 
         Ok(TerrainVertices {
-            header,
+            header: packed.header,
             positions,
             normals,
             uvs,
@@ -464,21 +440,45 @@ impl TerrainVertices {
     ///
     /// The terrain is a regular grid, so we generate 2 triangles per quad.
     /// Returns indices in counter-clockwise winding order.
-    pub fn generate_indices(&self) -> Vec<u32> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the grid or one of its indices exceeds the supported
+    /// in-memory or `u32` index range.
+    pub fn generate_indices(&self) -> Result<Vec<u32>> {
         let n = self.num_verts_per_axis;
         if n < 2 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
-        let num_quads = (n - 1) * (n - 1);
-        let mut indices = Vec::with_capacity(num_quads * 6);
+        let num_quads = (n - 1)
+            .checked_mul(n - 1)
+            .ok_or(Error::SizeOverflow("terrain quad count"))?;
+        let index_count = num_quads
+            .checked_mul(6)
+            .ok_or(Error::SizeOverflow("terrain index count"))?;
+        let mut indices = Vec::with_capacity(index_count);
 
         for z in 0..(n - 1) {
             for x in 0..(n - 1) {
-                let top_left = (z * n + x) as u32;
-                let top_right = top_left + 1;
-                let bottom_left = ((z + 1) * n + x) as u32;
-                let bottom_right = bottom_left + 1;
+                let top_left_index = z
+                    .checked_mul(n)
+                    .and_then(|row| row.checked_add(x))
+                    .ok_or(Error::SizeOverflow("terrain vertex index"))?;
+                let bottom_left_index = (z + 1)
+                    .checked_mul(n)
+                    .and_then(|row| row.checked_add(x))
+                    .ok_or(Error::SizeOverflow("terrain vertex index"))?;
+                let top_left = u32::try_from(top_left_index)
+                    .map_err(|_| Error::SizeOverflow("terrain vertex index"))?;
+                let bottom_left = u32::try_from(bottom_left_index)
+                    .map_err(|_| Error::SizeOverflow("terrain vertex index"))?;
+                let top_right = top_left
+                    .checked_add(1)
+                    .ok_or(Error::SizeOverflow("terrain vertex index"))?;
+                let bottom_right = bottom_left
+                    .checked_add(1)
+                    .ok_or(Error::SizeOverflow("terrain vertex index"))?;
 
                 // First triangle (top-left, bottom-left, top-right)
                 indices.push(top_left);
@@ -492,10 +492,11 @@ impl TerrainVertices {
             }
         }
 
-        indices
+        Ok(indices)
     }
 
     /// Get terrain dimensions in world units.
+    #[must_use]
     pub fn world_size(&self) -> [f32; 3] {
         self.header.range
     }
@@ -507,230 +508,97 @@ impl TerrainVertices {
     /// GPU tessellation shaders.
     ///
     /// Returns new positions, normals, uvs, and indices for the tessellated mesh.
-    pub fn tessellate(&self, tess_data: &crate::TessellationData) -> TessellatedMesh {
-        // Using BTreeMap instead of HashMap for no_std compatibility
-
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if dimensions or tessellation levels are invalid, a
+    /// coordinate cannot be represented, or the generated mesh exceeds `u32`
+    /// index limits.
+    pub fn tessellate(&self, tess_data: &crate::TessellationData) -> Result<TessellatedMesh> {
         let n = self.num_verts_per_axis;
-
-        // Calculate vertices per patch (terrain is n x n, patches are num_x_patches x num_z_patches)
-        // So each patch spans (n-1)/num_patches + 1 vertices
-        let verts_per_patch_x = (n - 1) / tess_data.num_x_patches as usize + 1;
-        let verts_per_patch_z = (n - 1) / tess_data.num_z_patches as usize + 1;
-
-        // For efficient lookups, index existing vertices
-        // Key: grid (x, z) position, Value: index in positions array
-        let mut vertex_map: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-        for z in 0..n {
-            for x in 0..n {
-                vertex_map.insert((x, z), z * n + x);
-            }
+        if n < 2 {
+            return Err(Error::InvalidChunkData(
+                "Terrain grid must be at least 2x2".to_string(),
+            ));
+        }
+        let x_patch_count = nonnegative_usize(tess_data.num_x_patches, "X patch count")?;
+        let z_patch_count = nonnegative_usize(tess_data.num_z_patches, "Z patch count")?;
+        if x_patch_count == 0 || z_patch_count == 0 {
+            return Err(Error::InvalidChunkData(
+                "Tessellation patch counts must be positive".to_string(),
+            ));
         }
 
-        // Output buffers - start with copies of existing data
-        let mut positions = self.positions.clone();
-        let mut normals = self.normals.clone();
-        let mut uvs = self.uvs.clone();
+        let verts_per_patch_x = (n - 1) / x_patch_count + 1;
+        let verts_per_patch_z = (n - 1) / z_patch_count + 1;
+        let mut buffers = TessellationBuffers::new(self)?;
         let mut indices = Vec::new();
 
-        // Track newly created vertices with fractional grid positions
-        // Key: (x * 10000 + frac_x, z * 10000 + frac_z), Value: index
-        let mut new_vertex_map: BTreeMap<(u64, u64), usize> = BTreeMap::new();
+        for patch_z in 0..z_patch_count {
+            for patch_x in 0..x_patch_count {
+                let patch_index = patch_z
+                    .checked_mul(x_patch_count)
+                    .and_then(|row| row.checked_add(patch_x))
+                    .ok_or(Error::SizeOverflow("tessellation patch index"))?;
+                let tess_level =
+                    *tess_data
+                        .patch_tess_levels
+                        .get(patch_index)
+                        .ok_or_else(|| {
+                            Error::InvalidChunkData("Missing patch tessellation level".to_string())
+                        })?;
+                let base_x = patch_x
+                    .checked_mul(verts_per_patch_x - 1)
+                    .ok_or(Error::SizeOverflow("patch X offset"))?;
+                let base_z = patch_z
+                    .checked_mul(verts_per_patch_z - 1)
+                    .ok_or(Error::SizeOverflow("patch Z offset"))?;
+                let end_x = base_x
+                    .checked_add(verts_per_patch_x - 1)
+                    .ok_or(Error::SizeOverflow("patch X extent"))?
+                    .min(n - 1);
+                let end_z = base_z
+                    .checked_add(verts_per_patch_z - 1)
+                    .ok_or(Error::SizeOverflow("patch Z extent"))?
+                    .min(n - 1);
+                let subdivisions = 1usize
+                    .checked_shl(u32::from(tess_level))
+                    .ok_or(Error::SizeOverflow("patch subdivision count"))?;
+                let step = 1.0
+                    / subdivisions
+                        .to_f32()
+                        .ok_or(Error::SizeOverflow("patch subdivision count"))?;
 
-        // Helper to encode fractional position as u64
-        let encode_pos =
-            |x: f32, z: f32| -> (u64, u64) { ((x * 10000.0) as u64, (z * 10000.0) as u64) };
-
-        // Helper to get or create interpolated vertex
-        let get_or_create_vertex = |positions: &mut Vec<[f32; 3]>,
-                                    normals: &mut Vec<[f32; 3]>,
-                                    uvs: &mut Vec<[f32; 2]>,
-                                    new_vertex_map: &mut BTreeMap<(u64, u64), usize>,
-                                    vertex_map: &BTreeMap<(usize, usize), usize>,
-                                    x: f32,
-                                    z: f32,
-                                    n: usize|
-         -> usize {
-            // Check if this is an existing integer vertex
-            let ix = x as usize;
-            let iz = z as usize;
-            let frac_x = x - ix as f32;
-            let frac_z = z - iz as f32;
-
-            if frac_x.abs() < 0.001 && frac_z.abs() < 0.001 && ix < n && iz < n {
-                // Exact grid vertex
-                return *vertex_map.get(&(ix, iz)).unwrap();
-            }
-
-            // Check if we've already created this vertex
-            let key = encode_pos(x, z);
-            if let Some(&idx) = new_vertex_map.get(&key) {
-                return idx;
-            }
-
-            // Bilinear interpolation
-            let x0 = ix.min(n - 2);
-            let z0 = iz.min(n - 2);
-            let x1 = (x0 + 1).min(n - 1);
-            let z1 = (z0 + 1).min(n - 1);
-
-            let fx = x - x0 as f32;
-            let fz = z - z0 as f32;
-
-            let i00 = *vertex_map.get(&(x0, z0)).unwrap();
-            let i10 = *vertex_map.get(&(x1, z0)).unwrap();
-            let i01 = *vertex_map.get(&(x0, z1)).unwrap();
-            let i11 = *vertex_map.get(&(x1, z1)).unwrap();
-
-            // Interpolate position
-            let p00 = positions[i00];
-            let p10 = positions[i10];
-            let p01 = positions[i01];
-            let p11 = positions[i11];
-
-            let pos = [
-                (1.0 - fx) * (1.0 - fz) * p00[0]
-                    + fx * (1.0 - fz) * p10[0]
-                    + (1.0 - fx) * fz * p01[0]
-                    + fx * fz * p11[0],
-                (1.0 - fx) * (1.0 - fz) * p00[1]
-                    + fx * (1.0 - fz) * p10[1]
-                    + (1.0 - fx) * fz * p01[1]
-                    + fx * fz * p11[1],
-                (1.0 - fx) * (1.0 - fz) * p00[2]
-                    + fx * (1.0 - fz) * p10[2]
-                    + (1.0 - fx) * fz * p01[2]
-                    + fx * fz * p11[2],
-            ];
-
-            // Interpolate and renormalize normal
-            let n00 = normals[i00];
-            let n10 = normals[i10];
-            let n01 = normals[i01];
-            let n11 = normals[i11];
-
-            let mut norm = [
-                (1.0 - fx) * (1.0 - fz) * n00[0]
-                    + fx * (1.0 - fz) * n10[0]
-                    + (1.0 - fx) * fz * n01[0]
-                    + fx * fz * n11[0],
-                (1.0 - fx) * (1.0 - fz) * n00[1]
-                    + fx * (1.0 - fz) * n10[1]
-                    + (1.0 - fx) * fz * n01[1]
-                    + fx * fz * n11[1],
-                (1.0 - fx) * (1.0 - fz) * n00[2]
-                    + fx * (1.0 - fz) * n10[2]
-                    + (1.0 - fx) * fz * n01[2]
-                    + fx * fz * n11[2],
-            ];
-            let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();
-            if len > 0.001 {
-                norm[0] /= len;
-                norm[1] /= len;
-                norm[2] /= len;
-            }
-
-            // Interpolate UV
-            let uv00 = uvs[i00];
-            let uv10 = uvs[i10];
-            let uv01 = uvs[i01];
-            let uv11 = uvs[i11];
-
-            let uv = [
-                (1.0 - fx) * (1.0 - fz) * uv00[0]
-                    + fx * (1.0 - fz) * uv10[0]
-                    + (1.0 - fx) * fz * uv01[0]
-                    + fx * fz * uv11[0],
-                (1.0 - fx) * (1.0 - fz) * uv00[1]
-                    + fx * (1.0 - fz) * uv10[1]
-                    + (1.0 - fx) * fz * uv01[1]
-                    + fx * fz * uv11[1],
-            ];
-
-            let idx = positions.len();
-            positions.push(pos);
-            normals.push(norm);
-            uvs.push(uv);
-            new_vertex_map.insert(key, idx);
-            idx
-        };
-
-        // Process each patch
-        for patch_z in 0..tess_data.num_z_patches as usize {
-            for patch_x in 0..tess_data.num_x_patches as usize {
-                let patch_idx = patch_z * tess_data.num_x_patches as usize + patch_x;
-                let tess_level = tess_data.patch_tess_levels[patch_idx];
-
-                // Vertex range for this patch
-                let base_x = patch_x * (verts_per_patch_x - 1);
-                let base_z = patch_z * (verts_per_patch_z - 1);
-                let end_x = (base_x + verts_per_patch_x - 1).min(n - 1);
-                let end_z = (base_z + verts_per_patch_z - 1).min(n - 1);
-
-                // Subdivision factor: 2^tess_level
-                let subdiv = 1 << tess_level;
-
-                // Generate triangles for this patch with subdivision
                 for cell_z in base_z..end_z {
                     for cell_x in base_x..end_x {
-                        // Subdivide this quad
-                        let step = 1.0 / subdiv as f32;
-
-                        for sub_z in 0..subdiv {
-                            for sub_x in 0..subdiv {
-                                let x0 = cell_x as f32 + sub_x as f32 * step;
-                                let z0 = cell_z as f32 + sub_z as f32 * step;
+                        let horizontal_cell = cell_x
+                            .to_f32()
+                            .ok_or(Error::SizeOverflow("terrain cell X"))?;
+                        let vertical_cell = cell_z
+                            .to_f32()
+                            .ok_or(Error::SizeOverflow("terrain cell Z"))?;
+                        for sub_z in 0..subdivisions {
+                            for sub_x in 0..subdivisions {
+                                let x0 = horizontal_cell
+                                    + sub_x
+                                        .to_f32()
+                                        .ok_or(Error::SizeOverflow("terrain subdivision X"))?
+                                        * step;
+                                let z0 = vertical_cell
+                                    + sub_z
+                                        .to_f32()
+                                        .ok_or(Error::SizeOverflow("terrain subdivision Z"))?
+                                        * step;
                                 let x1 = x0 + step;
                                 let z1 = z0 + step;
-
-                                let v00 = get_or_create_vertex(
-                                    &mut positions,
-                                    &mut normals,
-                                    &mut uvs,
-                                    &mut new_vertex_map,
-                                    &vertex_map,
-                                    x0,
-                                    z0,
-                                    n,
-                                );
-                                let v10 = get_or_create_vertex(
-                                    &mut positions,
-                                    &mut normals,
-                                    &mut uvs,
-                                    &mut new_vertex_map,
-                                    &vertex_map,
-                                    x1,
-                                    z0,
-                                    n,
-                                );
-                                let v01 = get_or_create_vertex(
-                                    &mut positions,
-                                    &mut normals,
-                                    &mut uvs,
-                                    &mut new_vertex_map,
-                                    &vertex_map,
-                                    x0,
-                                    z1,
-                                    n,
-                                );
-                                let v11 = get_or_create_vertex(
-                                    &mut positions,
-                                    &mut normals,
-                                    &mut uvs,
-                                    &mut new_vertex_map,
-                                    &vertex_map,
-                                    x1,
-                                    z1,
-                                    n,
-                                );
-
-                                // Two triangles per sub-quad
-                                indices.push(v00 as u32);
-                                indices.push(v01 as u32);
-                                indices.push(v10 as u32);
-
-                                indices.push(v10 as u32);
-                                indices.push(v01 as u32);
-                                indices.push(v11 as u32);
+                                let top_left = buffers.get_or_create(x0, z0, n)?;
+                                let top_right = buffers.get_or_create(x1, z0, n)?;
+                                let bottom_left = buffers.get_or_create(x0, z1, n)?;
+                                let bottom_right = buffers.get_or_create(x1, z1, n)?;
+                                push_quad_indices(
+                                    &mut indices,
+                                    [top_left, bottom_left, top_right, bottom_right],
+                                )?;
                             }
                         }
                     }
@@ -738,13 +606,175 @@ impl TerrainVertices {
             }
         }
 
-        TessellatedMesh {
-            positions,
-            normals,
-            uvs,
+        Ok(TessellatedMesh {
+            positions: buffers.positions,
+            normals: buffers.normals,
+            uvs: buffers.uvs,
             indices,
+        })
+    }
+}
+
+struct TessellationBuffers {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    grid_vertices: BTreeMap<(usize, usize), usize>,
+    interpolated_vertices: BTreeMap<(u32, u32), usize>,
+}
+
+impl TessellationBuffers {
+    fn new(vertices: &TerrainVertices) -> Result<Self> {
+        let n = vertices.num_verts_per_axis;
+        let expected_count = n
+            .checked_mul(n)
+            .ok_or(Error::SizeOverflow("terrain vertex count"))?;
+        if vertices.positions.len() < expected_count
+            || vertices.normals.len() < expected_count
+            || vertices.uvs.len() < expected_count
+        {
+            return Err(Error::InvalidChunkData(
+                "Terrain vertex arrays are incomplete".to_string(),
+            ));
+        }
+
+        let mut grid_vertices = BTreeMap::new();
+        for z in 0..n {
+            for x in 0..n {
+                let index = z
+                    .checked_mul(n)
+                    .and_then(|row| row.checked_add(x))
+                    .ok_or(Error::SizeOverflow("terrain vertex index"))?;
+                grid_vertices.insert((x, z), index);
+            }
+        }
+
+        Ok(Self {
+            positions: vertices.positions.clone(),
+            normals: vertices.normals.clone(),
+            uvs: vertices.uvs.clone(),
+            grid_vertices,
+            interpolated_vertices: BTreeMap::new(),
+        })
+    }
+
+    fn get_or_create(&mut self, x: f32, z: f32, n: usize) -> Result<usize> {
+        let grid_x = x
+            .floor()
+            .to_usize()
+            .ok_or(Error::SizeOverflow("interpolated vertex X"))?;
+        let grid_z = z
+            .floor()
+            .to_usize()
+            .ok_or(Error::SizeOverflow("interpolated vertex Z"))?;
+        let fraction_x = x - grid_x
+            .to_f32()
+            .ok_or(Error::SizeOverflow("interpolated vertex X"))?;
+        let fraction_z = z - grid_z
+            .to_f32()
+            .ok_or(Error::SizeOverflow("interpolated vertex Z"))?;
+
+        if fraction_x.abs() < 0.001 && fraction_z.abs() < 0.001 {
+            return self.grid_index(grid_x, grid_z);
+        }
+        let key = (x.to_bits(), z.to_bits());
+        if let Some(index) = self.interpolated_vertices.get(&key) {
+            return Ok(*index);
+        }
+
+        let x0 = grid_x.min(n - 2);
+        let z0 = grid_z.min(n - 2);
+        let x1 = (x0 + 1).min(n - 1);
+        let z1 = (z0 + 1).min(n - 1);
+        let local_x = x - x0
+            .to_f32()
+            .ok_or(Error::SizeOverflow("interpolated vertex X"))?;
+        let local_z = z - z0
+            .to_f32()
+            .ok_or(Error::SizeOverflow("interpolated vertex Z"))?;
+        let corners = [
+            self.grid_index(x0, z0)?,
+            self.grid_index(x1, z0)?,
+            self.grid_index(x0, z1)?,
+            self.grid_index(x1, z1)?,
+        ];
+        let position = bilinear_vec3(corners.map(|index| self.positions[index]), local_x, local_z);
+        let normal = normalize(bilinear_vec3(
+            corners.map(|index| self.normals[index]),
+            local_x,
+            local_z,
+        ));
+        let uv = bilinear_vec2(corners.map(|index| self.uvs[index]), local_x, local_z);
+        let index = self.positions.len();
+        self.positions.push(position);
+        self.normals.push(normal);
+        self.uvs.push(uv);
+        self.interpolated_vertices.insert(key, index);
+        Ok(index)
+    }
+
+    fn grid_index(&self, x: usize, z: usize) -> Result<usize> {
+        self.grid_vertices.get(&(x, z)).copied().ok_or_else(|| {
+            Error::InvalidChunkData("Interpolated vertex lies outside the terrain grid".to_string())
+        })
+    }
+}
+
+fn bilinear_weights(x: f32, z: f32) -> [f32; 4] {
+    [(1.0 - x) * (1.0 - z), x * (1.0 - z), (1.0 - x) * z, x * z]
+}
+
+fn bilinear_vec3(corners: [[f32; 3]; 4], x: f32, z: f32) -> [f32; 3] {
+    let weights = bilinear_weights(x, z);
+    core::array::from_fn(|axis| {
+        corners
+            .iter()
+            .zip(weights)
+            .map(|(corner, weight)| corner[axis] * weight)
+            .sum()
+    })
+}
+
+fn bilinear_vec2(corners: [[f32; 2]; 4], x: f32, z: f32) -> [f32; 2] {
+    let weights = bilinear_weights(x, z);
+    core::array::from_fn(|axis| {
+        corners
+            .iter()
+            .zip(weights)
+            .map(|(corner, weight)| corner[axis] * weight)
+            .sum()
+    })
+}
+
+fn normalize(mut vector: [f32; 3]) -> [f32; 3] {
+    let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+    if length > 0.001 {
+        for component in &mut vector {
+            *component /= length;
         }
     }
+    vector
+}
+
+fn push_quad_indices(indices: &mut Vec<u32>, vertices: [usize; 4]) -> Result<()> {
+    let [top_left, bottom_left, top_right, bottom_right] = vertices;
+    let top_left =
+        u32::try_from(top_left).map_err(|_| Error::SizeOverflow("tessellated vertex index"))?;
+    let bottom_left =
+        u32::try_from(bottom_left).map_err(|_| Error::SizeOverflow("tessellated vertex index"))?;
+    let top_right =
+        u32::try_from(top_right).map_err(|_| Error::SizeOverflow("tessellated vertex index"))?;
+    let bottom_right =
+        u32::try_from(bottom_right).map_err(|_| Error::SizeOverflow("tessellated vertex index"))?;
+    indices.extend_from_slice(&[
+        top_left,
+        bottom_left,
+        top_right,
+        top_right,
+        bottom_left,
+        bottom_right,
+    ]);
+    Ok(())
 }
 
 /// Result of CPU tessellation.
@@ -764,7 +794,7 @@ pub struct TessellatedMesh {
 ///
 /// Based on IDA reverse engineering: AO is stored at half resolution
 /// (512×1024 for a 1024×1024 terrain) and sampled with bilinear filtering
-/// in the vertex shader via gVertSampler_ao_Texture.
+/// in the vertex shader via `gVertSampler_ao_Texture`.
 #[derive(Debug, Clone)]
 pub struct AmbientOcclusionData {
     /// AO values per texel (0-255, where 255 = fully lit, 0 = fully occluded).
@@ -778,7 +808,7 @@ pub struct AmbientOcclusionData {
 /// Decoded alpha (transparency) data.
 ///
 /// Uses the same compression/format as AO data.
-/// Sampled via gVertSampler_alpha_Texture in the vertex shader.
+/// Sampled via `gVertSampler_alpha_Texture` in the vertex shader.
 #[derive(Debug, Clone)]
 pub struct AlphaData {
     /// Alpha values per texel (0-255, where 255 = fully opaque, 0 = fully transparent).
@@ -786,218 +816,5 @@ pub struct AlphaData {
     /// Texture width (half the terrain vertex count in X).
     pub width: usize,
     /// Texture height (same as terrain vertex count in Z).
-    pub height: usize,
-}
-
-impl XtdFile {
-    /// Decode ambient occlusion data from the AO chunk.
-    ///
-    /// Based on IDA reverse engineering of the game's decompression (sub_1407E3440):
-    /// - Input: 524,288 bytes (8 bytes per block × 65,536 blocks)
-    /// - For each 8-byte input block:
-    ///   - Read 4× 16-bit big-endian values
-    ///   - Byte-swap each to little-endian
-    ///   - Write 8 bytes of swapped data + 8 bytes of 0xFF padding (16 bytes total)
-    /// - Game allocates (8 * chunk_size) >> 2 = 2× input size for output buffer
-    ///
-    /// The actual AO data is the first 8 bytes of each 16-byte decompressed block.
-    /// Total actual data: 65,536 blocks × 8 bytes = 524,288 bytes = 512×1024 R8 texture
-    ///
-    /// The game samples this half-resolution texture with bilinear filtering and
-    /// applies it in the vertex shader via gVertSampler_ao_Texture.
-    ///
-    /// Returns AO values at half resolution (512×1024 for a 1024×1024 terrain).
-    pub fn decode_ao(&self) -> Result<AmbientOcclusionData> {
-        if self.ao_data.is_empty() {
-            return Err(Error::InvalidChunkData("AO chunk is empty".to_string()));
-        }
-
-        let num_verts_per_axis = self.header.num_x_verts as usize;
-
-        // Decompress matching the game's algorithm exactly
-        // Each 8-byte input block produces 8 bytes of actual AO data
-        // (The game also writes 8 bytes of 0xFF padding which we skip)
-        let num_blocks = self.ao_data.len() / 8;
-        let mut decompressed = Vec::with_capacity(num_blocks * 8);
-
-        for block_idx in 0..num_blocks {
-            let in_offset = block_idx * 8;
-
-            // Read 4× 16-bit values and byte-swap each (big-endian to little-endian)
-            for word_idx in 0..4 {
-                let offset = in_offset + word_idx * 2;
-                if offset + 1 < self.ao_data.len() {
-                    // Byte swap: read as [hi, lo], write as [lo, hi]
-                    let hi = self.ao_data[offset];
-                    let lo = self.ao_data[offset + 1];
-                    decompressed.push(lo);
-                    decompressed.push(hi);
-                }
-            }
-            // Skip 0xFF padding - we don't write it
-        }
-
-        // The decompressed data is 8 bytes per block = 524,288 bytes total
-        // This represents a half-resolution texture in R8 format:
-        // - Full width (1024) × half height (512) = 524,288 texels
-        //
-        // The game uses bilinear sampling to interpolate this to full resolution
-        // via gVertSampler_ao_Texture
-
-        // Calculate dimensions: full width, half height
-        let width = num_verts_per_axis;
-        let height = num_verts_per_axis / 2;
-        let expected_size = width * height;
-
-        // Resize to expected size
-        let mut tiled_data = decompressed;
-        if tiled_data.len() < expected_size {
-            tiled_data.resize(expected_size, 255);
-        } else if tiled_data.len() > expected_size {
-            tiled_data.truncate(expected_size);
-        }
-
-        // Xbox 360 R8 textures are stored in tiled format
-        // For R8 format, tiles are typically 64 bytes arranged as 8x8 pixels
-        // The data needs to be un-tiled to linear row-major order
-        let values = untile_r8_texture(&tiled_data, width, height);
-
-        Ok(AmbientOcclusionData {
-            values,
-            width,
-            height,
-        })
-    }
-
-    /// Decode alpha (transparency) data from the Alpha chunk.
-    ///
-    /// Uses the same decompression as AO data.
-    /// Returns alpha values at half resolution.
-    pub fn decode_alpha(&self) -> Result<AlphaData> {
-        if self.alpha_data.is_empty() {
-            return Err(Error::InvalidChunkData("Alpha chunk is empty".to_string()));
-        }
-
-        let num_verts_per_axis = self.header.num_x_verts as usize;
-
-        // Full width, half height (same as AO)
-        let width = num_verts_per_axis;
-        let height = num_verts_per_axis / 2;
-        let expected_size = width * height;
-
-        // Check for "placeholder" alpha pattern: [255, 255, 0, 0, 0, 0, 0, 0] repeating
-        // This indicates no terrain holes - return all-opaque texture
-        // Blood Gulch and other maps without terrain holes use this pattern
-        let is_placeholder = self.alpha_data.len() >= 8 && {
-            let pattern = &[255u8, 255, 0, 0, 0, 0, 0, 0];
-            self.alpha_data
-                .chunks(8)
-                .take(100)
-                .all(|chunk| chunk == pattern)
-        };
-
-        if is_placeholder {
-            return Ok(AlphaData {
-                values: vec![255u8; expected_size],
-                width,
-                height,
-            });
-        }
-
-        // Same decompression as AO
-        let num_blocks = self.alpha_data.len() / 8;
-        let mut decompressed = Vec::with_capacity(num_blocks * 8);
-
-        for block_idx in 0..num_blocks {
-            let in_offset = block_idx * 8;
-
-            for word_idx in 0..4 {
-                let offset = in_offset + word_idx * 2;
-                if offset + 1 < self.alpha_data.len() {
-                    let hi = self.alpha_data[offset];
-                    let lo = self.alpha_data[offset + 1];
-                    decompressed.push(lo);
-                    decompressed.push(hi);
-                }
-            }
-        }
-
-        // Resize to expected size
-        let mut tiled_data = decompressed;
-        if tiled_data.len() < expected_size {
-            tiled_data.resize(expected_size, 255);
-        } else if tiled_data.len() > expected_size {
-            tiled_data.truncate(expected_size);
-        }
-
-        // Xbox 360 R8 textures are stored in tiled format (same as AO)
-        let values = untile_r8_texture(&tiled_data, width, height);
-
-        Ok(AlphaData {
-            values,
-            width,
-            height,
-        })
-    }
-
-    /// Decode lighting data from the Lighting chunk (0xBBBB).
-    ///
-    /// The lighting chunk stores a size-prefixed raw L8 (R8) texture at
-    /// **full resolution** (`num_x_verts × num_x_verts`).
-    ///
-    /// Unlike AO/Alpha, the binary does **not** run `decompressToPhysical` on
-    /// this data — it is passed directly to `BTerrainVisual::initLightingData`
-    /// which creates a D3DFMT_L8 texture.
-    ///
-    /// The first 4 bytes are a big-endian i32 size, followed by the raw texels.
-    pub fn decode_lighting(&self) -> Result<LightingData> {
-        if self.lighting_data.is_empty() {
-            return Err(Error::InvalidChunkData(
-                "Lighting chunk is empty".to_string(),
-            ));
-        }
-
-        if self.lighting_data.len() < 4 {
-            return Err(Error::InvalidChunkData(
-                "Lighting chunk too short for size prefix".to_string(),
-            ));
-        }
-
-        // Read big-endian i32 size prefix
-        let size = i32::from_be_bytes(
-            self.lighting_data[0..4]
-                .try_into()
-                .map_err(|_| Error::InvalidChunkData("Bad lighting size".to_string()))?,
-        ) as usize;
-
-        let texels = if size > 0 && self.lighting_data.len() >= 4 + size {
-            self.lighting_data[4..4 + size].to_vec()
-        } else {
-            // Fall back to everything after the size prefix
-            self.lighting_data[4..].to_vec()
-        };
-
-        // Width is always num_x_verts; height is derived from actual data length.
-        // Some maps store lighting at half height (num_x_verts × num_x_verts/2),
-        // others at full resolution (num_x_verts × num_x_verts).
-        let width = self.header.num_x_verts as usize;
-        let height = texels.len().checked_div(width).unwrap_or(0);
-
-        Ok(LightingData {
-            values: texels,
-            width,
-            height,
-        })
-    }
-}
-
-/// Decoded lighting data (L8/R8 texture).
-#[derive(Debug, Clone)]
-pub struct LightingData {
-    /// Raw L8 luminance values.
-    pub values: Vec<u8>,
-    /// Texture width (== `num_x_verts`).
-    pub width: usize,
-    /// Texture height (derived from data length; may be `num_x_verts` or `num_x_verts / 2`).
     pub height: usize,
 }

@@ -27,11 +27,13 @@ pub enum Format {
 
 impl Format {
     /// Returns `true` if this is the Xbox 360 (big-endian) format.
+    #[must_use]
     pub fn is_xbox360(&self) -> bool {
         matches!(self, Format::Xbox360)
     }
 
     /// Returns `true` if this is the PC (little-endian) format.
+    #[must_use]
     pub fn is_pc(&self) -> bool {
         matches!(self, Format::PC)
     }
@@ -50,6 +52,7 @@ pub struct Document {
 
 impl Document {
     /// Create an empty document (PC format, no root).
+    #[must_use]
     pub fn new() -> Self {
         Self {
             root: None,
@@ -59,6 +62,7 @@ impl Document {
     }
 
     /// Create a document with the given root node (PC format).
+    #[must_use]
     pub fn with_root(root: Node) -> Self {
         Self {
             root: Some(root),
@@ -68,6 +72,7 @@ impl Document {
     }
 
     /// Returns the binary format of this document.
+    #[must_use]
     pub fn format(&self) -> Format {
         self.format
     }
@@ -78,11 +83,13 @@ impl Document {
     }
 
     /// Returns `true` if this document uses the Xbox 360 format.
+    #[must_use]
     pub fn is_xbox360(&self) -> bool {
         self.format.is_xbox360()
     }
 
     /// Returns `true` if this document uses the PC format.
+    #[must_use]
     pub fn is_pc(&self) -> bool {
         self.format.is_pc()
     }
@@ -93,6 +100,7 @@ impl Document {
     }
 
     /// Returns a reference to the root node, if present.
+    #[must_use]
     pub fn root(&self) -> Option<&Node> {
         self.root.as_ref()
     }
@@ -103,16 +111,31 @@ impl Document {
     }
 
     /// Parse a document from a byte slice, auto-detecting XML vs binary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the XML or binary XMB input is malformed,
+    /// truncated, or fails checksum validation.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         crate::Reader::read(data)
     }
 
     /// Serialize this document to bytes in its native format (compressed).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the document exceeds an on-disk size limit or its
+    /// BDT tree cannot be serialized.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         crate::Writer::write_native(self)
     }
 
     /// Serialize this document to bytes with explicit format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the document exceeds an on-disk size limit or its
+    /// BDT tree cannot be serialized.
     pub fn to_bytes_with_format(&self, format: Format) -> Result<Vec<u8>> {
         crate::Writer::write(self, format)
     }

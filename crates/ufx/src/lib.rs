@@ -37,11 +37,11 @@ extern crate alloc;
 
 pub mod cb_infer;
 
+pub use d3dasm::{Shader, dxbc};
+
 use alloc::vec::Vec;
 use core::fmt;
-use d3dasm::Shader;
-use d3dasm::dxbc;
-use nostdio::{ReadLe, Seek, SeekFrom, SliceCursor};
+use nostdio::{Cursor, ReadLe, Seek, SeekFrom};
 
 /// Hogan ubershader feature flag bit positions.
 ///
@@ -85,6 +85,7 @@ pub enum HoganFlag {
 impl HoganFlag {
     /// Test whether this flag bit is set in a 64-bit feature mask.
     #[inline]
+    #[must_use]
     pub fn test(self, flags: u64) -> bool {
         flags & (1u64 << (self as u32)) != 0
     }
@@ -146,6 +147,7 @@ pub struct UfxFile<'a> {
 }
 
 /// Check whether `data` starts with the UFXS magic bytes.
+#[must_use]
 pub fn is_ufx(data: &[u8]) -> bool {
     data.len() >= 4 && &data[0..4] == UFXS_MAGIC
 }
@@ -154,6 +156,11 @@ pub fn is_ufx(data: &[u8]) -> bool {
 ///
 /// Returns an [`Error`] if the magic bytes don't match or the header is
 /// truncated.
+///
+/// # Errors
+///
+/// Returns [`Error::TooShort`] for a truncated header or [`Error::BadMagic`]
+/// when the input does not begin with the UFXS signature.
 pub fn parse(data: &[u8]) -> Result<UfxFile<'_>, Error> {
     if data.len() < UFXS_MIN_HEADER {
         return Err(Error::TooShort { len: data.len() });
@@ -164,7 +171,7 @@ pub fn parse(data: &[u8]) -> Result<UfxFile<'_>, Error> {
         return Err(Error::BadMagic { found });
     }
 
-    let mut c = SliceCursor::new(data);
+    let mut c = Cursor::new(data);
     let e = |_| Error::TruncatedHeader;
 
     c.seek(SeekFrom::Start(0x04)).map_err(e)?;
@@ -216,7 +223,7 @@ pub fn parse(data: &[u8]) -> Result<UfxFile<'_>, Error> {
 }
 
 /// Extract and parse a DXBC blob from a known region of the file.
-fn extract_shader<'a>(data: &'a [u8], offset: usize, size: usize) -> Option<Shader<'a>> {
+fn extract_shader(data: &[u8], offset: usize, size: usize) -> Option<Shader<'_>> {
     if offset == 0 || size == 0 {
         return None;
     }

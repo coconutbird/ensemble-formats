@@ -17,20 +17,20 @@ use crate::vertex::packer::UnivertPacker;
 /// - +0x1C: mVBBytes (i32)
 /// - +0x20: mVertSize (i32)
 /// - +0x24: mNumVerts (i32)
-/// - +0x28: BoneRemap packed array (16 bytes)
-/// - +0x38: UnivertPacker (84 bytes)
+/// - +0x28: `BoneRemap` packed array (16 bytes)
+/// - +0x38: `UnivertPacker` (84 bytes)
 /// - +0x8C: mRigidOnly (i32)
 /// - +0x90: mGlobalBones (i32) - not in 2008 source!
 /// - +0x94: mPadding (i32)
 ///
 /// ## HW2 packed format (72 bytes / 0x48):
 /// - +0x00: same 40 bytes of fixed fields as HW1
-/// - +0x28: i32 rigid_only (boolean)
-/// - +0x2C: f32 lod_near_distance (LOD near transition distance; 0.0 = no LOD)
-/// - +0x30: f32 lod_far_distance  (LOD far transition distance; f32::MAX = always visible)
-/// - +0x34: f32 lod_fade_distance (vertical fade/height for atmospheric effects; 0.0 = unused)
-/// - +0x38: BoneRemap packed array (16 bytes)
-/// - No UnivertPacker (vertex format determined externally).
+/// - +0x28: i32 `rigid_only` (boolean)
+/// - +0x2C: f32 `lod_near_distance` (LOD near transition distance; 0.0 = no LOD)
+/// - +0x30: f32 `lod_far_distance`  (LOD far transition distance; `f32::MAX` = always visible)
+/// - +0x34: f32 `lod_fade_distance` (vertical fade/height for atmospheric effects; 0.0 = unused)
+/// - +0x38: `BoneRemap` packed array (16 bytes)
+/// - No `UnivertPacker` (vertex format determined externally).
 ///
 /// ### LOD distance fields (HW2 only)
 ///
@@ -42,7 +42,7 @@ use crate::vertex::packer::UnivertPacker;
 /// | LOD 0 |  0.0   |  19.7     | Highest detail, closest      |
 /// | LOD 1 | 19.7   |  41.9     | Mid-detail                   |
 /// | LOD 2 | 41.9   |  64.0     | Low-detail                   |
-/// | Base  |  0.0   | f32::MAX  | No LOD, always visible       |
+/// | Base  |  0.0   | `f32::MAX`  | No LOD, always visible       |
 ///
 /// Flora/trees use larger distances (50–160 units). Infantry units use
 /// smaller distances (20–100 units).  `lod_fade_distance` is only non-zero
@@ -56,7 +56,7 @@ pub struct Section {
     pub accessory_index: i32,
     /// Maximum bones influencing this section.
     pub max_bones: i32,
-    /// Rigid bone index (if rigid_only).
+    /// Rigid bone index (if `rigid_only`).
     pub rigid_bone_index: i32,
     /// Index buffer offset (in indices, not bytes).
     pub ib_offset: i32,

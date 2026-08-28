@@ -1,4 +1,4 @@
-//! Example: Parse a DDX file and print its info.
+//! Parses a DDX file and prints its metadata.
 
 use ddx::DdxTexture;
 use std::env;
@@ -15,7 +15,7 @@ fn main() {
     let data = match fs::read(path) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("Error reading file: {}", e);
+            eprintln!("Error reading file: {e}");
             std::process::exit(1);
         }
     };
@@ -34,7 +34,7 @@ fn main() {
             println!("  Data Size: {} bytes", texture.data.len());
         }
         Err(e) => {
-            eprintln!("Error parsing DDX: {}", e);
+            eprintln!("Error parsing DDX: {e}");
             std::process::exit(1);
         }
     }

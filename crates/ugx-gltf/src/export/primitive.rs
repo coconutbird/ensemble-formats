@@ -4,535 +4,499 @@
 
 use gltf_json as json;
 use json::validation::Checked::Valid;
+use ugx::{Error, MAX_UV, Result, UnpackedVertex};
 
-use ugx::UnpackedVertex;
+/// Source data and format metadata for one exported primitive.
+pub(crate) struct PrimitiveInput<'a> {
+    pub vertices: &'a [UnpackedVertex],
+    pub indices: &'a [u16],
+    pub material_index: i32,
+    pub has_materials: bool,
+    pub has_skeleton: bool,
+    pub bone_count: usize,
+    pub rigid_bone_index: i32,
+    pub bone_remap: &'a [u8],
+}
+
+/// Mutable glTF collections populated while primitives are exported.
+pub(crate) struct PrimitiveOutput<'a> {
+    pub buffer_data: &'a mut Vec<u8>,
+    pub accessors: &'a mut Vec<json::Accessor>,
+    pub buffer_views: &'a mut Vec<json::buffer::View>,
+}
+
+struct SkinData {
+    joints: Vec<[u16; 4]>,
+    weights: Vec<[f32; 4]>,
+    use_u16_joints: bool,
+}
 
 /// Create a mesh primitive from vertices and indices.
-#[allow(clippy::too_many_arguments)]
+///
+/// # Errors
+///
+/// Returns an error when a generated glTF index, size, or bone index cannot
+/// be represented by its destination type.
 pub(crate) fn create_primitive(
-    vertices: &[UnpackedVertex],
-    indices: &[u16],
-    material_index: i32,
-    buffer_data: &mut Vec<u8>,
-    accessors: &mut Vec<json::Accessor>,
-    buffer_views: &mut Vec<json::buffer::View>,
-    has_materials: bool,
-    has_skeleton: bool,
-    bone_count: usize,
-    rigid_bone_index: i32,
-    bone_remap: &[u8],
-) -> json::mesh::Primitive {
+    input: &PrimitiveInput<'_>,
+    output: &mut PrimitiveOutput<'_>,
+) -> Result<json::mesh::Primitive> {
     let mut attributes = std::collections::BTreeMap::new();
-
-    // Calculate bounds for position accessor
-    let mut min_pos = [f32::MAX; 3];
-    let mut max_pos = [f32::MIN; 3];
-    for v in vertices {
-        for i in 0..3 {
-            min_pos[i] = min_pos[i].min(v.position[i]);
-            max_pos[i] = max_pos[i].max(v.position[i]);
-        }
-    }
-
-    // Write positions
-    // Pad to 4-byte boundary for float alignment
-    while !buffer_data.len().is_multiple_of(4) {
-        buffer_data.push(0);
-    }
-    let pos_view_idx = buffer_views.len() as u32;
-    let pos_offset = buffer_data.len();
-    for v in vertices {
-        buffer_data.extend_from_slice(&v.position[0].to_le_bytes());
-        buffer_data.extend_from_slice(&v.position[1].to_le_bytes());
-        buffer_data.extend_from_slice(&v.position[2].to_le_bytes());
-    }
-    let pos_byte_length = buffer_data.len() - pos_offset;
-
-    buffer_views.push(json::buffer::View {
-        buffer: json::Index::new(0),
-        byte_length: json::validation::USize64(pos_byte_length as u64),
-        byte_offset: Some(json::validation::USize64(pos_offset as u64)),
-        byte_stride: Some(json::buffer::Stride(12)),
-        extensions: None,
-        extras: json::Extras::default(),
-        name: None,
-        target: Some(Valid(json::buffer::Target::ArrayBuffer)),
-    });
-
-    let pos_accessor_idx = accessors.len() as u32;
-    accessors.push(json::Accessor {
-        buffer_view: Some(json::Index::new(pos_view_idx)),
-        byte_offset: Some(json::validation::USize64(0)),
-        count: json::validation::USize64(vertices.len() as u64),
-        component_type: Valid(json::accessor::GenericComponentType(
-            json::accessor::ComponentType::F32,
-        )),
-        extensions: None,
-        extras: json::Extras::default(),
-        type_: Valid(json::accessor::Type::Vec3),
-        min: Some(json::Value::from(min_pos.to_vec())),
-        max: Some(json::Value::from(max_pos.to_vec())),
-        name: None,
-        normalized: false,
-        sparse: None,
-    });
+    let (minimum, maximum) = position_bounds(input.vertices);
+    let positions = input.vertices.iter().map(|vertex| vertex.position);
+    let position_accessor = append_f32_accessor(
+        output,
+        positions,
+        input.vertices.len(),
+        json::accessor::Type::Vec3,
+        Some((minimum.to_vec(), maximum.to_vec())),
+    )?;
     attributes.insert(
         Valid(json::mesh::Semantic::Positions),
-        json::Index::new(pos_accessor_idx),
+        json::Index::new(position_accessor),
     );
 
-    // Write normals — always normalize to unit length for glTF compliance.
-    //
-    // HW2 Dec3N normals are frequently non-unit-length (avg ~0.7, range 0.05–1.39)
-    // but the game's vertex shader always normalizes them (dp3+rsq+mul pattern
-    // confirmed in hogan_standard VS), so the magnitude is irrelevant for rendering.
-    // Normalizing here produces spec-compliant glTF and the game shader produces
-    // identical output regardless of input magnitude.
-    let norm_view_idx = buffer_views.len() as u32;
-    let norm_offset = buffer_data.len();
-    for v in vertices {
-        let len_sq =
-            v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1] + v.normal[2] * v.normal[2];
-        let (nx, ny, nz) = if len_sq < 1e-12 {
-            (0.0, 1.0, 0.0)
-        } else {
-            let inv_len = 1.0 / len_sq.sqrt();
-            (
-                v.normal[0] * inv_len,
-                v.normal[1] * inv_len,
-                v.normal[2] * inv_len,
-            )
-        };
-        buffer_data.extend_from_slice(&nx.to_le_bytes());
-        buffer_data.extend_from_slice(&ny.to_le_bytes());
-        buffer_data.extend_from_slice(&nz.to_le_bytes());
-    }
-    let norm_byte_length = buffer_data.len() - norm_offset;
-
-    buffer_views.push(json::buffer::View {
-        buffer: json::Index::new(0),
-        byte_length: json::validation::USize64(norm_byte_length as u64),
-        byte_offset: Some(json::validation::USize64(norm_offset as u64)),
-        byte_stride: Some(json::buffer::Stride(12)),
-        extensions: None,
-        extras: json::Extras::default(),
-        name: None,
-        target: Some(Valid(json::buffer::Target::ArrayBuffer)),
-    });
-
-    let norm_accessor_idx = accessors.len() as u32;
-    accessors.push(json::Accessor {
-        buffer_view: Some(json::Index::new(norm_view_idx)),
-        byte_offset: Some(json::validation::USize64(0)),
-        count: json::validation::USize64(vertices.len() as u64),
-        component_type: Valid(json::accessor::GenericComponentType(
-            json::accessor::ComponentType::F32,
-        )),
-        extensions: None,
-        extras: json::Extras::default(),
-        type_: Valid(json::accessor::Type::Vec3),
-        min: None,
-        max: None,
-        name: None,
-        normalized: false,
-        sparse: None,
-    });
-    attributes.insert(
-        Valid(json::mesh::Semantic::Normals),
-        json::Index::new(norm_accessor_idx),
-    );
-
-    // Write UV sets (TEXCOORD_0, TEXCOORD_1, ...)
-    let max_texcoords = vertices.iter().map(|v| v.num_texcoords).max().unwrap_or(0);
-    for uv_set in 0..max_texcoords {
-        let uv_view_idx = buffer_views.len() as u32;
-        let uv_offset = buffer_data.len();
-        for v in vertices {
-            // glTF and DirectX both use V=0 at top (no flip needed).
-            // Note: the Python Blender script flips V for Blender's convention,
-            // but that's Blender-specific — glTF matches DX convention already.
-            buffer_data.extend_from_slice(&v.texcoords[uv_set][0].to_le_bytes());
-            buffer_data.extend_from_slice(&v.texcoords[uv_set][1].to_le_bytes());
-        }
-        let uv_byte_length = buffer_data.len() - uv_offset;
-
-        buffer_views.push(json::buffer::View {
-            buffer: json::Index::new(0),
-            byte_length: json::validation::USize64(uv_byte_length as u64),
-            byte_offset: Some(json::validation::USize64(uv_offset as u64)),
-            byte_stride: Some(json::buffer::Stride(8)),
-            extensions: None,
-            extras: json::Extras::default(),
-            name: None,
-            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
-        });
-
-        let uv_accessor_idx = accessors.len() as u32;
-        accessors.push(json::Accessor {
-            buffer_view: Some(json::Index::new(uv_view_idx)),
-            byte_offset: Some(json::validation::USize64(0)),
-            count: json::validation::USize64(vertices.len() as u64),
-            component_type: Valid(json::accessor::GenericComponentType(
-                json::accessor::ComponentType::F32,
-            )),
-            extensions: None,
-            extras: json::Extras::default(),
-            type_: Valid(json::accessor::Type::Vec2),
-            min: None,
-            max: None,
-            name: None,
-            normalized: false,
-            sparse: None,
-        });
-        attributes.insert(
-            Valid(json::mesh::Semantic::TexCoords(uv_set as u32)),
-            json::Index::new(uv_accessor_idx),
-        );
-    }
-
-    // Write tangents (vec4: xyz + handedness in w)
-    let has_tangents = vertices
+    let normals = input
+        .vertices
         .iter()
-        .any(|v| v.tangent[0] != 0.0 || v.tangent[1] != 0.0 || v.tangent[2] != 0.0);
-    if has_tangents {
-        let tangent_view_idx = buffer_views.len() as u32;
-        let tangent_offset = buffer_data.len();
-        for v in vertices {
-            // Normalize tangent xyz to unit length — same reasoning as normals.
-            // Game VS normalizes all basis vectors (dp3+rsq+mul confirmed).
-            let len_sq = v.tangent[0] * v.tangent[0]
-                + v.tangent[1] * v.tangent[1]
-                + v.tangent[2] * v.tangent[2];
-            let (tx, ty, tz) = if len_sq < 1e-12 {
-                (1.0, 0.0, 0.0)
-            } else {
-                let inv_len = 1.0 / len_sq.sqrt();
-                (
-                    v.tangent[0] * inv_len,
-                    v.tangent[1] * inv_len,
-                    v.tangent[2] * inv_len,
-                )
-            };
-            buffer_data.extend_from_slice(&tx.to_le_bytes());
-            buffer_data.extend_from_slice(&ty.to_le_bytes());
-            buffer_data.extend_from_slice(&tz.to_le_bytes());
-            // glTF tangent.w is handedness: +1 or -1.
-            // UGX stores this in tangent[3]; default to 1.0 if unset.
-            let w = if v.tangent[3] == 0.0 {
-                1.0f32
-            } else {
-                v.tangent[3]
-            };
-            buffer_data.extend_from_slice(&w.to_le_bytes());
-        }
-        let tangent_byte_length = buffer_data.len() - tangent_offset;
+        .map(|vertex| normalized_vec3(vertex.normal, [0.0, 1.0, 0.0]));
+    insert_f32_attribute(
+        output,
+        &mut attributes,
+        Valid(json::mesh::Semantic::Normals),
+        normals,
+        input.vertices.len(),
+        json::accessor::Type::Vec3,
+    )?;
+    append_texcoords(input, output, &mut attributes)?;
+    append_tangents(input, output, &mut attributes)?;
+    append_skin(input, output, &mut attributes)?;
+    append_colors(input, output, &mut attributes)?;
 
-        buffer_views.push(json::buffer::View {
-            buffer: json::Index::new(0),
-            byte_length: json::validation::USize64(tangent_byte_length as u64),
-            byte_offset: Some(json::validation::USize64(tangent_offset as u64)),
-            byte_stride: Some(json::buffer::Stride(16)),
-            extensions: None,
-            extras: json::Extras::default(),
-            name: None,
-            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
-        });
-
-        let tangent_accessor_idx = accessors.len() as u32;
-        accessors.push(json::Accessor {
-            buffer_view: Some(json::Index::new(tangent_view_idx)),
-            byte_offset: Some(json::validation::USize64(0)),
-            count: json::validation::USize64(vertices.len() as u64),
-            component_type: Valid(json::accessor::GenericComponentType(
-                json::accessor::ComponentType::F32,
-            )),
-            extensions: None,
-            extras: json::Extras::default(),
-            type_: Valid(json::accessor::Type::Vec4),
-            min: None,
-            max: None,
-            name: None,
-            normalized: false,
-            sparse: None,
-        });
-        attributes.insert(
-            Valid(json::mesh::Semantic::Tangents),
-            json::Index::new(tangent_accessor_idx),
-        );
-    }
-
-    // Write bone indices and weights if we have a skeleton.
-    //
-    // Bone index conventions in UGX vertex buffers:
-    //   • bone_remap non-empty → indices are 0-based section-local;
-    //     look up `bone_remap[local_idx]` to get the 0-based global index.
-    //   • bone_remap empty → indices are already 0-based global;
-    //     use directly for glTF (which also uses 0-based joint indices).
-    if has_skeleton && bone_count > 0 {
-        // HW1 vertex buffers may store bone indices up to bone_count (not
-        // bone_count-1). Whether this is 1-based indexing or an implicit
-        // root bone is unclear, but we must preserve the raw values for
-        // round-trip fidelity. Use bone_count (inclusive) as the upper
-        // bound so that index == bone_count is NOT clamped.
-        let max_bone_idx = bone_count as u16;
-        let use_u16_joints = bone_count > 256;
-        let has_remap = !bone_remap.is_empty();
-        // rigid_bone_index can be INT_MAX (0x7FFFFFFF) meaning "no rigid bone".
-        // Default to bone 0 when invalid.
-        let rigid_idx: u16 = if rigid_bone_index >= 0 && (rigid_bone_index as usize) < bone_count {
-            rigid_bone_index as u16
-        } else {
-            0
-        };
-
-        // JOINTS_0 - bone indices as u8 (<=256 bones) or u16 (>256 bones)
-        // Pad to 2-byte boundary if using u16
-        if use_u16_joints && !buffer_data.len().is_multiple_of(2) {
-            buffer_data.push(0);
-        }
-        let joints_view_idx = buffer_views.len() as u32;
-        let joints_offset = buffer_data.len();
-        for v in vertices {
-            let weight_sum: f32 = v.bone_weights.iter().sum();
-            let joint_indices = if weight_sum == 0.0 {
-                // Rigid vertex (no skin data) - bind to section's rigid bone
-                [rigid_idx, 0, 0, 0]
-            } else {
-                let mut indices = v.bone_indices;
-                for idx in &mut indices {
-                    if has_remap {
-                        // Section-local 0-based index → remap to global 0-based.
-                        let local = *idx as usize;
-                        *idx = if local < bone_remap.len() {
-                            bone_remap[local] as u16
-                        } else {
-                            0
-                        };
-                    }
-                    // Clamp only truly out-of-range indices (> bone_count).
-                    // Indices equal to bone_count are valid in HW1 vertex
-                    // buffers (the engine may use 1-based bone indexing).
-                    if *idx > max_bone_idx {
-                        *idx = 0;
-                    }
-                }
-                indices
-            };
-            if use_u16_joints {
-                for &idx in &joint_indices {
-                    buffer_data.extend_from_slice(&idx.to_le_bytes());
-                }
-            } else {
-                for &idx in &joint_indices {
-                    buffer_data.push(idx as u8);
-                }
-            }
-        }
-        let joints_byte_length = buffer_data.len() - joints_offset;
-        let joints_stride = if use_u16_joints { 8 } else { 4 };
-
-        buffer_views.push(json::buffer::View {
-            buffer: json::Index::new(0),
-            byte_length: json::validation::USize64(joints_byte_length as u64),
-            byte_offset: Some(json::validation::USize64(joints_offset as u64)),
-            byte_stride: Some(json::buffer::Stride(joints_stride)),
-            extensions: None,
-            extras: json::Extras::default(),
-            name: None,
-            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
-        });
-
-        let joints_component_type = if use_u16_joints {
-            json::accessor::ComponentType::U16
-        } else {
-            json::accessor::ComponentType::U8
-        };
-        let joints_accessor_idx = accessors.len() as u32;
-        accessors.push(json::Accessor {
-            buffer_view: Some(json::Index::new(joints_view_idx)),
-            byte_offset: Some(json::validation::USize64(0)),
-            count: json::validation::USize64(vertices.len() as u64),
-            component_type: Valid(json::accessor::GenericComponentType(joints_component_type)),
-            extensions: None,
-            extras: json::Extras::default(),
-            type_: Valid(json::accessor::Type::Vec4),
-            min: None,
-            max: None,
-            name: None,
-            normalized: false,
-            sparse: None,
-        });
-        attributes.insert(
-            Valid(json::mesh::Semantic::Joints(0)),
-            json::Index::new(joints_accessor_idx),
-        );
-
-        // WEIGHTS_0 - bone weights as floats
-        // Pad to 4-byte boundary for float alignment
-        while !buffer_data.len().is_multiple_of(4) {
-            buffer_data.push(0);
-        }
-        let weights_view_idx = buffer_views.len() as u32;
-        let weights_offset = buffer_data.len();
-        for v in vertices {
-            let mut weights = v.bone_weights;
-            let sum: f32 = weights.iter().sum();
-            if sum == 0.0 {
-                // Rigid vertex - 100% weight on rigid bone
-                weights[0] = 1.0;
-            } else if (sum - 1.0).abs() > 0.001 {
-                for w in &mut weights {
-                    *w /= sum;
-                }
-            }
-            buffer_data.extend_from_slice(&weights[0].to_le_bytes());
-            buffer_data.extend_from_slice(&weights[1].to_le_bytes());
-            buffer_data.extend_from_slice(&weights[2].to_le_bytes());
-            buffer_data.extend_from_slice(&weights[3].to_le_bytes());
-        }
-        let weights_byte_length = buffer_data.len() - weights_offset;
-
-        buffer_views.push(json::buffer::View {
-            buffer: json::Index::new(0),
-            byte_length: json::validation::USize64(weights_byte_length as u64),
-            byte_offset: Some(json::validation::USize64(weights_offset as u64)),
-            byte_stride: Some(json::buffer::Stride(16)),
-            extensions: None,
-            extras: json::Extras::default(),
-            name: None,
-            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
-        });
-
-        let weights_accessor_idx = accessors.len() as u32;
-        accessors.push(json::Accessor {
-            buffer_view: Some(json::Index::new(weights_view_idx)),
-            byte_offset: Some(json::validation::USize64(0)),
-            count: json::validation::USize64(vertices.len() as u64),
-            component_type: Valid(json::accessor::GenericComponentType(
-                json::accessor::ComponentType::F32,
-            )),
-            extensions: None,
-            extras: json::Extras::default(),
-            type_: Valid(json::accessor::Type::Vec4),
-            min: None,
-            max: None,
-            name: None,
-            normalized: false,
-            sparse: None,
-        });
-        attributes.insert(
-            Valid(json::mesh::Semantic::Weights(0)),
-            json::Index::new(weights_accessor_idx),
-        );
-    }
-
-    // Write vertex colors (COLOR_0) if any vertex has non-zero diffuse
-    let has_colors = vertices.iter().any(|v| {
-        v.diffuse[0] != 0.0 || v.diffuse[1] != 0.0 || v.diffuse[2] != 0.0 || v.diffuse[3] != 0.0
-    });
-    if has_colors {
-        // Pad to 4-byte boundary for float alignment
-        while !buffer_data.len().is_multiple_of(4) {
-            buffer_data.push(0);
-        }
-        let color_view_idx = buffer_views.len() as u32;
-        let color_offset = buffer_data.len();
-        for v in vertices {
-            buffer_data.extend_from_slice(&v.diffuse[0].to_le_bytes());
-            buffer_data.extend_from_slice(&v.diffuse[1].to_le_bytes());
-            buffer_data.extend_from_slice(&v.diffuse[2].to_le_bytes());
-            buffer_data.extend_from_slice(&v.diffuse[3].to_le_bytes());
-        }
-        let color_byte_length = buffer_data.len() - color_offset;
-
-        buffer_views.push(json::buffer::View {
-            buffer: json::Index::new(0),
-            byte_length: json::validation::USize64(color_byte_length as u64),
-            byte_offset: Some(json::validation::USize64(color_offset as u64)),
-            byte_stride: Some(json::buffer::Stride(16)),
-            extensions: None,
-            extras: json::Extras::default(),
-            name: None,
-            target: Some(Valid(json::buffer::Target::ArrayBuffer)),
-        });
-
-        let color_accessor_idx = accessors.len() as u32;
-        accessors.push(json::Accessor {
-            buffer_view: Some(json::Index::new(color_view_idx)),
-            byte_offset: Some(json::validation::USize64(0)),
-            count: json::validation::USize64(vertices.len() as u64),
-            component_type: Valid(json::accessor::GenericComponentType(
-                json::accessor::ComponentType::F32,
-            )),
-            extensions: None,
-            extras: json::Extras::default(),
-            type_: Valid(json::accessor::Type::Vec4),
-            min: None,
-            max: None,
-            name: None,
-            normalized: false,
-            sparse: None,
-        });
-        attributes.insert(
-            Valid(json::mesh::Semantic::Colors(0)),
-            json::Index::new(color_accessor_idx),
-        );
-    }
-
-    // Write indices
-    // Pad to 2-byte boundary for u16 alignment
-    if !buffer_data.len().is_multiple_of(2) {
-        buffer_data.push(0);
-    }
-    let idx_view_idx = buffer_views.len() as u32;
-    let idx_offset = buffer_data.len();
-    for idx in indices {
-        buffer_data.extend_from_slice(&idx.to_le_bytes());
-    }
-    let idx_byte_length = buffer_data.len() - idx_offset;
-
-    buffer_views.push(json::buffer::View {
-        buffer: json::Index::new(0),
-        byte_length: json::validation::USize64(idx_byte_length as u64),
-        byte_offset: Some(json::validation::USize64(idx_offset as u64)),
-        byte_stride: None,
-        extensions: None,
-        extras: json::Extras::default(),
-        name: None,
-        target: Some(Valid(json::buffer::Target::ElementArrayBuffer)),
-    });
-
-    let idx_accessor_idx = accessors.len() as u32;
-    accessors.push(json::Accessor {
-        buffer_view: Some(json::Index::new(idx_view_idx)),
-        byte_offset: Some(json::validation::USize64(0)),
-        count: json::validation::USize64(indices.len() as u64),
-        component_type: Valid(json::accessor::GenericComponentType(
-            json::accessor::ComponentType::U16,
-        )),
-        extensions: None,
-        extras: json::Extras::default(),
-        type_: Valid(json::accessor::Type::Scalar),
-        min: None,
-        max: None,
-        name: None,
-        normalized: false,
-        sparse: None,
-    });
-
-    let material = if has_materials && material_index >= 0 {
-        Some(json::Index::new(material_index as u32))
+    let index_accessor = append_indices(output, input.indices)?;
+    let material = if input.has_materials && input.material_index >= 0 {
+        Some(json::Index::new(
+            u32::try_from(input.material_index)
+                .map_err(|_| Error::SizeOverflow("primitive material index"))?,
+        ))
     } else {
         None
     };
-
-    json::mesh::Primitive {
+    Ok(json::mesh::Primitive {
         attributes,
         extensions: None,
         extras: json::Extras::default(),
-        indices: Some(json::Index::new(idx_accessor_idx)),
+        indices: Some(json::Index::new(index_accessor)),
         material,
         mode: Valid(json::mesh::Mode::Triangles),
         targets: None,
+    })
+}
+
+fn position_bounds(vertices: &[UnpackedVertex]) -> ([f32; 3], [f32; 3]) {
+    let mut minimum = [f32::MAX; 3];
+    let mut maximum = [f32::MIN; 3];
+    for vertex in vertices {
+        for ((minimum, maximum), value) in minimum.iter_mut().zip(&mut maximum).zip(vertex.position)
+        {
+            *minimum = minimum.min(value);
+            *maximum = maximum.max(value);
+        }
     }
+    (minimum, maximum)
+}
+
+fn normalized_vec3(value: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let length_squared = value
+        .iter()
+        .map(|component| component * component)
+        .sum::<f32>();
+    if length_squared < 1.0e-12 {
+        fallback
+    } else {
+        let inverse_length = length_squared.sqrt().recip();
+        value.map(|component| component * inverse_length)
+    }
+}
+
+fn append_texcoords(
+    input: &PrimitiveInput<'_>,
+    output: &mut PrimitiveOutput<'_>,
+    attributes: &mut std::collections::BTreeMap<
+        json::validation::Checked<json::mesh::Semantic>,
+        json::Index<json::Accessor>,
+    >,
+) -> Result<()> {
+    let count = input
+        .vertices
+        .iter()
+        .map(|vertex| vertex.num_texcoords)
+        .max()
+        .unwrap_or(0)
+        .min(MAX_UV);
+    for set_index in 0..count {
+        let values = input
+            .vertices
+            .iter()
+            .map(|vertex| vertex.texcoords[set_index]);
+        let semantic_index = u32::try_from(set_index)
+            .map_err(|_| Error::SizeOverflow("texture-coordinate set index"))?;
+        insert_f32_attribute(
+            output,
+            attributes,
+            Valid(json::mesh::Semantic::TexCoords(semantic_index)),
+            values,
+            input.vertices.len(),
+            json::accessor::Type::Vec2,
+        )?;
+    }
+    Ok(())
+}
+
+fn append_tangents(
+    input: &PrimitiveInput<'_>,
+    output: &mut PrimitiveOutput<'_>,
+    attributes: &mut std::collections::BTreeMap<
+        json::validation::Checked<json::mesh::Semantic>,
+        json::Index<json::Accessor>,
+    >,
+) -> Result<()> {
+    let has_tangents = input.vertices.iter().any(|vertex| {
+        vertex.tangent[..3]
+            .iter()
+            .any(|value| value.to_bits() & 0x7fff_ffff != 0)
+    });
+    if !has_tangents {
+        return Ok(());
+    }
+    let values = input.vertices.iter().map(|vertex| {
+        let xyz = normalized_vec3(
+            [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]],
+            [1.0, 0.0, 0.0],
+        );
+        let handedness = if vertex.tangent[3].abs() <= f32::EPSILON {
+            1.0
+        } else {
+            vertex.tangent[3]
+        };
+        [xyz[0], xyz[1], xyz[2], handedness]
+    });
+    insert_f32_attribute(
+        output,
+        attributes,
+        Valid(json::mesh::Semantic::Tangents),
+        values,
+        input.vertices.len(),
+        json::accessor::Type::Vec4,
+    )
+}
+
+fn append_skin(
+    input: &PrimitiveInput<'_>,
+    output: &mut PrimitiveOutput<'_>,
+    attributes: &mut std::collections::BTreeMap<
+        json::validation::Checked<json::mesh::Semantic>,
+        json::Index<json::Accessor>,
+    >,
+) -> Result<()> {
+    if !input.has_skeleton || input.bone_count == 0 {
+        return Ok(());
+    }
+    let skin = build_skin_data(input)?;
+    let joints_accessor = append_joint_accessor(output, &skin)?;
+    attributes.insert(
+        Valid(json::mesh::Semantic::Joints(0)),
+        json::Index::new(joints_accessor),
+    );
+    let weights_accessor = append_f32_accessor(
+        output,
+        skin.weights,
+        input.vertices.len(),
+        json::accessor::Type::Vec4,
+        None,
+    )?;
+    attributes.insert(
+        Valid(json::mesh::Semantic::Weights(0)),
+        json::Index::new(weights_accessor),
+    );
+    Ok(())
+}
+
+fn build_skin_data(input: &PrimitiveInput<'_>) -> Result<SkinData> {
+    let max_bone_index =
+        u16::try_from(input.bone_count).map_err(|_| Error::SizeOverflow("primitive bone count"))?;
+    let rigid_index = usize::try_from(input.rigid_bone_index)
+        .ok()
+        .filter(|&index| index < input.bone_count)
+        .map_or(Ok(0), |index| {
+            u16::try_from(index).map_err(|_| Error::SizeOverflow("rigid bone index"))
+        })?;
+    let mut joints = Vec::with_capacity(input.vertices.len());
+    let mut weights = Vec::with_capacity(input.vertices.len());
+    for vertex in input.vertices {
+        let weight_sum = vertex.bone_weights.iter().sum::<f32>();
+        let is_rigid = weight_sum.abs() <= f32::EPSILON;
+        joints.push(resolve_joints(
+            vertex,
+            input.bone_remap,
+            max_bone_index,
+            rigid_index,
+            is_rigid,
+        ));
+        let mut normalized_weights = vertex.bone_weights;
+        if is_rigid {
+            normalized_weights[0] = 1.0;
+        } else if (weight_sum - 1.0).abs() > 0.001 {
+            for weight in &mut normalized_weights {
+                *weight /= weight_sum;
+            }
+        }
+        weights.push(normalized_weights);
+    }
+    Ok(SkinData {
+        joints,
+        weights,
+        use_u16_joints: input.bone_count >= 256,
+    })
+}
+
+fn resolve_joints(
+    vertex: &UnpackedVertex,
+    bone_remap: &[u8],
+    max_bone_index: u16,
+    rigid_index: u16,
+    is_rigid: bool,
+) -> [u16; 4] {
+    if is_rigid {
+        return [rigid_index, 0, 0, 0];
+    }
+    let mut indices = vertex.bone_indices;
+    for index in &mut indices {
+        if !bone_remap.is_empty() {
+            *index = bone_remap
+                .get(usize::from(*index))
+                .copied()
+                .map_or(0, u16::from);
+        }
+        if *index > max_bone_index {
+            *index = 0;
+        }
+    }
+    indices
+}
+
+fn append_colors(
+    input: &PrimitiveInput<'_>,
+    output: &mut PrimitiveOutput<'_>,
+    attributes: &mut std::collections::BTreeMap<
+        json::validation::Checked<json::mesh::Semantic>,
+        json::Index<json::Accessor>,
+    >,
+) -> Result<()> {
+    let has_colors = input.vertices.iter().any(|vertex| {
+        vertex
+            .diffuse
+            .iter()
+            .any(|value| value.to_bits() & 0x7fff_ffff != 0)
+    });
+    if !has_colors {
+        return Ok(());
+    }
+    insert_f32_attribute(
+        output,
+        attributes,
+        Valid(json::mesh::Semantic::Colors(0)),
+        input.vertices.iter().map(|vertex| vertex.diffuse),
+        input.vertices.len(),
+        json::accessor::Type::Vec4,
+    )
+}
+
+fn insert_f32_attribute<const N: usize>(
+    output: &mut PrimitiveOutput<'_>,
+    attributes: &mut std::collections::BTreeMap<
+        json::validation::Checked<json::mesh::Semantic>,
+        json::Index<json::Accessor>,
+    >,
+    semantic: json::validation::Checked<json::mesh::Semantic>,
+    values: impl IntoIterator<Item = [f32; N]>,
+    count: usize,
+    accessor_type: json::accessor::Type,
+) -> Result<()> {
+    let accessor = append_f32_accessor(output, values, count, accessor_type, None)?;
+    attributes.insert(semantic, json::Index::new(accessor));
+    Ok(())
+}
+
+fn append_f32_accessor<const N: usize>(
+    output: &mut PrimitiveOutput<'_>,
+    values: impl IntoIterator<Item = [f32; N]>,
+    count: usize,
+    accessor_type: json::accessor::Type,
+    bounds: Option<(Vec<f32>, Vec<f32>)>,
+) -> Result<u32> {
+    align_buffer(output.buffer_data, 4);
+    let byte_offset = output.buffer_data.len();
+    for value in values {
+        for component in value {
+            output
+                .buffer_data
+                .extend_from_slice(&component.to_le_bytes());
+        }
+    }
+    let byte_length = output.buffer_data.len() - byte_offset;
+    let stride = N
+        .checked_mul(4)
+        .ok_or(Error::SizeOverflow("attribute byte stride"))?;
+    let view_index = append_view(
+        output,
+        byte_offset,
+        byte_length,
+        Some(stride),
+        json::buffer::Target::ArrayBuffer,
+    )?;
+    append_accessor(
+        output,
+        view_index,
+        count,
+        json::accessor::ComponentType::F32,
+        accessor_type,
+        bounds,
+        false,
+    )
+}
+
+fn append_joint_accessor(output: &mut PrimitiveOutput<'_>, skin: &SkinData) -> Result<u32> {
+    let alignment = if skin.use_u16_joints { 2 } else { 1 };
+    align_buffer(output.buffer_data, alignment);
+    let byte_offset = output.buffer_data.len();
+    for joints in &skin.joints {
+        for &joint in joints {
+            if skin.use_u16_joints {
+                output.buffer_data.extend_from_slice(&joint.to_le_bytes());
+            } else {
+                output
+                    .buffer_data
+                    .push(u8::try_from(joint).map_err(|_| Error::SizeOverflow("u8 joint index"))?);
+            }
+        }
+    }
+    let byte_length = output.buffer_data.len() - byte_offset;
+    let (stride, component_type) = if skin.use_u16_joints {
+        (8, json::accessor::ComponentType::U16)
+    } else {
+        (4, json::accessor::ComponentType::U8)
+    };
+    let view_index = append_view(
+        output,
+        byte_offset,
+        byte_length,
+        Some(stride),
+        json::buffer::Target::ArrayBuffer,
+    )?;
+    append_accessor(
+        output,
+        view_index,
+        skin.joints.len(),
+        component_type,
+        json::accessor::Type::Vec4,
+        None,
+        false,
+    )
+}
+
+fn append_indices(output: &mut PrimitiveOutput<'_>, indices: &[u16]) -> Result<u32> {
+    align_buffer(output.buffer_data, 2);
+    let byte_offset = output.buffer_data.len();
+    for index in indices {
+        output.buffer_data.extend_from_slice(&index.to_le_bytes());
+    }
+    let byte_length = output.buffer_data.len() - byte_offset;
+    let view_index = append_view(
+        output,
+        byte_offset,
+        byte_length,
+        None,
+        json::buffer::Target::ElementArrayBuffer,
+    )?;
+    append_accessor(
+        output,
+        view_index,
+        indices.len(),
+        json::accessor::ComponentType::U16,
+        json::accessor::Type::Scalar,
+        None,
+        false,
+    )
+}
+
+fn append_view(
+    output: &mut PrimitiveOutput<'_>,
+    byte_offset: usize,
+    byte_length: usize,
+    byte_stride: Option<usize>,
+    target: json::buffer::Target,
+) -> Result<u32> {
+    let index = checked_u32(output.buffer_views.len(), "buffer-view index")?;
+    output.buffer_views.push(json::buffer::View {
+        buffer: json::Index::new(0),
+        byte_length: json::validation::USize64(checked_u64(byte_length, "buffer-view length")?),
+        byte_offset: Some(json::validation::USize64(checked_u64(
+            byte_offset,
+            "buffer-view offset",
+        )?)),
+        byte_stride: byte_stride.map(json::buffer::Stride),
+        extensions: None,
+        extras: json::Extras::default(),
+        name: None,
+        target: Some(Valid(target)),
+    });
+    Ok(index)
+}
+
+fn append_accessor(
+    output: &mut PrimitiveOutput<'_>,
+    view_index: u32,
+    count: usize,
+    component_type: json::accessor::ComponentType,
+    accessor_type: json::accessor::Type,
+    bounds: Option<(Vec<f32>, Vec<f32>)>,
+    normalized: bool,
+) -> Result<u32> {
+    let index = checked_u32(output.accessors.len(), "accessor index")?;
+    let (minimum, maximum) = bounds.map_or((None, None), |(minimum, maximum)| {
+        (
+            Some(json::Value::from(minimum)),
+            Some(json::Value::from(maximum)),
+        )
+    });
+    output.accessors.push(json::Accessor {
+        buffer_view: Some(json::Index::new(view_index)),
+        byte_offset: Some(json::validation::USize64(0)),
+        count: json::validation::USize64(checked_u64(count, "accessor count")?),
+        component_type: Valid(json::accessor::GenericComponentType(component_type)),
+        extensions: None,
+        extras: json::Extras::default(),
+        type_: Valid(accessor_type),
+        min: minimum,
+        max: maximum,
+        name: None,
+        normalized,
+        sparse: None,
+    });
+    Ok(index)
+}
+
+fn align_buffer(buffer: &mut Vec<u8>, alignment: usize) {
+    while !buffer.len().is_multiple_of(alignment) {
+        buffer.push(0);
+    }
+}
+
+fn checked_u32(value: usize, context: &'static str) -> Result<u32> {
+    u32::try_from(value).map_err(|_| Error::SizeOverflow(context))
+}
+
+fn checked_u64(value: usize, context: &'static str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| Error::SizeOverflow(context))
 }

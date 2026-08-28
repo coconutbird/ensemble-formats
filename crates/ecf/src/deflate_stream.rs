@@ -37,51 +37,61 @@
 use alloc::{format, vec, vec::Vec};
 use miniz_oxide::deflate::compress_to_vec;
 use miniz_oxide::inflate::decompress_to_vec;
+use nostdio::{Cursor, Endian, ReadEndian};
 
 use crate::checksum::adler32;
 use crate::{Error, Result};
 
-/// BDeflateStream signature value (as a native u32).
+/// `BDeflateStream` signature value (as a native u32).
 ///
 /// Both HW1 and HW2 use a big-endian stream reader that byte-swaps values
 /// from disk, so the on-disk bytes are always `CC 34 EE AD` (BE encoding).
 /// After the reader swaps, the in-memory value equals `0xADEE34CC` on the
 /// Xbox 360 or `0xCC34EEAD` on PC — but the disk representation is always BE.
-pub const SIGNATURE: u32 = 0xCC34EEAD;
+pub const SIGNATURE: u32 = 0xCC34_EEAD;
 
-/// BDeflateStream signature as it appears on disk (big-endian byte order).
+/// `BDeflateStream` signature as it appears on disk (big-endian byte order).
 /// Reading these 4 bytes as a little-endian u32 gives `0xADEE34CC`.
-pub const SIGNATURE_INVERTED: u32 = 0xADEE34CC;
+pub const SIGNATURE_INVERTED: u32 = 0xADEE_34CC;
 
-/// BDeflateStream header size in bytes.
+/// `BDeflateStream` header size in bytes.
 pub const HEADER_SIZE: usize = 36;
 
-/// BDeflateStream end magic value.
-pub const END_MAGIC: u32 = 0xA5D91776;
+/// `BDeflateStream` end magic value.
+pub const END_MAGIC: u32 = 0xA5D9_1776;
 
 /// Read a u32 from `data` at `offset` with the given endianness.
-fn read_u32(data: &[u8], offset: usize, big_endian: bool) -> u32 {
-    let b: [u8; 4] = data[offset..offset + 4].try_into().unwrap();
-    if big_endian {
-        u32::from_be_bytes(b)
-    } else {
-        u32::from_le_bytes(b)
-    }
+fn read_u32(data: &[u8], offset: usize, big_endian: bool) -> Result<u32> {
+    let mut cursor = Cursor::new(data.get(offset..).ok_or(Error::UnexpectedEof)?);
+    cursor
+        .read_u32(endian(big_endian))
+        .map_err(|_| Error::UnexpectedEof)
 }
 
 /// Read a u64 from `data` at `offset` with the given endianness.
-fn read_u64(data: &[u8], offset: usize, big_endian: bool) -> u64 {
-    let b: [u8; 8] = data[offset..offset + 8].try_into().unwrap();
+fn read_u64(data: &[u8], offset: usize, big_endian: bool) -> Result<u64> {
+    let mut cursor = Cursor::new(data.get(offset..).ok_or(Error::UnexpectedEof)?);
+    cursor
+        .read_u64(endian(big_endian))
+        .map_err(|_| Error::UnexpectedEof)
+}
+
+fn endian(big_endian: bool) -> Endian {
     if big_endian {
-        u64::from_be_bytes(b)
+        Endian::Big
     } else {
-        u64::from_le_bytes(b)
+        Endian::Little
     }
 }
 
-/// Decompress BDeflateStream format data.
+/// Decompress `BDeflateStream` format data.
 ///
 /// Automatically detects endianness from the signature.
+///
+/// # Errors
+///
+/// Returns an error if the stream is truncated, has an invalid signature or
+/// checksum, declares unsupported sizes, or its deflate payload is invalid.
 pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < HEADER_SIZE {
         return Err(Error::DecompressionError(
@@ -90,7 +100,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
     }
 
     // Signature is always stored in its native byte order — read as LE first
-    let sig = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let sig = read_u32(data, 0, false)?;
     let big_endian = sig == SIGNATURE_INVERTED;
 
     if sig != SIGNATURE && sig != SIGNATURE_INVERTED {
@@ -101,12 +111,12 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
     //  4: header_adler32, 8: header_type,
     // 12: src_bytes (u64), 20: dst_bytes (u64),
     // 28: src_adler32, 32: dst_adler32
-    let header_adler32 = read_u32(data, 4, big_endian);
-    let header_type = read_u32(data, 8, big_endian);
-    let src_bytes = read_u64(data, 12, big_endian);
-    let dst_bytes = read_u64(data, 20, big_endian);
-    let src_adler32 = read_u32(data, 28, big_endian);
-    let dst_adler32 = read_u32(data, 32, big_endian);
+    let header_adler32 = read_u32(data, 4, big_endian)?;
+    let header_type = read_u32(data, 8, big_endian)?;
+    let src_bytes = read_u64(data, 12, big_endian)?;
+    let dst_bytes = read_u64(data, 20, big_endian)?;
+    let src_adler32 = read_u32(data, 28, big_endian)?;
+    let dst_adler32 = read_u32(data, 32, big_endian)?;
 
     // Validate header checksum using the in-memory struct order
     // (same as BDeflateStream_ValidateHeader checksums struct[8..36]):
@@ -128,13 +138,16 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
     let computed_adler32 = adler32(&checksum_buf);
     if computed_adler32 != header_adler32 {
         return Err(Error::DecompressionError(format!(
-            "BDeflateStream header checksum mismatch: expected 0x{:08X}, computed 0x{:08X}",
-            header_adler32, computed_adler32
+            "BDeflateStream header checksum mismatch: expected 0x{header_adler32:08X}, computed 0x{computed_adler32:08X}"
         )));
     }
 
-    let src_bytes = src_bytes as usize;
-    let dst_bytes = dst_bytes as usize;
+    let src_bytes = usize::try_from(src_bytes).map_err(|_| {
+        Error::DecompressionError("uncompressed size does not fit this platform".into())
+    })?;
+    let dst_bytes = usize::try_from(dst_bytes).map_err(|_| {
+        Error::DecompressionError("compressed size does not fit this platform".into())
+    })?;
 
     if data.len() < HEADER_SIZE + dst_bytes {
         return Err(Error::DecompressionError(format!(
@@ -147,7 +160,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
     let deflate_data = &data[HEADER_SIZE..HEADER_SIZE + dst_bytes];
 
     let decompressed = decompress_to_vec(deflate_data)
-        .map_err(|e| Error::DecompressionError(format!("deflate decompression failed: {:?}", e)))?;
+        .map_err(|e| Error::DecompressionError(format!("deflate decompression failed: {e:?}")))?;
 
     // Sanity-check decompressed size
     if decompressed.len() != src_bytes {
@@ -161,11 +174,16 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
     Ok(decompressed)
 }
 
-/// Compress data to BDeflateStream format.
+/// Compress data to `BDeflateStream` format.
 ///
 /// # Arguments
 /// * `data` — Uncompressed data to compress
 /// * `big_endian` — If true, use big-endian format (Xbox 360); if false, little-endian (PC)
+///
+/// # Errors
+///
+/// Returns [`Error::SizeOverflow`] if the input or compressed output is too
+/// large for the stream's 64-bit size fields.
 pub fn compress(data: &[u8], big_endian: bool) -> Result<Vec<u8>> {
     let src_bytes = data.len() as u64;
     let src_adler32 = adler32(data);

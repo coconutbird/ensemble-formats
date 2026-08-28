@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 // ---- Generic file discovery ------------------------------------------------
 
 /// Recursively find all files with a given extension under a directory.
+#[must_use]
 pub fn find_files_by_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
     fn walk(d: &Path, ext: &str, out: &mut Vec<PathBuf>) {
         if let Ok(entries) = std::fs::read_dir(d) {
             for entry in entries.flatten() {
@@ -20,12 +20,15 @@ pub fn find_files_by_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
             }
         }
     }
+
+    let mut out = Vec::new();
     walk(dir, ext, &mut out);
     out.sort();
     out
 }
 
 /// Find all files with a given extension (non-recursive, single directory).
+#[must_use]
 pub fn find_files_flat(dir: &Path, ext: &str) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
         .into_iter()
@@ -44,6 +47,11 @@ pub fn find_files_flat(dir: &Path, ext: &str) -> Vec<PathBuf> {
 pub type EraReader = era::Reader<era::crypto::decrypt::Reader<BufReader<std::fs::File>>>;
 
 /// Open an ERA archive with default encryption keys.
+///
+/// # Errors
+///
+/// Returns an error if `path` cannot be opened or the archive header cannot
+/// be read through the encrypted ERA reader.
 pub fn open_era(path: &Path) -> Result<EraReader, Box<dyn std::error::Error>> {
     let file = std::fs::File::open(path)?;
     let archive =
@@ -53,6 +61,7 @@ pub fn open_era(path: &Path) -> Result<EraReader, Box<dyn std::error::Error>> {
 
 /// Find all entries in an ERA archive whose filenames end with `ext`
 /// (case-insensitive). Returns `(entry_index, filename)` pairs.
+#[must_use]
 pub fn find_entries_in_era(archive: &EraReader, ext: &str) -> Vec<(usize, String)> {
     let ext_lower = ext.to_lowercase();
     archive

@@ -12,6 +12,8 @@ use ecf::io::{IoError, Read, Seek, SeekFrom, invalid_seek};
 
 use super::tea::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64};
 
+const BLOCK_SIZE_U64: u64 = 64;
+
 /// A reader that decrypts TEA-encrypted data on the fly.
 ///
 /// Wraps any [`Read`] + [`Seek`] source and transparently decrypts
@@ -30,7 +32,7 @@ pub struct Reader<R> {
     position: u64,
     /// Buffered decrypted block.
     buffer: [u8; TEA_BLOCK_SIZE],
-    /// File offset of the start of the buffered block (aligned to TEA_BLOCK_SIZE).
+    /// File offset of the start of the buffered block (aligned to `TEA_BLOCK_SIZE`).
     buffer_offset: u64,
     /// Whether the buffer is valid.
     buffer_valid: bool,
@@ -60,7 +62,7 @@ impl<R: Read + Seek> Reader<R> {
         let mut encrypted = [0u8; TEA_BLOCK_SIZE];
         self.inner.read_exact(&mut encrypted)?;
 
-        let counter = (block_offset / TEA_BLOCK_SIZE as u64) as u32;
+        let counter = u32::try_from(block_offset / BLOCK_SIZE_U64).map_err(|_| invalid_seek())?;
         tea_decrypt_block64(&self.keys, &encrypted, &mut self.buffer, counter);
 
         self.buffer_offset = block_offset;
@@ -84,8 +86,9 @@ impl<R: Read + Seek> Read for Reader<R> {
         let mut total_read = 0;
 
         while total_read < buf.len() {
-            let block_offset = (self.position / TEA_BLOCK_SIZE as u64) * TEA_BLOCK_SIZE as u64;
-            let offset_in_block = (self.position % TEA_BLOCK_SIZE as u64) as usize;
+            let block_offset = (self.position / BLOCK_SIZE_U64) * BLOCK_SIZE_U64;
+            let offset_in_block =
+                usize::try_from(self.position % BLOCK_SIZE_U64).map_err(|_| invalid_seek())?;
 
             match self.read_block(block_offset) {
                 Ok(()) => {}
@@ -99,7 +102,10 @@ impl<R: Read + Seek> Read for Reader<R> {
             buf[total_read..total_read + bytes_to_copy]
                 .copy_from_slice(&self.buffer[offset_in_block..offset_in_block + bytes_to_copy]);
 
-            self.position += bytes_to_copy as u64;
+            self.position = self
+                .position
+                .checked_add(u64::try_from(bytes_to_copy).map_err(|_| invalid_seek())?)
+                .ok_or_else(invalid_seek)?;
             total_read += bytes_to_copy;
         }
 
@@ -112,17 +118,17 @@ impl<R: Read + Seek> Seek for Reader<R> {
         let new_pos = match pos {
             SeekFrom::Start(offset) => offset,
             SeekFrom::Current(offset) => if offset >= 0 {
-                self.position.checked_add(offset as u64)
+                self.position.checked_add(offset.unsigned_abs())
             } else {
-                self.position.checked_sub((-offset) as u64)
+                self.position.checked_sub(offset.unsigned_abs())
             }
             .ok_or(invalid_seek())?,
             SeekFrom::End(offset) => {
                 let end = self.inner.seek(SeekFrom::End(0))?;
                 if offset >= 0 {
-                    end.checked_add(offset as u64)
+                    end.checked_add(offset.unsigned_abs())
                 } else {
-                    end.checked_sub((-offset) as u64)
+                    end.checked_sub(offset.unsigned_abs())
                 }
                 .ok_or(invalid_seek())?
             }

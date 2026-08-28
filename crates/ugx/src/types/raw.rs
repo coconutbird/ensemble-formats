@@ -13,7 +13,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 use super::math::Matrix4x4;
 use super::primitives::{AABB, Sphere};
 
-/// Raw on-disk BUGXGeomHeader (64 bytes, little-endian).
+/// Raw on-disk `BUGXGeomHeader` (64 bytes, little-endian).
 ///
 /// Layout verified from IDA disassembly of `BUGXGeom::load`.
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone)]
@@ -36,9 +36,9 @@ pub(crate) struct GeomHeaderRaw {
     pub _padding2: [u8; 4],
 }
 
-/// Raw on-disk BPackedArray header (16 bytes, little-endian).
+/// Raw on-disk `BPackedArray` header (16 bytes, little-endian).
 ///
-/// Used throughout BCachedData to describe arrays with count + offset.
+/// Used throughout `BCachedData` to describe arrays with count + offset.
 /// The offset is relative to the start of the chunk.
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone)]
 #[repr(C)]
@@ -48,7 +48,7 @@ pub(crate) struct PackedArrayRaw {
     pub offset: [u8; 8],
 }
 
-/// Raw on-disk BBone (80 bytes, little-endian).
+/// Raw on-disk `BBone` (80 bytes, little-endian).
 ///
 /// The `name_offset` is a packed string pointer (offset from chunk start).
 /// The `model_to_bone` is a 4×4 row-major matrix stored as 16 × f32le.
@@ -61,12 +61,12 @@ pub(crate) struct PackedBoneRaw {
     pub _padding: [u8; 4],
 }
 
-/// Raw on-disk BAccessory (24 bytes, little-endian).
+/// Raw on-disk `BAccessory` (24 bytes, little-endian).
 ///
 /// Layout from IDA `BPackedArray_Accessories__unpack` at `0x1406d8660`:
 /// - `+0x00` (4 bytes): i32 mFirstBone
 /// - `+0x04` (4 bytes): i32 mNumBones
-/// - `+0x08` (16 bytes): BPackedArray<int> mObjectIndices
+/// - `+0x08` (16 bytes): `BPackedArray`<int> mObjectIndices
 ///
 /// The nested `mObjectIndices` packed array requires a recursive fixup:
 /// the outer array is fixed up first (8-byte aligned), then each accessory's
@@ -79,11 +79,11 @@ pub(crate) struct AccessoryRaw {
     pub object_indices: PackedArrayRaw,
 }
 
-/// Raw on-disk BSection fixed fields (40 bytes, little-endian).
+/// Raw on-disk `BSection` fixed fields (40 bytes, little-endian).
 ///
 /// This is the first 40 bytes of each 152-byte section record.
 /// After this come the bone remap packed array (16 bytes) and
-/// UnivertPacker data (84 bytes) + trailing flags (12 bytes).
+/// `UnivertPacker` data (84 bytes) + trailing flags (12 bytes).
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone)]
 #[repr(C)]
 pub(crate) struct PackedSectionFixedRaw {
@@ -98,9 +98,9 @@ pub(crate) struct PackedSectionFixedRaw {
     pub vert_size: [u8; 4],
     pub num_verts: [u8; 4],
 }
-/// Raw on-disk BVector3 (12 bytes, little-endian).
+/// Raw on-disk `BVector3` (12 bytes, little-endian).
 ///
-/// Used for bone-bounds min/max arrays in BCachedData.
+/// Used for bone-bounds min/max arrays in `BCachedData`.
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone, Copy)]
 #[repr(C)]
 pub(crate) struct BVector3Raw {

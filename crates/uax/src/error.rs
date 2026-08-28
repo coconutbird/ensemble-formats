@@ -25,11 +25,11 @@ pub enum Error {
     #[error("UAX chunk (0x0700) not found")]
     ChunkNotFound,
 
-    /// Chunk data too small for granny_file_info.
+    /// Chunk data too small for `granny_file_info`.
     #[error("Chunk data too small: {0} bytes (minimum: {1})")]
     ChunkTooSmall(usize, usize),
 
-    /// Invalid FromFileName (must be "gr2ugx").
+    /// Invalid `FromFileName` (must be "gr2ugx").
     #[error("Invalid FromFileName: expected 'gr2ugx', got '{0}'")]
     InvalidFromFileName(String),
 
@@ -44,4 +44,8 @@ pub enum Error {
     /// String read error.
     #[error("Failed to read null-terminated string at offset 0x{0:X}")]
     StringReadError(u64),
+
+    /// A count, offset, or size cannot be represented by the file format or target.
+    #[error("{0} is too large for the UAX format or this platform")]
+    SizeOverflow(&'static str),
 }

@@ -1,3 +1,5 @@
+//! Renders diagnostic images from an XTT file.
+
 use image::{ImageBuffer, Rgba};
 use std::fs;
 use xtt::Reader;
@@ -43,7 +45,7 @@ fn main() {
                     .expect("Failed to create image buffer");
             let output_path = "test_extract/blood_gulch_albedo.png";
             img.save(output_path).expect("Failed to save PNG");
-            println!("  Saved PNG to: {}", output_path);
+            println!("  Saved PNG to: {output_path}");
 
             // Print first few pixels to verify decoding
             println!("\n  First 4 pixels (RGBA):");
@@ -62,7 +64,7 @@ fn main() {
             }
         }
         Err(e) => {
-            println!("  ERROR: {}", e);
+            println!("  ERROR: {e}");
         }
     }
 

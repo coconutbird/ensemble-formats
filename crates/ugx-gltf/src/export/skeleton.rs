@@ -7,12 +7,12 @@ use gltf_json as json;
 use json::validation::Checked::Valid;
 
 use crate::granny_json::{type_members_to_json, variant_to_json};
-use ugx::{Bone, GrannyBone, UgxGeom};
+use ugx::{Bone, Error, GrannyBone, Result, UgxGeom};
 
 /// Build a mapping from section index to mesh index.
-/// Analyzes which bones each section uses and matches against granny_mesh bone_bindings.
+/// Analyzes which bones each section uses and matches against `granny_mesh` `bone_bindings`.
 ///
-/// When multiple granny_meshes have identical bone sets (common for multi-section
+/// When multiple `granny_meshes` have identical bone sets (common for multi-section
 /// rigid models all bound to `GrannyRootBone`), sections are distributed among
 /// the matching meshes in order rather than all mapping to the first match.
 pub(crate) fn build_section_to_mesh_mapping(
@@ -74,12 +74,12 @@ fn get_section_bone_names(
         for v in &vertices {
             for k in 0..4 {
                 if v.bone_weights[k] > 0.0 {
-                    let raw_idx = v.bone_indices[k] as usize;
+                    let raw_idx = usize::from(v.bone_indices[k]);
                     // Resolve to global 0-based bone index.
                     let global_idx = if has_remap {
                         // Section-local 0-based → remap to global 0-based.
                         if raw_idx < section.bone_remap.len() {
-                            section.bone_remap[raw_idx] as usize
+                            usize::from(section.bone_remap[raw_idx])
                         } else {
                             continue;
                         }
@@ -100,15 +100,17 @@ fn get_section_bone_names(
     if used_bones.is_empty() && section_idx < geom.sections.len() {
         let section = &geom.sections[section_idx];
         let rigid_idx = section.rigid_bone_index;
-        if rigid_idx >= 0 && (rigid_idx as usize) < granny_bones.len() {
-            used_bones.insert(granny_bones[rigid_idx as usize].name.clone());
+        if let Ok(rigid_idx) = usize::try_from(rigid_idx)
+            && let Some(bone) = granny_bones.get(rigid_idx)
+        {
+            used_bones.insert(bone.name.clone());
         }
     }
 
     used_bones
 }
 
-/// Find the mesh index whose bone_bindings best matches the section's bones.
+/// Find the mesh index whose `bone_bindings` best matches the section's bones.
 /// Prefers:
 /// 1. Unused meshes over already-used ones (when bone sets are identical)
 /// 2. Exact match (section bones == mesh bones)
@@ -143,21 +145,15 @@ fn find_best_matching_mesh(
         let usage = mesh_usage_count.get(mesh_idx).copied().unwrap_or(0);
 
         // Better if: superset beats non-superset, then prefer unused, then smaller, then more overlap
-        let is_better = if is_superset && !best_score.0 {
-            true
-        } else if is_superset && best_score.0 {
-            // Among supersets: prefer unused, then smaller
-            if usage < best_score.1 {
-                true
-            } else if usage == best_score.1 {
-                mesh_size < best_score.2
-            } else {
-                false
-            }
-        } else if !is_superset && !best_score.0 {
-            overlap > best_score.3
-        } else {
-            false
+        let is_better = match (is_superset, best_score.0) {
+            (true, false) => true,
+            (true, true) => match usage.cmp(&best_score.1) {
+                core::cmp::Ordering::Less => true,
+                core::cmp::Ordering::Equal => mesh_size < best_score.2,
+                core::cmp::Ordering::Greater => false,
+            },
+            (false, false) => overlap > best_score.3,
+            (false, true) => false,
         };
 
         if is_better {
@@ -176,8 +172,7 @@ fn find_best_matching_mesh(
             .iter()
             .enumerate()
             .min_by_key(|&(_, c)| *c)
-            .map(|(i, _)| i)
-            .unwrap_or(mesh_bone_sets.len())
+            .map_or(mesh_bone_sets.len(), |(i, _)| i)
     } else {
         best_mesh
     }
@@ -185,13 +180,13 @@ fn find_best_matching_mesh(
 
 /// Create skeleton nodes from cached data bones (0x700 chunk).
 /// Fallback when granny bones aren't available.
-/// Returns (bone_nodes, inverse_bind_matrices_accessor_index).
+/// Returns (`bone_nodes`, `inverse_bind_matrices_accessor_index`).
 pub(crate) fn create_skeleton_nodes(
     bones: &[Bone],
     buffer_data: &mut Vec<u8>,
     accessors: &mut Vec<json::Accessor>,
     buffer_views: &mut Vec<json::buffer::View>,
-) -> (Vec<json::Node>, u32) {
+) -> Result<(Vec<json::Node>, u32)> {
     let mut nodes = Vec::with_capacity(bones.len());
 
     // Build child lists for hierarchy
@@ -202,7 +197,7 @@ pub(crate) fn create_skeleton_nodes(
             children_map
                 .entry(bone.parent_index)
                 .or_default()
-                .push(i as u32);
+                .push(checked_u32(i, "bone node index")?);
         }
     }
 
@@ -219,33 +214,29 @@ pub(crate) fn create_skeleton_nodes(
         .collect();
 
     // Create nodes with local transforms and parent-child hierarchy.
-    for (i, bone) in bones.iter().enumerate() {
-        let children = children_map.get(&(i as i32)).map(|c| {
-            c.iter()
-                .map(|&idx| json::Index::new(idx))
-                .collect::<Vec<_>>()
-        });
+    for (i, (bone, bone_world)) in bones.iter().zip(&bone_world_dx).enumerate() {
+        let children = children_for(i, &children_map)?;
 
         // DX: local = world * parent_world^{-1}
         // Use model_to_bone[parent] directly (= parent_world^{-1}) to avoid
         // double-inversion precision loss.
         let local_dx = if bone.parent_index < 0 {
-            bone_world_dx[i].clone()
+            bone_world.clone()
         } else {
-            let parent_idx = bone.parent_index as usize;
-            bone_world_dx[i].multiply(&bones[parent_idx].model_to_bone)
+            let parent_idx = usize::try_from(bone.parent_index)
+                .map_err(|_| Error::SizeOverflow("bone parent index"))?;
+            let parent = bones.get(parent_idx).ok_or_else(|| {
+                Error::UnsupportedFormat("Bone parent index is out of bounds".into())
+            })?;
+            bone_world.multiply(&parent.model_to_bone)
         };
 
         // Write DX rows flat = column-major of GL matrix
-        let m = &local_dx.rows;
-        let gltf_matrix = [
-            m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0],
-            m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2], m[3][3],
-        ];
+        let gltf_matrix = flatten_matrix(&local_dx);
 
         nodes.push(json::Node {
             camera: None,
-            children: if children.as_ref().is_none_or(|c| c.is_empty()) {
+            children: if children.as_ref().is_none_or(std::vec::Vec::is_empty) {
                 None
             } else {
                 children
@@ -263,66 +254,25 @@ pub(crate) fn create_skeleton_nodes(
         });
     }
 
-    // Write inverse bind matrices.
-    // model_to_bone rows flat = column-major of GL IBM (same derivation as granny path).
-    while !buffer_data.len().is_multiple_of(4) {
-        buffer_data.push(0);
-    }
-    let ibm_view_idx = buffer_views.len() as u32;
-    let ibm_offset = buffer_data.len();
-
-    for bone in bones {
-        let m = &bone.model_to_bone.rows;
-        for row in m {
-            for &val in row {
-                buffer_data.extend_from_slice(&val.to_le_bytes());
-            }
-        }
-    }
-
-    let ibm_byte_length = buffer_data.len() - ibm_offset;
-
-    buffer_views.push(json::buffer::View {
-        buffer: json::Index::new(0),
-        byte_length: json::validation::USize64(ibm_byte_length as u64),
-        byte_offset: Some(json::validation::USize64(ibm_offset as u64)),
-        byte_stride: None,
-        extensions: None,
-        extras: json::Extras::default(),
-        name: None,
-        target: None,
-    });
-
-    let ibm_accessor_idx = accessors.len() as u32;
-    accessors.push(json::Accessor {
-        buffer_view: Some(json::Index::new(ibm_view_idx)),
-        byte_offset: Some(json::validation::USize64(0)),
-        count: json::validation::USize64(bones.len() as u64),
-        component_type: Valid(json::accessor::GenericComponentType(
-            json::accessor::ComponentType::F32,
-        )),
-        extensions: None,
-        extras: json::Extras::default(),
-        type_: Valid(json::accessor::Type::Mat4),
-        min: None,
-        max: None,
-        name: None,
-        normalized: false,
-        sparse: None,
-    });
-
-    (nodes, ibm_accessor_idx)
+    let accessor = append_inverse_bind_matrices(
+        bones.iter().map(|bone| &bone.model_to_bone),
+        bones.len(),
+        buffer_data,
+        accessors,
+        buffer_views,
+    )?;
+    Ok((nodes, accessor))
 }
 
 /// Create skeleton nodes from granny bones (0x703 chunk).
 /// Uses hierarchical structure with local transforms.
-/// Returns (bone_nodes, inverse_bind_matrices_accessor_index).
+/// Returns (`bone_nodes`, `inverse_bind_matrices_accessor_index`).
 pub(crate) fn create_skeleton_nodes_from_granny(
     bones: &[GrannyBone],
     buffer_data: &mut Vec<u8>,
     accessors: &mut Vec<json::Accessor>,
     buffer_views: &mut Vec<json::buffer::View>,
-) -> (Vec<json::Node>, u32) {
+) -> Result<(Vec<json::Node>, u32)> {
     let mut nodes = Vec::with_capacity(bones.len());
 
     // Build child lists for hierarchy
@@ -333,7 +283,7 @@ pub(crate) fn create_skeleton_nodes_from_granny(
             children_map
                 .entry(bone.parent_index)
                 .or_default()
-                .push(i as u32);
+                .push(checked_u32(i, "Granny bone node index")?);
         }
     }
 
@@ -350,12 +300,8 @@ pub(crate) fn create_skeleton_nodes_from_granny(
         .collect();
 
     // Create nodes with local transforms and parent-child hierarchy.
-    for (i, bone) in bones.iter().enumerate() {
-        let children = children_map.get(&(i as i32)).map(|c| {
-            c.iter()
-                .map(|&idx| json::Index::new(idx))
-                .collect::<Vec<_>>()
-        });
+    for (i, (bone, bone_world)) in bones.iter().zip(&bone_world_dx).enumerate() {
+        let children = children_for(i, &children_map)?;
 
         // In DX row-vector convention: v_world = v_local * local_dx * parent_world_dx
         // So: world_dx = local_dx * parent_world_dx
@@ -364,27 +310,27 @@ pub(crate) fn create_skeleton_nodes_from_granny(
         // Optimization: parent_world_dx^{-1} = IWM[parent] (which we already have),
         // avoiding double-inversion precision loss from (IWM.inverse()).inverse().
         let local_dx = if bone.parent_index < 0 {
-            bone_world_dx[i].clone()
+            bone_world.clone()
         } else {
-            let parent_idx = bone.parent_index as usize;
-            bone_world_dx[i].multiply(&bones[parent_idx].inverse_world_matrix)
+            let parent_idx = usize::try_from(bone.parent_index)
+                .map_err(|_| Error::SizeOverflow("Granny bone parent index"))?;
+            let parent = bones.get(parent_idx).ok_or_else(|| {
+                Error::UnsupportedFormat("Granny bone parent index is out of bounds".into())
+            })?;
+            bone_world.multiply(&parent.inverse_world_matrix)
         };
 
         // glTF column-major storage of M_gl = row-major storage of M_dx
         // (because M_gl = M_dx^T, and column-major(M^T) = row-major(M))
         // So just write DX matrix rows flat.
-        let m = &local_dx.rows;
-        let gltf_matrix = [
-            m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0],
-            m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2], m[3][3],
-        ];
+        let gltf_matrix = flatten_matrix(&local_dx);
 
         // Serialize extended data into node extras if present
         let extras = build_bone_extras(bone);
 
         nodes.push(json::Node {
             camera: None,
-            children: if children.as_ref().is_none_or(|c| c.is_empty()) {
+            children: if children.as_ref().is_none_or(std::vec::Vec::is_empty) {
                 None
             } else {
                 children
@@ -402,43 +348,81 @@ pub(crate) fn create_skeleton_nodes_from_granny(
         });
     }
 
-    // Write inverse bind matrices.
-    // IWM is the model->bone transform in DX convention.
-    // glTF IBM in GL convention = IWM^T.
-    // column-major(IWM^T) = row-major(IWM), so just write IWM rows flat.
+    let accessor = append_inverse_bind_matrices(
+        bones.iter().map(|bone| &bone.inverse_world_matrix),
+        bones.len(),
+        buffer_data,
+        accessors,
+        buffer_views,
+    )?;
+    Ok((nodes, accessor))
+}
+
+fn children_for(
+    bone_index: usize,
+    children_map: &std::collections::HashMap<i32, Vec<u32>>,
+) -> Result<Option<Vec<json::Index<json::scene::Node>>>> {
+    let key = i32::try_from(bone_index).map_err(|_| Error::SizeOverflow("bone node index"))?;
+    Ok(children_map.get(&key).and_then(|children| {
+        (!children.is_empty()).then(|| {
+            children
+                .iter()
+                .map(|&index| json::Index::new(index))
+                .collect()
+        })
+    }))
+}
+
+fn flatten_matrix(matrix: &ugx::Matrix4x4) -> [f32; 16] {
+    let rows = &matrix.rows;
+    [
+        rows[0][0], rows[0][1], rows[0][2], rows[0][3], rows[1][0], rows[1][1], rows[1][2],
+        rows[1][3], rows[2][0], rows[2][1], rows[2][2], rows[2][3], rows[3][0], rows[3][1],
+        rows[3][2], rows[3][3],
+    ]
+}
+
+fn append_inverse_bind_matrices<'a>(
+    matrices: impl IntoIterator<Item = &'a ugx::Matrix4x4>,
+    matrix_count: usize,
+    buffer_data: &mut Vec<u8>,
+    accessors: &mut Vec<json::Accessor>,
+    buffer_views: &mut Vec<json::buffer::View>,
+) -> Result<u32> {
     while !buffer_data.len().is_multiple_of(4) {
         buffer_data.push(0);
     }
-    let ibm_view_idx = buffer_views.len() as u32;
-    let ibm_offset = buffer_data.len();
-
-    for bone in bones {
-        let m = &bone.inverse_world_matrix.rows;
-        for row in m {
-            for &val in row {
-                buffer_data.extend_from_slice(&val.to_le_bytes());
+    let view_index = checked_u32(buffer_views.len(), "inverse-bind-matrix view index")?;
+    let byte_offset = buffer_data.len();
+    for matrix in matrices {
+        for row in &matrix.rows {
+            for value in row {
+                buffer_data.extend_from_slice(&value.to_le_bytes());
             }
         }
     }
-
-    let ibm_byte_length = buffer_data.len() - ibm_offset;
-
+    let byte_length = buffer_data.len() - byte_offset;
     buffer_views.push(json::buffer::View {
         buffer: json::Index::new(0),
-        byte_length: json::validation::USize64(ibm_byte_length as u64),
-        byte_offset: Some(json::validation::USize64(ibm_offset as u64)),
+        byte_length: json::validation::USize64(checked_u64(
+            byte_length,
+            "inverse-bind-matrix byte length",
+        )?),
+        byte_offset: Some(json::validation::USize64(checked_u64(
+            byte_offset,
+            "inverse-bind-matrix byte offset",
+        )?)),
         byte_stride: None,
         extensions: None,
         extras: json::Extras::default(),
         name: None,
         target: None,
     });
-
-    let ibm_accessor_idx = accessors.len() as u32;
+    let accessor_index = checked_u32(accessors.len(), "inverse-bind-matrix accessor index")?;
     accessors.push(json::Accessor {
-        buffer_view: Some(json::Index::new(ibm_view_idx)),
+        buffer_view: Some(json::Index::new(view_index)),
         byte_offset: Some(json::validation::USize64(0)),
-        count: json::validation::USize64(bones.len() as u64),
+        count: json::validation::USize64(checked_u64(matrix_count, "inverse-bind-matrix count")?),
         component_type: Valid(json::accessor::GenericComponentType(
             json::accessor::ComponentType::F32,
         )),
@@ -451,18 +435,25 @@ pub(crate) fn create_skeleton_nodes_from_granny(
         normalized: false,
         sparse: None,
     });
+    Ok(accessor_index)
+}
 
-    (nodes, ibm_accessor_idx)
+fn checked_u32(value: usize, context: &'static str) -> Result<u32> {
+    u32::try_from(value).map_err(|_| Error::SizeOverflow(context))
+}
+
+fn checked_u64(value: usize, context: &'static str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| Error::SizeOverflow(context))
 }
 
 /// Build glTF node extras for a bone's Granny data.
 ///
-/// Stores lod_error and extended data (type + variant) as JSON so they
+/// Stores `lod_error` and extended data (type + variant) as JSON so they
 /// survive a glTF roundtrip. Local transforms are NOT stored — the writer
 /// recomputes them from inverse world matrices on import.
 fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
     let has_extended = bone.extended_data.is_some() && bone.extended_data_type.is_some();
-    let has_lod_error = bone.lod_error != 0.0;
+    let has_lod_error = bone.lod_error.to_bits() & 0x7fff_ffff != 0;
 
     if !has_extended && !has_lod_error {
         return json::Extras::default();
@@ -486,7 +477,6 @@ fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
 
 /// Convert an f32 to a JSON value, preserving exact float representation.
 fn json_f32(v: f32) -> serde_json::Value {
-    serde_json::Number::from_f64(v as f64)
-        .map(serde_json::Value::Number)
-        .unwrap_or(serde_json::Value::Null)
+    serde_json::Number::from_f64(f64::from(v))
+        .map_or(serde_json::Value::Null, serde_json::Value::Number)
 }

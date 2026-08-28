@@ -3,7 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use nostdio::{ReadLe, SliceCursor};
+use nostdio::{Cursor, ReadLe};
 
 use crate::error::{Error, Result};
 
@@ -18,11 +18,19 @@ pub struct AABB {
 
 impl AABB {
     /// Read an AABB from 24 bytes of little-endian `f32` data (min xyz, max xyz).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is truncated or the cursor position
+    /// cannot be represented on the target platform.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let mut cur = SliceCursor::new(&data[*pos..]);
+        let remaining = data.get(*pos..).ok_or_else(|| Error::UnexpectedEof {
+            context: "AABB".into(),
+        })?;
+        let mut cur = Cursor::new(remaining);
         let min = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
         let max = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
-        *pos += cur.position();
+        crate::advance_position(pos, cur.position(), "binary cursor position")?;
         Ok(Self { min, max })
     }
 }
@@ -38,11 +46,19 @@ pub struct Sphere {
 
 impl Sphere {
     /// Read a bounding sphere from 16 bytes of little-endian `f32` data (center xyz, radius).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is truncated or the cursor position
+    /// cannot be represented on the target platform.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let mut cur = SliceCursor::new(&data[*pos..]);
+        let remaining = data.get(*pos..).ok_or_else(|| Error::UnexpectedEof {
+            context: "bounding sphere".into(),
+        })?;
+        let mut cur = Cursor::new(remaining);
         let center = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
         let radius = cur.read_f32_le()?;
-        *pos += cur.position();
+        crate::advance_position(pos, cur.position(), "binary cursor position")?;
         Ok(Self { center, radius })
     }
 }
@@ -58,18 +74,28 @@ pub struct Keyframe {
 
 impl Keyframe {
     /// Read a morph-target keyframe: 4-byte time (f32le) + 4-byte length (u32le) + vertex blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is truncated or a keyframe size cannot be
+    /// represented on the target platform.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let mut cur = SliceCursor::new(&data[*pos..]);
+        let remaining = data.get(*pos..).ok_or_else(|| Error::UnexpectedEof {
+            context: "keyframe".into(),
+        })?;
+        let mut cur = Cursor::new(remaining);
         let time = cur.read_f32_le()?;
-        let len = cur.read_u32_le()? as usize;
-        *pos += cur.position();
-        let verts_end = *pos + len;
-        if verts_end > data.len() {
+        let len = crate::checked_usize(u64::from(cur.read_u32_le()?), "keyframe vertex data")?;
+        crate::advance_position(pos, cur.position(), "binary cursor position")?;
+        let Some(verts_end) = pos.checked_add(len) else {
+            return Err(Error::SizeOverflow("keyframe vertex data"));
+        };
+        let Some(verts) = data.get(*pos..verts_end) else {
             return Err(Error::UnexpectedEof {
                 context: String::from("keyframe verts"),
             });
-        }
-        let verts = data[*pos..verts_end].to_vec();
+        };
+        let verts = verts.to_vec();
         *pos = verts_end;
         Ok(Self { time, verts })
     }

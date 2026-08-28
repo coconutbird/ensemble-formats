@@ -8,6 +8,7 @@ use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use nostdio::{Cursor, ReadBe};
 use zerocopy::Ref;
 
 use crate::types::RoadData;
@@ -43,7 +44,11 @@ impl AlbedoHeader {
     /// Size of the header in bytes.
     pub const SIZE: usize = 16;
 
-    /// Parse albedo header from bytes (BigEndian, zero-copy).
+    /// Parse albedo header from bytes (`BigEndian`, zero-copy).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` is shorter than the 16-byte albedo header.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let (raw, _): (Ref<_, AlbedoHeaderRaw>, _) = Ref::from_prefix(data)
             .map_err(|_| Error::InvalidChunkData("Albedo header too short".into()))?;
@@ -65,6 +70,11 @@ impl XttFile {
     ///
     /// For DE/PC version, the data appears to be stored without Xbox 360 tiling,
     /// but may still need endian-swapping of the DXT1 blocks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header or dimensions are invalid, the compressed
+    /// payload is truncated, or the BC1 decoder rejects the payload.
     pub fn decode_albedo(&self) -> Result<AlbedoAtlas> {
         if self.albedo_data.len() < AlbedoHeader::SIZE {
             return Err(Error::InvalidChunkData("Albedo data too short".into()));
@@ -79,33 +89,44 @@ impl XttFile {
             )));
         }
 
-        let width = header.width as usize;
-        let height = header.height as usize;
+        let width = nonnegative_usize(header.width, "albedo width")?;
+        let height = nonnegative_usize(header.height, "albedo height")?;
+        let atlas_width = u32::try_from(header.width)
+            .map_err(|_| Error::InvalidChunkData("Invalid albedo width".into()))?;
+        let atlas_height = u32::try_from(header.height)
+            .map_err(|_| Error::InvalidChunkData("Invalid albedo height".into()))?;
+        let num_mips = u32::try_from(header.num_mips)
+            .map_err(|_| Error::InvalidChunkData("Invalid albedo mip count".into()))?;
 
-        // DXT1/BC1: 4x4 blocks = 8 bytes per block
-        // Expected size = (width * height) / 2
-        let expected_dxt1_size = (width * height) / 2;
+        // DXT1/BC1 stores each 4x4 block in 8 bytes.
+        let expected_dxt1_size = width
+            .div_ceil(4)
+            .checked_mul(height.div_ceil(4))
+            .and_then(|blocks| blocks.checked_mul(8))
+            .ok_or(Error::SizeOverflow("albedo texture"))?;
         let data_start = AlbedoHeader::SIZE;
         let available_data = self.albedo_data.len() - data_start;
 
         if available_data < expected_dxt1_size {
             return Err(Error::InvalidChunkData(format!(
-                "Not enough albedo data: expected {} bytes, have {}",
-                expected_dxt1_size, available_data
+                "Not enough albedo data: expected {expected_dxt1_size} bytes, have {available_data}"
             )));
         }
 
         // Extract mip0 DXT1 data
-        let dxt1_data = &self.albedo_data[data_start..data_start + expected_dxt1_size];
+        let data_end = data_start
+            .checked_add(expected_dxt1_size)
+            .ok_or(Error::SizeOverflow("albedo payload"))?;
+        let dxt1_data = &self.albedo_data[data_start..data_end];
 
         // For DE/PC, try decoding directly first (no endian swap)
         // If that fails or produces garbage, we'll try with endian swap
         let pixels = decode_dxt1(dxt1_data, width, height)?;
 
         Ok(AlbedoAtlas {
-            width: header.width as u32,
-            height: header.height as u32,
-            num_mips: header.num_mips as u32,
+            width: atlas_width,
+            height: atlas_height,
+            num_mips,
             pixels,
         })
     }
@@ -114,6 +135,10 @@ impl XttFile {
     ///
     /// Convenience method that delegates to [`decode_road_data`].
     /// Returns `None` if no road data is present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the road chunk is malformed or truncated.
     pub fn decode_road(&self) -> Result<Option<RoadData>> {
         if self.road_data.is_empty() {
             return Ok(None);
@@ -124,19 +149,22 @@ impl XttFile {
 
 /// Decode DXT1 (BC1) compressed data to RGBA pixels.
 fn decode_dxt1(data: &[u8], width: usize, height: usize) -> Result<Vec<u8>> {
-    let mut pixels = vec![0u32; width * height];
+    let pixel_count = width
+        .checked_mul(height)
+        .ok_or(Error::SizeOverflow("decoded albedo pixels"))?;
+    let mut pixels = vec![0u32; pixel_count];
 
     texture2ddecoder::decode_bc1(data, width, height, &mut pixels)
-        .map_err(|e| Error::InvalidChunkData(format!("DXT1 decode error: {}", e)))?;
+        .map_err(|e| Error::InvalidChunkData(format!("DXT1 decode error: {e}")))?;
 
     // Convert u32 pixels to RGBA bytes
-    let mut rgba = Vec::with_capacity(width * height * 4);
+    let rgba_size = pixel_count
+        .checked_mul(4)
+        .ok_or(Error::SizeOverflow("decoded albedo bytes"))?;
+    let mut rgba = Vec::with_capacity(rgba_size);
     for pixel in pixels {
         // texture2ddecoder returns BGRA format
-        let b = (pixel & 0xFF) as u8;
-        let g = ((pixel >> 8) & 0xFF) as u8;
-        let r = ((pixel >> 16) & 0xFF) as u8;
-        let a = ((pixel >> 24) & 0xFF) as u8;
+        let [b, g, r, a] = pixel.to_le_bytes();
         rgba.push(r);
         rgba.push(g);
         rgba.push(b);
@@ -175,18 +203,23 @@ impl XttLinker {
     /// - Multiple "slices" for chunks with more than 4 layers
     ///
     /// Returns alpha maps for layers 1..n (layer 0 is the base with no alpha).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the layer count is negative, a required allocation
+    /// size overflows, or the packed alpha payload is truncated.
     pub fn decode_splat_alpha(&self) -> Result<SplatAlphaData> {
-        if self.num_splat_layers <= 1 {
+        let num_layers = nonnegative_usize(self.num_splat_layers, "splat layer count")?;
+        if num_layers <= 1 {
             // Single layer = no blending needed
             return Ok(SplatAlphaData {
-                num_layers: self.num_splat_layers as usize,
+                num_layers,
                 alpha_maps: Vec::new(),
             });
         }
 
-        let num_layers = self.num_splat_layers as usize;
         let num_slices = ((num_layers - 1) >> 2) + 1; // Each slice holds 4 layers
-        let expected_size = num_slices * ALPHA_TEXTURE_SIZE * ALPHA_TEXTURE_SIZE * 2;
+        let expected_size = alpha_payload_size(num_slices)?;
 
         if self.splat_alpha_data.len() < expected_size {
             return Err(Error::InvalidChunkData(format!(
@@ -205,7 +238,7 @@ impl XttLinker {
         let mut alpha_maps = Vec::with_capacity(num_layers - 1);
 
         for layer_idx in 1..num_layers {
-            let alpha_map = decode_layer_alpha(&self.splat_alpha_data, layer_idx, num_slices)?;
+            let alpha_map = decode_layer_alpha(&self.splat_alpha_data, layer_idx);
             alpha_maps.push(alpha_map);
         }
 
@@ -223,17 +256,22 @@ impl XttLinker {
     /// - Multiple "slices" for chunks with more than 4 decal layers
     ///
     /// Returns alpha maps for decal layers (one per decal layer).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the layer count is negative, a required allocation
+    /// size overflows, or the packed alpha payload is truncated.
     pub fn decode_decal_alpha(&self) -> Result<DecalAlphaData> {
-        if self.num_decal_layers <= 0 {
+        let num_layers = nonnegative_usize(self.num_decal_layers, "decal layer count")?;
+        if num_layers == 0 {
             return Ok(DecalAlphaData {
                 num_layers: 0,
                 alpha_maps: Vec::new(),
             });
         }
 
-        let num_layers = self.num_decal_layers as usize;
         let num_slices = ((num_layers - 1) >> 2) + 1;
-        let expected_size = num_slices * ALPHA_TEXTURE_SIZE * ALPHA_TEXTURE_SIZE * 2;
+        let expected_size = alpha_payload_size(num_slices)?;
 
         if self.decal_alpha_data.len() < expected_size {
             return Err(Error::InvalidChunkData(format!(
@@ -247,7 +285,7 @@ impl XttLinker {
         let mut alpha_maps = Vec::with_capacity(num_layers);
 
         for layer_idx in 0..num_layers {
-            let alpha_map = decode_layer_alpha(&self.decal_alpha_data, layer_idx, num_slices)?;
+            let alpha_map = decode_layer_alpha(&self.decal_alpha_data, layer_idx);
             alpha_maps.push(alpha_map);
         }
 
@@ -256,6 +294,18 @@ impl XttLinker {
             alpha_maps,
         })
     }
+}
+
+fn nonnegative_usize(value: i32, field: &'static str) -> Result<usize> {
+    usize::try_from(value).map_err(|_| Error::InvalidChunkData(format!("Invalid {field}: {value}")))
+}
+
+fn alpha_payload_size(num_slices: usize) -> Result<usize> {
+    num_slices
+        .checked_mul(ALPHA_TEXTURE_SIZE)
+        .and_then(|size| size.checked_mul(ALPHA_TEXTURE_SIZE))
+        .and_then(|size| size.checked_mul(2))
+        .ok_or(Error::SizeOverflow("alpha texture payload"))
 }
 
 /// Decoded decal alpha data for a terrain chunk.
@@ -273,51 +323,51 @@ pub struct DecalAlphaData {
 /// Xbox 360 uses a tiled memory layout. This converts (x, y) to the
 /// u16 index in the tiled source data.
 ///
-/// Reverse engineered from untile_xbox360_alpha_texture (0x1407E34E0).
+/// Reverse engineered from `untile_xbox360_alpha_texture` (0x1407E34E0).
 /// Translated directly from the assembly to ensure correctness.
 /// Xbox 360 tiled texture offset calculation.
-/// This matches the game's untile_xbox360_alpha_texture function at 0x1407E34E0.
-fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
+/// This matches the game's `untile_xbox360_alpha_texture` function at 0x1407E34E0.
+fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> Option<usize> {
     // Block width calculation: (width + 31) >> 5
     let block_width = (width + 31) >> 5;
 
     // Pre-computed values from y (computed once per row in the game)
-    let r10 = (y & 6) << 2; // (y & 6) * 4
-    let r15 = (y & 1) << 3; // (y & 1) * 8
-    let rbx = (y & 8) << 1; // (y & 8) * 2
-    let eax = (y & 0x10) << 4; // (y & 0x10) * 16
-    let r11 = (y >> 5) * block_width;
-    let r12 = (y & 0xF8) << 1; // 2 * (y & 0xF8)
+    let paired_row_bits = (y & 6) << 2;
+    let odd_row_bit = (y & 1) << 3;
+    let eighth_row_bit = (y & 8) << 1;
+    let sixteenth_row_bit = (y & 0x10) << 4;
+    let macro_row = (y >> 5) * block_width;
+    let row_band = (y & 0xF8) << 1;
 
     // Per-pixel calculation (inner loop)
-    let mut r8 = (x & 7) + r10;
-    r8 += r8; // r8 *= 2
+    let mut pixel_lane = (x & 7) + paired_row_bits;
+    pixel_lane += pixel_lane;
 
-    let mut edx = (r11 << 5) + (x & 0xFFFFFFE0);
+    let mut macro_base = (macro_row << 5) + (x & 0xFFFF_FFE0);
 
-    let ecx_masked = r8 & 0xFFFFFFF0;
-    r8 &= 0xF;
+    let aligned_lane = pixel_lane & 0xFFFF_FFF0;
+    pixel_lane &= 0xF;
 
-    let ecx_plus_r15 = ecx_masked + r15;
-    edx = ecx_plus_r15 + (edx << 2); // ecx + edx * 4
+    let row_aligned_lane = aligned_lane + odd_row_bit;
+    macro_base = row_aligned_lane + (macro_base << 2);
 
-    let ecx2 = r8 + (rbx << 3); // r8 + rbx * 8
-    let r9 = ecx2 + (edx << 1); // ecx + edx * 2 = v20
+    let shuffled_lane = pixel_lane + (eighth_row_bit << 3);
+    let tiled_pair = shuffled_lane + (macro_base << 1);
 
     // Extract bits for v21
-    let edx2 = (r9 & 0xFFFFFE00) + eax;
-    let ecx3 = r9 & 0x1C0;
-    let r9_low = r9 & 0x3F;
+    let high_region = (tiled_pair & 0xFFFF_FE00) + sixteenth_row_bit;
+    let middle_region = tiled_pair & 0x1C0;
+    let low_region = tiled_pair & 0x3F;
 
-    let edx3 = ecx3 + (edx2 << 1); // ecx + edx * 2 = v21
+    let tiled_region = middle_region + (high_region << 1);
 
     // Final calculation
-    let v22 = r12 + x; // v19 + x
-    let ecx4 = (v22 << 3) & 0xC0; // (v22 * 8) & 0xC0
+    let row_column_mix = row_band + x;
+    let row_shuffle = (row_column_mix << 3) & 0xC0;
 
-    let r8_final = ecx4 + (edx3 << 2) + r9_low; // ecx + edx * 4 + r9
+    let byte_offset = row_shuffle + (tiled_region << 2) + low_region;
 
-    (r8_final >> 1) as usize // >> 1 to get u16 index
+    usize::try_from(byte_offset >> 1).ok()
 }
 
 /// Decode a single layer's alpha map from the packed alpha data.
@@ -361,7 +411,7 @@ fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> usize {
 ///    Xbox 360 big-endian to PC little-endian.
 /// 3. Both buffers are passed to `processLinkerData` (0x14066D890), which stores
 ///    them using X-major chunk indexing: `gridZ + numXChunks * gridX`.
-fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Result<Vec<u8>> {
+fn decode_layer_alpha(data: &[u8], layer_idx: usize) -> Vec<u8> {
     // layer_idx is a 0-based index into the alpha texture channels.
     // For splat overlays: caller passes (layer_idx - 1) so first overlay = 0.
     // For decals: caller passes layer_idx directly (already 0-based).
@@ -374,18 +424,30 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
     for y in 0..ALPHA_TEXTURE_SIZE {
         for x in 0..ALPHA_TEXTURE_SIZE {
             // Use GLOBAL y coordinate - slices are stacked vertically in tiled data
-            let global_y = (slice_idx * ALPHA_TEXTURE_SIZE + y) as u32;
+            let Some(global_y) = slice_idx
+                .checked_mul(ALPHA_TEXTURE_SIZE)
+                .and_then(|offset| offset.checked_add(y))
+                .and_then(|coordinate| u32::try_from(coordinate).ok())
+            else {
+                continue;
+            };
+            let Ok(pixel_x) = u32::try_from(x) else {
+                continue;
+            };
 
             // Get tiled offset for this (x, global_y) position
-            let tiled_idx = xbox360_tiled_offset(x as u32, global_y, ALPHA_TEXTURE_SIZE as u32);
-            let byte_offset = tiled_idx * 2;
-
-            if byte_offset + 1 >= data.len() {
-                continue; // Skip if out of bounds
-            }
+            let Some(tiled_index) = xbox360_tiled_offset(pixel_x, global_y, 64) else {
+                continue;
+            };
+            let Some(byte_offset) = tiled_index.checked_mul(2) else {
+                continue;
+            };
+            let Some(pixel_bytes) = data.get(byte_offset..byte_offset.saturating_add(2)) else {
+                continue;
+            };
 
             // Read as little-endian (PC/DE format, matching game's x86 uint16 read)
-            let pixel = u16::from_le_bytes([data[byte_offset], data[byte_offset + 1]]);
+            let [low_byte, high_byte] = [pixel_bytes[0], pixel_bytes[1]];
 
             // BARG extraction: LE bit positions → original Xbox 360 channel content
             //   channel 0 → bits 0-3  ("B" field) → Xbox R
@@ -393,10 +455,10 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
             //   channel 2 → bits 8-11  ("R" field) → Xbox B
             //   channel 3 → bits 4-7   ("G" field) → Xbox A
             let alpha_4bit = match channel_idx {
-                0 => (pixel & 0x0F) as u8,         // "B" field → Xbox R
-                1 => ((pixel >> 12) & 0x0F) as u8, // "A" field → Xbox G
-                2 => ((pixel >> 8) & 0x0F) as u8,  // "R" field → Xbox B
-                3 => ((pixel >> 4) & 0x0F) as u8,  // "G" field → Xbox A
+                0 => low_byte & 0x0F,  // "B" field → Xbox R
+                1 => high_byte >> 4,   // "A" field → Xbox G
+                2 => high_byte & 0x0F, // "R" field → Xbox B
+                3 => low_byte >> 4,    // "G" field → Xbox A
                 _ => unreachable!(),
             };
 
@@ -406,7 +468,7 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize, _num_slices: usize) -> Resu
         }
     }
 
-    Ok(alpha_map)
+    alpha_map
 }
 
 // ============================================================================
@@ -417,18 +479,6 @@ use alloc::string::String;
 
 use crate::types::{RoadQNChunk, RoadVertex};
 use half::f16;
-
-/// Helper: read a big-endian i32 from a slice at the given offset.
-#[inline]
-fn read_i32_be(data: &[u8], off: usize) -> i32 {
-    i32::from_be_bytes(data[off..off + 4].try_into().unwrap())
-}
-
-/// Helper: read a big-endian u16 from a slice at the given offset.
-#[inline]
-fn read_u16_be(data: &[u8], off: usize) -> u16 {
-    u16::from_be_bytes(data[off..off + 2].try_into().unwrap())
-}
 
 /// Decode road data from the raw XTT road chunk (0x8888).
 ///
@@ -441,49 +491,45 @@ fn read_u16_be(data: &[u8], off: usize) -> u16 {
 ///   - `i32`: memory size in bytes
 ///   - Vertex data: `numTris * 3` vertices, each = 6 × float16:
 ///     `[posX, posY, posZ, pad, uvX, uvY]`
+///
+/// # Errors
+///
+/// Returns an error if the road chunk is truncated, contains a negative count,
+/// or describes more vertices than can fit in memory.
 pub fn decode_road_data(data: &[u8]) -> Result<RoadData> {
-    if data.is_empty() {
-        return Err(Error::InvalidChunkData("Empty road data".into()));
-    }
+    let texture_bytes = data.get(..32).ok_or(Error::UnexpectedEof)?;
+    let name_end = texture_bytes
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(texture_bytes.len());
+    let texture_name = String::from_utf8_lossy(&texture_bytes[..name_end]).into_owned();
+    let mut cursor = Cursor::new(data.get(32..).ok_or(Error::UnexpectedEof)?);
 
-    // Read texture filename (32 bytes, null-terminated)
-    let end = data[..32].iter().position(|&b| b == 0).unwrap_or(32);
-    let texture_name = String::from_utf8_lossy(&data[..end]).into_owned();
-    let mut off = 32;
-
-    let num_qn_chunks = read_i32_be(data, off);
-    off += 4;
-    let mut qn_chunks = Vec::with_capacity(num_qn_chunks as usize);
+    let num_qn_chunks = nonnegative_usize(cursor.read_i32_be()?, "road QN chunk count")?;
+    let mut qn_chunks = Vec::with_capacity(num_qn_chunks);
 
     for _ in 0..num_qn_chunks {
-        let qn_index = read_i32_be(data, off);
-        off += 4;
-        let num_tris = read_i32_be(data, off);
-        off += 4;
-        let _mem_size = read_i32_be(data, off);
-        off += 4;
+        let qn_index = cursor.read_i32_be()?;
+        let num_tris = nonnegative_usize(cursor.read_i32_be()?, "road triangle count")?;
+        let _memory_size = cursor.read_i32_be()?;
 
-        let num_verts = (num_tris * 3) as usize;
+        let num_verts = num_tris
+            .checked_mul(3)
+            .ok_or(Error::SizeOverflow("road vertex count"))?;
         let mut vertices = Vec::with_capacity(num_verts);
 
         for _ in 0..num_verts {
             // Each vertex: 6 × float16 (big-endian)
-            let px = f16::from_bits(read_u16_be(data, off)).to_f32();
-            off += 2;
-            let py = f16::from_bits(read_u16_be(data, off)).to_f32();
-            off += 2;
-            let pz = f16::from_bits(read_u16_be(data, off)).to_f32();
-            off += 2;
-            let _pad = read_u16_be(data, off);
-            off += 2;
-            let u = f16::from_bits(read_u16_be(data, off)).to_f32();
-            off += 2;
-            let v = f16::from_bits(read_u16_be(data, off)).to_f32();
-            off += 2;
+            let position_x = f16::from_bits(cursor.read_u16_be()?).to_f32();
+            let position_y = f16::from_bits(cursor.read_u16_be()?).to_f32();
+            let position_z = f16::from_bits(cursor.read_u16_be()?).to_f32();
+            let _padding = cursor.read_u16_be()?;
+            let texture_u = f16::from_bits(cursor.read_u16_be()?).to_f32();
+            let texture_v = f16::from_bits(cursor.read_u16_be()?).to_f32();
 
             vertices.push(RoadVertex {
-                position: [px, py, pz],
-                uv: [u, v],
+                position: [position_x, position_y, position_z],
+                uv: [texture_u, texture_v],
             });
         }
 

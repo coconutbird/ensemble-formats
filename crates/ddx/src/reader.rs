@@ -6,6 +6,7 @@
 
 use alloc::format;
 use alloc::vec::Vec;
+use nostdio::{Cursor, ReadBe, ReadLe};
 
 use crate::format::DataFormat;
 use crate::header::{
@@ -15,12 +16,16 @@ use crate::header::{
 use crate::{Error, Result};
 
 /// DDS file magic number "DDS " (0x20534444 in little-endian)
-const DDS_MAGIC: u32 = 0x20534444;
+const DDS_MAGIC: u32 = 0x2053_4444;
 
 /// Read a little-endian u32 from a byte slice at the given offset.
 #[inline]
-fn le_u32(data: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes(data[off..off + 4].try_into().unwrap())
+fn le_u32(data: &[u8], offset: usize) -> Result<u32> {
+    let mut cursor = Cursor::new(data.get(offset..).ok_or(Error::HeaderTooShort {
+        expected: offset.saturating_add(4),
+        actual: data.len(),
+    })?);
+    Ok(cursor.read_u32_le()?)
 }
 
 /// Texture information extracted from a DDX file.
@@ -61,6 +66,11 @@ impl Reader {
     ///
     /// Automatically detects whether the file is a standard DDS file
     /// (Definitive Edition) or an ECF-wrapped DDX file (Xbox 360 original).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the DDS or ECF-wrapped DDX input is truncated,
+    /// invalid, unsupported, or cannot be decompressed.
     pub fn read(data: &[u8]) -> Result<DdxTexture> {
         DdxTexture::from_bytes(data)
     }
@@ -72,12 +82,17 @@ impl DdxTexture {
     /// Automatically detects whether the file is:
     /// - A standard DDS file (Definitive Edition)
     /// - An ECF-wrapped DDX file (Xbox 360 original)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the DDS or ECF-wrapped DDX input is truncated,
+    /// invalid, unsupported, or cannot be decompressed.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         if data.len() < 4 {
             return Err(Error::DecompressionError("File too small".into()));
         }
 
-        let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+        let magic = le_u32(data, 0)?;
 
         if magic == DDS_MAGIC {
             Self::from_dds(data)
@@ -95,27 +110,36 @@ impl DdxTexture {
         }
 
         // DDS_HEADER structure (124 bytes) starts at offset 4 (after magic)
-        let header_size = le_u32(data, 4);
+        let header_size = le_u32(data, 4)?;
         if header_size != 124 {
             return Err(Error::DecompressionError(format!(
-                "Invalid DDS header size: {}",
-                header_size
+                "Invalid DDS header size: {header_size}"
             )));
         }
 
-        let flags = le_u32(data, 8);
-        let height = le_u32(data, 12);
-        let width = le_u32(data, 16);
+        let flags = le_u32(data, 8)?;
+        let height = le_u32(data, 12)?;
+        let width = le_u32(data, 16)?;
         // _pitch_or_linear_size at 20, _depth at 24
-        let mip_map_count = le_u32(data, 28);
+        let mip_map_count = le_u32(data, 28)?;
         // reserved[11] at 32..76
 
         // DDS_PIXELFORMAT at offset 76 (32 bytes)
         // _pf_size at 76
-        let pf_flags = le_u32(data, 80);
-        let four_cc: [u8; 4] = data[84..88].try_into().unwrap();
+        let pf_flags = le_u32(data, 80)?;
+        let four_cc: [u8; 4] = data
+            .get(84..88)
+            .ok_or(Error::HeaderTooShort {
+                expected: 88,
+                actual: data.len(),
+            })?
+            .try_into()
+            .map_err(|_| Error::HeaderTooShort {
+                expected: 88,
+                actual: data.len(),
+            })?;
         // _rgb_bit_count at 88, _r_mask at 92, _g_mask at 96, _b_mask at 100
-        let a_mask = le_u32(data, 104);
+        let a_mask = le_u32(data, 104)?;
         // _caps at 108, _caps2 at 112, _caps3 at 116, _caps4 at 120, _reserved2 at 124
 
         // Check for DX10 extended header
@@ -126,21 +150,19 @@ impl DdxTexture {
                 ));
             }
             // DDS_HEADER_DXT10 at offset 128 (20 bytes)
-            let dxgi_format = le_u32(data, 128);
+            let dxgi_format = le_u32(data, 128)?;
 
             let format = match dxgi_format {
-                71 | 72 => DataFormat::Dxt1, // BC1
-                74 | 75 => DataFormat::Dxt3, // BC2
-                77 | 78 => DataFormat::Dxt5, // BC3
-                80 | 81 => DataFormat::A8,   // BC4
-                83 | 84 => DataFormat::Dxn,  // BC5
-                98 | 99 => DataFormat::Bc7,  // BC7 UNORM / UNORM_SRGB
-                28 => DataFormat::A8R8G8B8,  // R8G8B8A8_UNORM
-                87 => DataFormat::A8R8G8B8,  // B8G8R8A8_UNORM
+                71 | 72 => DataFormat::Dxt1,     // BC1
+                74 | 75 => DataFormat::Dxt3,     // BC2
+                77 | 78 => DataFormat::Dxt5,     // BC3
+                80 | 81 => DataFormat::A8,       // BC4
+                83 | 84 => DataFormat::Dxn,      // BC5
+                98 | 99 => DataFormat::Bc7,      // BC7 UNORM / UNORM_SRGB
+                28 | 87 => DataFormat::A8R8G8B8, // RGBA8 / BGRA8 UNORM
                 _ => {
                     return Err(Error::DecompressionError(format!(
-                        "Unsupported DXGI format: {}",
-                        dxgi_format
+                        "Unsupported DXGI format: {dxgi_format}"
                     )));
                 }
             };
@@ -279,7 +301,9 @@ fn decompress_mip_data(data: &mut &[u8], output: &mut Vec<u8>) -> Result<()> {
     }
 
     // Read 4-byte big-endian compressed size
-    let comp_size = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
+    let mut cursor = Cursor::new(*data);
+    let comp_size = usize::try_from(cursor.read_u32_be()?)
+        .map_err(|_| Error::SizeOverflow("compressed mip size"))?;
 
     if comp_size == 0 {
         return Err(Error::DecompressionError("Compressed size is 0".into()));
@@ -296,7 +320,7 @@ fn decompress_mip_data(data: &mut &[u8], output: &mut Vec<u8>) -> Result<()> {
     // Decompress using deflate (raw deflate, no zlib/gzip wrapper)
     let compressed = &data[4..4 + comp_size];
     let decompressed = miniz_oxide::inflate::decompress_to_vec(compressed)
-        .map_err(|e| Error::DecompressionError(format!("Deflate error: {:?}", e)))?;
+        .map_err(|e| Error::DecompressionError(format!("Deflate error: {e:?}")))?;
     output.extend_from_slice(&decompressed);
 
     // Advance cursor past this mip

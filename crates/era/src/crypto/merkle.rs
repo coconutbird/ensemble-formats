@@ -73,7 +73,7 @@ impl KissPrng {
         };
 
         // Fill table with 256 values generated from the sub-generators
-        for i in 0..256u32 {
+        for index in 0..256usize {
             // MWC-Z step
             let mwc = 36969u32
                 .wrapping_mul(prng.mwc_z & 0xFFFF)
@@ -94,12 +94,12 @@ impl KissPrng {
             prng.mwc_w = mwc_w_val;
 
             // LCG step
-            let lcg = 69069u32.wrapping_mul(prng.lcg).wrapping_add(1234567);
+            let lcg = 69069u32.wrapping_mul(prng.lcg).wrapping_add(1_234_567);
             prng.lcg = lcg;
 
             // Combine
             let combined = (mwc << 16).wrapping_add(mwc_w_val);
-            prng.table[i as usize] = xs.wrapping_add(lcg ^ combined);
+            prng.table[index] = xs.wrapping_add(lcg ^ combined);
         }
 
         prng
@@ -107,7 +107,7 @@ impl KissPrng {
 
     fn next(&mut self) -> u32 {
         self.index = self.index.wrapping_add(1);
-        let idx = self.index as usize;
+        let idx = usize::from(self.index);
 
         // XorShift step
         let mut xs = self.xorshift;
@@ -117,7 +117,7 @@ impl KissPrng {
         self.xorshift = xs;
 
         // LCG step
-        let lcg = 69069u32.wrapping_mul(self.lcg).wrapping_add(1234567);
+        let lcg = 69069u32.wrapping_mul(self.lcg).wrapping_add(1_234_567);
         self.lcg = lcg;
 
         // MWC-Z step
@@ -127,7 +127,7 @@ impl KissPrng {
         self.mwc_z = mwc;
 
         // Carry comparison (subtract-with-borrow)
-        let carry = if self.swb_a < self.swb_b { 1u32 } else { 0u32 };
+        let carry = u32::from(self.swb_a < self.swb_b);
         self.carry = carry;
 
         // MWC-W step
@@ -137,8 +137,8 @@ impl KissPrng {
         self.mwc_w = mwc_w;
 
         // SWB table lookups
-        let a_idx = (idx as u8).wrapping_add(34) as usize;
-        let b_idx = (idx as u8).wrapping_add(19) as usize;
+        let a_idx = usize::from(self.index.wrapping_add(34));
+        let b_idx = usize::from(self.index.wrapping_add(19));
 
         self.swb_a = self.table[a_idx];
         let b_val = self.table[b_idx].wrapping_add(carry);
@@ -163,11 +163,12 @@ const ECF_HASH_MAGIC: [u8; 4] = [0xA7, 0xF9, 0x5F, 0x9C];
 ///
 /// This replicates the hashing done by `ERA_LoadArchiveHeaders` in the game:
 /// 1. Hash 4 magic bytes (0xA7, 0xF9, 0x5F, 0x9C)
-/// 2. Hash header_size as 4 big-endian bytes
-/// 3. Hash num_chunks as 4 big-endian bytes (u16 zero-extended to u32)
-/// 4. Hash chunk_extra_data_size as 4 big-endian bytes (u16 zero-extended to u32)
-/// 5. Hash file_size as 4 big-endian bytes
+/// 2. Hash `header_size` as 4 big-endian bytes
+/// 3. Hash `num_chunks` as 4 big-endian bytes (u16 zero-extended to u32)
+/// 4. Hash `chunk_extra_data_size` as 4 big-endian bytes (u16 zero-extended to u32)
+/// 5. Hash `file_size` as 4 big-endian bytes
 /// 6. Hash all raw chunk header bytes
+#[must_use]
 pub fn compute_header_hash(
     header_size: u32,
     num_chunks: u16,
@@ -188,13 +189,13 @@ pub fn compute_header_hash(
     }
 
     // 3. num_chunks (zero-extended to u32, big-endian)
-    let nc = num_chunks as u32;
+    let nc = u32::from(num_chunks);
     for &b in &nc.to_be_bytes() {
         hasher.update([b]);
     }
 
     // 4. chunk_extra_data_size (zero-extended to u32, big-endian)
-    let ces = chunk_extra_size as u32;
+    let ces = u32::from(chunk_extra_size);
     for &b in &ces.to_be_bytes() {
         hasher.update([b]);
     }
@@ -205,8 +206,8 @@ pub fn compute_header_hash(
     }
 
     // 6. All chunk headers (raw bytes, already big-endian on disk)
-    let chunk_stride = ecf::EcfChunkHeader::SIZE + chunk_extra_size as usize;
-    hasher.update(&chunk_headers_raw[..chunk_stride * num_chunks as usize]);
+    let chunk_stride = ecf::EcfChunkHeader::SIZE + usize::from(chunk_extra_size);
+    hasher.update(&chunk_headers_raw[..chunk_stride * usize::from(num_chunks)]);
 
     let result = hasher.finalize();
     let mut hash = [0u8; SHA1_SIZE];
@@ -230,19 +231,36 @@ fn read_be_u32(data: &[u8], pos: &mut usize) -> Result<u32> {
 
 /// Read exactly `n` bytes from a byte slice, advancing the cursor.
 fn read_bytes<'a>(data: &'a [u8], pos: &mut usize, n: usize) -> Result<&'a [u8]> {
-    if *pos + n > data.len() {
+    let Some(end) = pos.checked_add(n) else {
         return Err(Error::SignatureTruncated);
-    }
-    let slice = &data[*pos..*pos + n];
-    *pos += n;
+    };
+    let Some(slice) = data.get(*pos..end) else {
+        return Err(Error::SignatureTruncated);
+    };
+    *pos = end;
     Ok(slice)
+}
+
+/// Read one hash node from a signature, returning `None` for clean truncation.
+fn read_signature_node(data: &[u8], pos: &mut usize) -> Result<Option<[u8; SHA1_SIZE]>> {
+    if data.len().saturating_sub(*pos) < SHA1_SIZE {
+        return Ok(None);
+    }
+
+    let raw = read_bytes(data, pos, SHA1_SIZE)?;
+    let mut node = [0u8; SHA1_SIZE];
+    node.copy_from_slice(raw);
+    Ok(Some(node))
 }
 
 /// Compute the extended hash: 20-byte SHA-1 hash + 1-byte popcount.
 fn extend_hash(hash: &[u8; SHA1_SIZE]) -> [u8; 21] {
     let mut extended = [0u8; 21];
     extended[..SHA1_SIZE].copy_from_slice(hash);
-    let popcount: u8 = hash.iter().map(|b| b.count_ones() as u8).sum();
+    let popcount = hash
+        .iter()
+        .map(|byte| u8::try_from(byte.count_ones()).unwrap_or_default())
+        .sum();
     extended[SHA1_SIZE] = popcount;
     extended
 }
@@ -274,10 +292,7 @@ fn compute_parent_hash(
 ) -> [u8; SHA1_SIZE] {
     let mut hasher = Sha1::new();
     hasher.update([0x01]);
-    hasher.update([(sibling_index >> 25) as u8]);
-    hasher.update([(sibling_index >> 17) as u8]);
-    hasher.update([(sibling_index >> 9) as u8]);
-    hasher.update([(sibling_index >> 1) as u8]);
+    hasher.update((sibling_index >> 1).to_be_bytes());
     hasher.update(left.as_slice());
     hasher.update(right.as_slice());
     let result = hasher.finalize();
@@ -302,17 +317,48 @@ fn seed_prng_from_hash(hash: &[u8; SHA1_SIZE]) -> KissPrng {
 
 /// Pick the starting leaf index using PRNG.
 fn pick_starting_leaf(prng: &mut KissPrng, half: u32) -> u32 {
-    let inv = 1.0 / (u32::MAX as f64 + 1.0);
-    let size = half as f64;
-    loop {
-        let raw = prng.next();
-        let f = raw as f64 * inv;
-        if (0.0..1.0).contains(&f) {
-            let idx = (size * f) as i32;
-            if idx >= 0 && (idx as u32) < half {
-                return idx as u32 + half;
-            }
-        }
+    let scaled = u64::from(half) * u64::from(prng.next());
+    let offset = u32::try_from(scaled >> u32::BITS).unwrap_or_default();
+    half + offset
+}
+
+/// Return the adjacent hash-bit index for a leaf sibling.
+fn sibling_bit_index(bit_index: usize, sibling_before: bool) -> usize {
+    if sibling_before {
+        bit_index.checked_sub(1).unwrap_or(HASH_BITS - 1)
+    } else if bit_index + 1 == HASH_BITS {
+        0
+    } else {
+        bit_index + 1
+    }
+}
+
+/// Advance to the next leaf, wrapping to the first leaf after the last node.
+fn next_leaf_index(leaf_index: u32, half: u32) -> u32 {
+    let next = leaf_index.wrapping_add(1);
+    if next == half.wrapping_mul(2) {
+        half
+    } else {
+        next
+    }
+}
+
+/// Build the sequence of nodes traversed from a leaf toward the root.
+fn path_to_root(mut node_index: u32) -> Vec<u32> {
+    let mut path = Vec::new();
+    while node_index > 1 {
+        path.push(node_index);
+        node_index >>= 1;
+    }
+    path
+}
+
+/// Return the sibling of a non-root node.
+fn sibling_node_index(node_index: u32) -> u32 {
+    if node_index & 1 == 0 {
+        node_index + 1
+    } else {
+        node_index - 1
     }
 }
 
@@ -357,24 +403,27 @@ impl PrivateKey {
     /// # Panics
     ///
     /// Panics if `secrets.len() != 2^(depth-1)` or depth is out of range.
+    #[must_use]
     pub fn from_secrets(depth: u8, secrets: Vec<[u8; SHA1_SIZE]>) -> Self {
         assert!((2..=32).contains(&depth), "depth must be 2..=32");
-        let tree_size = 1u32 << depth;
-        let half = tree_size >> 1;
+        let half = 1usize
+            .checked_shl(u32::from(depth - 1))
+            .expect("tree depth must fit the target pointer width");
+        let tree_size = half
+            .checked_mul(2)
+            .expect("tree size must fit the target pointer width");
         assert_eq!(
             secrets.len(),
-            half as usize,
-            "expected {} secrets for depth {}",
             half,
-            depth
+            "expected {half} secrets for depth {depth}"
         );
 
         // Allocate tree (1-indexed, so tree_size entries; index 0 unused)
-        let mut tree = vec![[0u8; SHA1_SIZE]; tree_size as usize];
+        let mut tree = vec![[0u8; SHA1_SIZE]; tree_size];
 
         // Leaf nodes: tree[half + i] = SHA1(secrets[i])
         for (i, secret) in secrets.iter().enumerate() {
-            tree[half as usize + i] = sha1_hash_node(secret);
+            tree[half + i] = sha1_hash_node(secret);
         }
 
         // Internal nodes: bottom-up
@@ -428,19 +477,40 @@ impl PrivateKey {
     ///
     /// Note: because the parent hash depends on the sibling index used during
     /// the walk, the "public key" is the root that the verifier computes.
-    /// We determine it by running a trial sign+verify. For a simpler API,
-    /// use [`sign_and_public_key`] which returns both.
+    /// We determine it by replaying the verifier's walk for the supplied hash.
+    #[must_use]
     pub fn public_key(&self, header_hash: &[u8; SHA1_SIZE]) -> [u8; SHA1_SIZE] {
         // Sign, then extract the root the verifier would compute.
         // We do this by running the verify walk ourselves with known values.
         self.compute_root(header_hash)
     }
 
+    /// Return a tree node while validating its platform-sized index.
+    fn signing_tree_node(&self, node_index: u32) -> Result<[u8; SHA1_SIZE]> {
+        let index = usize::try_from(node_index)
+            .map_err(|_| Error::SizeOverflow("private-key node index"))?;
+        self.tree
+            .get(index)
+            .copied()
+            .ok_or(Error::SignatureVerifyFailed)
+    }
+
+    /// Return the secret corresponding to a leaf node.
+    fn signing_leaf_secret(&self, node_index: u32, half: u32) -> Result<[u8; SHA1_SIZE]> {
+        let local_index = node_index
+            .checked_sub(half)
+            .ok_or(Error::SignatureVerifyFailed)?;
+        let index = usize::try_from(local_index)
+            .map_err(|_| Error::SizeOverflow("private-key leaf index"))?;
+        self.secrets
+            .get(index)
+            .copied()
+            .ok_or(Error::SignatureVerifyFailed)
+    }
+
     /// Compute the root hash that the verifier would produce for a given header hash.
     fn compute_root(&self, header_hash: &[u8; SHA1_SIZE]) -> [u8; SHA1_SIZE] {
-        let tree_size = 1u32 << self.depth;
-        let half = tree_size >> 1;
-        let extended = extend_hash(header_hash);
+        let half = 1u32 << (self.depth - 1);
 
         let mut prng = seed_prng_from_hash(header_hash);
         let start_leaf = pick_starting_leaf(&mut prng, half);
@@ -450,26 +520,21 @@ impl PrivateKey {
         let mut leaf_index = start_leaf;
         let mut root = [0u8; SHA1_SIZE];
 
-        for bit_index in 0..HASH_BITS {
-            let current_hash = match cache_lookup(&cache, leaf_index) {
-                Some(h) => h,
-                None => {
-                    // The verifier would read from sig and resolve:
-                    // bit_set=true: resolved = raw (which is leaf hash)
-                    // bit_set=false: resolved = SHA1(raw) where raw is secret
-                    // Either way, resolved = leaf hash = tree[leaf_index]
-                    let resolved = self.tree[leaf_index as usize];
-                    cache_insert(&mut cache, leaf_index, resolved);
-                    resolved
-                }
+        for _ in 0..HASH_BITS {
+            let current_hash = if let Some(h) = cache_lookup(&cache, leaf_index) {
+                h
+            } else {
+                // The verifier would read from sig and resolve:
+                // bit_set=true: resolved = raw (which is leaf hash)
+                // bit_set=false: resolved = SHA1(raw) where raw is secret
+                // Either way, resolved = leaf hash = tree[leaf_index]
+                let resolved = self.tree[usize::try_from(leaf_index)
+                    .expect("private-key node index must fit the target pointer width")];
+                cache_insert(&mut cache, leaf_index, resolved);
+                resolved
             };
 
-            let mut path = Vec::new();
-            let mut idx = leaf_index;
-            while idx > 1 {
-                path.push(idx);
-                idx >>= 1;
-            }
+            let path = path_to_root(leaf_index);
 
             let mut accumulated = current_hash;
 
@@ -477,38 +542,32 @@ impl PrivateKey {
                 if node_idx == 1 {
                     break;
                 }
-                let sibling = if node_idx & 1 == 0 {
-                    node_idx + 1
-                } else {
-                    node_idx - 1
-                };
+                let sibling = sibling_node_index(node_idx);
 
-                let sibling_hash = match cache_lookup(&cache, sibling) {
-                    Some(h) => h,
-                    None => {
-                        let resolved = if sibling < half {
-                            // Internal node — compute on the fly
-                            // This is what the verifier would read from sig
-                            // We need to figure out what value the verifier
-                            // would store. For internal nodes, verifier uses
-                            // raw bytes directly. So we need the value that,
-                            // when used in compute_parent_hash, gives the
-                            // correct parent.
-                            //
-                            // But we don't have pre-built internal nodes
-                            // because parent hashes depend on the walk path.
-                            // We need to compute them bottom-up for this
-                            // specific subtree.
-                            self.compute_subtree_hash(
-                                sibling, half, &extended, leaf_index, bit_index,
-                            )
-                        } else {
-                            // Leaf sibling: resolved = tree[sibling]
-                            self.tree[sibling as usize]
-                        };
-                        cache_insert(&mut cache, sibling, resolved);
-                        resolved
-                    }
+                let sibling_hash = if let Some(h) = cache_lookup(&cache, sibling) {
+                    h
+                } else {
+                    let resolved = if sibling < half {
+                        // Internal node — compute on the fly
+                        // This is what the verifier would read from sig
+                        // We need to figure out what value the verifier
+                        // would store. For internal nodes, verifier uses
+                        // raw bytes directly. So we need the value that,
+                        // when used in compute_parent_hash, gives the
+                        // correct parent.
+                        //
+                        // But we don't have pre-built internal nodes
+                        // because parent hashes depend on the walk path.
+                        // We need to compute them bottom-up for this
+                        // specific subtree.
+                        self.compute_subtree_hash(sibling, half)
+                    } else {
+                        // Leaf sibling: resolved = tree[sibling]
+                        self.tree[usize::try_from(sibling)
+                            .expect("private-key node index must fit the target pointer width")]
+                    };
+                    cache_insert(&mut cache, sibling, resolved);
+                    resolved
                 };
 
                 let (left, right) = if sibling < node_idx {
@@ -521,36 +580,25 @@ impl PrivateKey {
 
             root = accumulated;
 
-            leaf_index += 1;
-            if leaf_index == tree_size {
-                leaf_index = half;
-            }
+            leaf_index = next_leaf_index(leaf_index, half);
         }
 
         root
     }
 
     /// Recursively compute the hash for a subtree rooted at `node_index`.
-    fn compute_subtree_hash(
-        &self,
-        node_index: u32,
-        half: u32,
-        _extended: &[u8; 21],
-        _current_leaf: u32,
-        _bit_index: usize,
-    ) -> [u8; SHA1_SIZE] {
+    fn compute_subtree_hash(&self, node_index: u32, half: u32) -> [u8; SHA1_SIZE] {
         if node_index >= half {
             // Leaf node
-            return self.tree[node_index as usize];
+            return self.tree[usize::try_from(node_index)
+                .expect("private-key node index must fit the target pointer width")];
         }
 
         let left_child = node_index * 2;
         let right_child = node_index * 2 + 1;
 
-        let left_hash =
-            self.compute_subtree_hash(left_child, half, _extended, _current_leaf, _bit_index);
-        let right_hash =
-            self.compute_subtree_hash(right_child, half, _extended, _current_leaf, _bit_index);
+        let left_hash = self.compute_subtree_hash(left_child, half);
+        let right_hash = self.compute_subtree_hash(right_child, half);
 
         // The sibling arg in compute_parent_hash: when the verifier walks up
         // from a child, it uses the sibling's index. For a canonical subtree
@@ -582,6 +630,11 @@ impl PrivateKey {
 ///
 /// Returns `Ok(true)` if the signature is valid, `Ok(false)` if verification
 /// fails cleanly, or `Err` on parse errors.
+///
+/// # Errors
+///
+/// Returns an error when the signature header is truncated or contains an
+/// invalid magic value or tree depth.
 pub fn verify(
     public_key: &[u8; SHA1_SIZE],
     header_hash: &[u8; SHA1_SIZE],
@@ -609,8 +662,7 @@ pub fn verify(
         return Err(Error::InvalidTreeDepth { depth });
     }
 
-    let tree_size = 1u32 << depth;
-    let half = tree_size >> 1;
+    let half = 1u32 << (depth - 1);
 
     // 3. Compute extended hash (20 bytes + popcount byte = 21 bytes = 168 bits)
     let extended = extend_hash(header_hash);
@@ -628,33 +680,23 @@ pub fn verify(
         let bit_set = get_bit(&extended, bit_index);
 
         // Get or read the current leaf node hash
-        let current_hash = match cache_lookup(&cache, leaf_index) {
-            Some(h) => h,
-            None => {
-                // Check stream has data
-                if pos + SHA1_SIZE > signature.len() {
-                    return Ok(false);
-                }
-                let raw = read_bytes(signature, &mut pos, SHA1_SIZE)?;
-                let mut node = [0u8; SHA1_SIZE];
-                node.copy_from_slice(raw);
+        let current_hash = if let Some(h) = cache_lookup(&cache, leaf_index) {
+            h
+        } else {
+            let Some(node) = read_signature_node(signature, &mut pos)? else {
+                return Ok(false);
+            };
 
-                // If bit is NOT set, hash the raw bytes (public commitment)
-                // If bit IS set, use raw bytes directly (secret preimage)
-                let resolved = if bit_set { node } else { sha1_hash_node(&node) };
+            // If bit is NOT set, hash the raw bytes (public commitment)
+            // If bit IS set, use raw bytes directly (secret preimage)
+            let resolved = if bit_set { node } else { sha1_hash_node(&node) };
 
-                cache_insert(&mut cache, leaf_index, resolved);
-                resolved
-            }
+            cache_insert(&mut cache, leaf_index, resolved);
+            resolved
         };
 
         // Build path from leaf to root and walk up
-        let mut path = Vec::new();
-        let mut idx = leaf_index;
-        while idx > 1 {
-            path.push(idx);
-            idx >>= 1;
-        }
+        let path = path_to_root(leaf_index);
 
         let mut accumulated = current_hash;
 
@@ -663,50 +705,32 @@ pub fn verify(
                 break;
             }
             // Compute sibling index
-            let sibling = if node_idx & 1 == 0 {
-                node_idx + 1
-            } else {
-                node_idx - 1
-            };
+            let sibling = sibling_node_index(node_idx);
 
             // Get or read sibling hash
-            let sibling_hash = match cache_lookup(&cache, sibling) {
-                Some(h) => h,
-                None => {
-                    if pos + SHA1_SIZE > signature.len() {
-                        return Ok(false);
-                    }
-                    let raw = read_bytes(signature, &mut pos, SHA1_SIZE)?;
-                    let mut node = [0u8; SHA1_SIZE];
-                    node.copy_from_slice(raw);
+            let sibling_hash = if let Some(h) = cache_lookup(&cache, sibling) {
+                h
+            } else {
+                let Some(node) = read_signature_node(signature, &mut pos)? else {
+                    return Ok(false);
+                };
 
-                    // Determine if we hash this sibling's raw data
-                    let resolved = if sibling < half {
-                        // Internal node: use raw bytes
-                        node
+                // Determine if we hash this sibling's raw data
+                let resolved = if sibling < half {
+                    // Internal node: use raw bytes
+                    node
+                } else {
+                    // Leaf node: check corresponding bit
+                    let sibling_bit = sibling_bit_index(bit_index, sibling < leaf_index);
+                    if get_bit(&extended, sibling_bit) {
+                        node // bit set: use raw
                     } else {
-                        // Leaf node: check corresponding bit
-                        let mut sib_bit = if sibling < leaf_index {
-                            bit_index as i32 - 1
-                        } else {
-                            bit_index as i32 + 1
-                        };
-                        // Wrap into [0, HASH_BITS)
-                        if sib_bit < 0 {
-                            sib_bit += HASH_BITS as i32;
-                        } else if sib_bit >= HASH_BITS as i32 {
-                            sib_bit -= HASH_BITS as i32;
-                        }
-                        if get_bit(&extended, sib_bit as usize) {
-                            node // bit set: use raw
-                        } else {
-                            sha1_hash_node(&node) // bit not set: hash
-                        }
-                    };
+                        sha1_hash_node(&node) // bit not set: hash
+                    }
+                };
 
-                    cache_insert(&mut cache, sibling, resolved);
-                    resolved
-                }
+                cache_insert(&mut cache, sibling, resolved);
+                resolved
             };
 
             // Compute parent hash: left child has smaller index
@@ -724,16 +748,13 @@ pub fn verify(
         }
 
         // Advance to next leaf (wrapping)
-        leaf_index += 1;
-        if leaf_index == tree_size {
-            leaf_index = half;
-        }
+        leaf_index = next_leaf_index(leaf_index, half);
     }
 
     // 6. Read and validate end magic
-    if pos + 4 <= signature.len() {
+    if signature.len().saturating_sub(pos) >= 4 {
         let end_magic = read_be_u32(signature, &mut pos)?;
-        if end_magic == SIGNATURE_MAGIC && pos <= signature.len() {
+        if end_magic == SIGNATURE_MAGIC {
             return Ok(true);
         }
     }
@@ -757,14 +778,18 @@ fn write_be_u32(buf: &mut Vec<u8>, val: u32) {
 /// - For internal sibling nodes: emits the precomputed subtree hash.
 ///
 /// Returns the raw signature bytes (magic + depth + node hashes + end magic).
+///
+/// # Errors
+///
+/// Returns an error if the private key has an invalid depth or its stored tree
+/// and leaf data are inconsistent with that depth.
 pub fn sign(private_key: &PrivateKey, header_hash: &[u8; SHA1_SIZE]) -> Result<Vec<u8>> {
     let depth = private_key.depth;
     if !(2..=32).contains(&depth) {
         return Err(Error::InvalidTreeDepth { depth });
     }
 
-    let tree_size = 1u32 << depth;
-    let half = tree_size >> 1;
+    let half = 1u32 << (depth - 1);
 
     let extended = extend_hash(header_hash);
 
@@ -789,33 +814,24 @@ pub fn sign(private_key: &PrivateKey, header_hash: &[u8; SHA1_SIZE]) -> Result<V
         // Leaf node
         if cache_lookup(&cache, leaf_index).is_none() {
             // Emit the value the verifier will read
-            let leaf_local = (leaf_index - half) as usize;
+            let leaf_hash = private_key.signing_tree_node(leaf_index)?;
             if bit_set {
                 // Verifier does: resolved = node (uses raw bytes as leaf hash)
                 // So emit the leaf hash directly
-                sig.extend_from_slice(&private_key.tree[leaf_index as usize]);
+                sig.extend_from_slice(&leaf_hash);
             } else {
                 // Verifier does: resolved = SHA1(node)
                 // So emit the secret preimage
-                sig.extend_from_slice(&private_key.secrets[leaf_local]);
+                sig.extend_from_slice(&private_key.signing_leaf_secret(leaf_index, half)?);
             }
             // Cache the resolved value (always the leaf hash)
-            cache_insert(
-                &mut cache,
-                leaf_index,
-                private_key.tree[leaf_index as usize],
-            );
+            cache_insert(&mut cache, leaf_index, leaf_hash);
         }
 
-        let current_hash = cache_lookup(&cache, leaf_index).unwrap();
+        let current_hash = cache_lookup(&cache, leaf_index).ok_or(Error::SignatureVerifyFailed)?;
 
         // Build path from leaf to root
-        let mut path = Vec::new();
-        let mut idx = leaf_index;
-        while idx > 1 {
-            path.push(idx);
-            idx >>= 1;
-        }
+        let path = path_to_root(leaf_index);
 
         let mut accumulated = current_hash;
 
@@ -823,46 +839,32 @@ pub fn sign(private_key: &PrivateKey, header_hash: &[u8; SHA1_SIZE]) -> Result<V
             if node_idx == 1 {
                 break;
             }
-            let sibling = if node_idx & 1 == 0 {
-                node_idx + 1
-            } else {
-                node_idx - 1
-            };
+            let sibling = sibling_node_index(node_idx);
 
             if cache_lookup(&cache, sibling).is_none() {
                 // Emit sibling value
                 if sibling < half {
                     // Internal node: verifier uses raw bytes directly
-                    let subtree_hash = private_key
-                        .compute_subtree_hash(sibling, half, &extended, leaf_index, bit_index);
+                    let subtree_hash = private_key.compute_subtree_hash(sibling, half);
                     sig.extend_from_slice(&subtree_hash);
                     cache_insert(&mut cache, sibling, subtree_hash);
                 } else {
                     // Leaf sibling: same bit-dependent logic as verify
-                    let sib_local = (sibling - half) as usize;
-                    let mut sib_bit = if sibling < leaf_index {
-                        bit_index as i32 - 1
-                    } else {
-                        bit_index as i32 + 1
-                    };
-                    if sib_bit < 0 {
-                        sib_bit += HASH_BITS as i32;
-                    } else if sib_bit >= HASH_BITS as i32 {
-                        sib_bit -= HASH_BITS as i32;
-                    }
+                    let sibling_hash = private_key.signing_tree_node(sibling)?;
+                    let sibling_bit = sibling_bit_index(bit_index, sibling < leaf_index);
 
-                    if get_bit(&extended, sib_bit as usize) {
+                    if get_bit(&extended, sibling_bit) {
                         // Verifier: resolved = node (raw)
-                        sig.extend_from_slice(&private_key.tree[sibling as usize]);
+                        sig.extend_from_slice(&sibling_hash);
                     } else {
                         // Verifier: resolved = SHA1(node), so emit secret
-                        sig.extend_from_slice(&private_key.secrets[sib_local]);
+                        sig.extend_from_slice(&private_key.signing_leaf_secret(sibling, half)?);
                     }
-                    cache_insert(&mut cache, sibling, private_key.tree[sibling as usize]);
+                    cache_insert(&mut cache, sibling, sibling_hash);
                 }
             }
 
-            let sibling_hash = cache_lookup(&cache, sibling).unwrap();
+            let sibling_hash = cache_lookup(&cache, sibling).ok_or(Error::SignatureVerifyFailed)?;
 
             let (left, right) = if sibling < node_idx {
                 (&sibling_hash, &accumulated)
@@ -872,10 +874,7 @@ pub fn sign(private_key: &PrivateKey, header_hash: &[u8; SHA1_SIZE]) -> Result<V
             accumulated = compute_parent_hash(sibling, left, right);
         }
 
-        leaf_index += 1;
-        if leaf_index == tree_size {
-            leaf_index = half;
-        }
+        leaf_index = next_leaf_index(leaf_index, half);
     }
 
     // 4. Write end magic

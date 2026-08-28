@@ -5,12 +5,12 @@
 //! ## File Structure
 //!
 //! XTT files contain the following chunks:
-//! - `0x1111` - XTTHeader: Main header with texture counts
-//! - `0x2222` - TerrainAtlasLinkChunk: Per-chunk texture links (196 chunks typical)
-//! - `0x6666` - AtlasChunkAlbedo: Albedo texture atlas
-//! - `0x8888` - RoadChunk: Road data (optional)
-//! - `0xAAAA` - FoliageHeaderChunk: Foliage header data
-//! - `0xBBBB` - FoliageQNChunk: Foliage quantization data (multiple)
+//! - `0x1111` - `XTTHeader`: Main header with texture counts
+//! - `0x2222` - `TerrainAtlasLinkChunk`: Per-chunk texture links (196 chunks typical)
+//! - `0x6666` - `AtlasChunkAlbedo`: Albedo texture atlas
+//! - `0x8888` - `RoadChunk`: Road data (optional)
+//! - `0xAAAA` - `FoliageHeaderChunk`: Foliage header data
+//! - `0xBBBB` - `FoliageQNChunk`: Foliage quantization data (multiple)
 
 #![no_std]
 extern crate alloc;
@@ -111,9 +111,9 @@ mod tests {
         println!("\nOriginal header (first 64 bytes):");
         for (i, &byte) in original.iter().enumerate().take(64) {
             if i % 16 == 0 {
-                print!("  {:04X}: ", i);
+                print!("  {i:04X}: ");
             }
-            print!("{:02X} ", byte);
+            print!("{byte:02X} ");
             if i % 16 == 15 {
                 println!();
             }
@@ -121,9 +121,9 @@ mod tests {
         println!("\nRewritten header (first 64 bytes):");
         for (i, &byte) in rewritten.iter().enumerate().take(64) {
             if i % 16 == 0 {
-                print!("  {:04X}: ", i);
+                print!("  {i:04X}: ");
             }
-            print!("{:02X} ", byte);
+            print!("{byte:02X} ");
             if i % 16 == 15 {
                 println!();
             }
@@ -157,10 +157,7 @@ mod tests {
             if original.len() != rewritten.len() {
                 println!("Size mismatch: {} vs {}", original.len(), rewritten.len());
             }
-            panic!(
-                "XTT roundtrip failed: {} non-checksum differences!",
-                diff_count
-            );
+            panic!("XTT roundtrip failed: {diff_count} non-checksum differences!");
         }
     }
 

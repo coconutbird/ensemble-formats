@@ -1,7 +1,7 @@
 //! Mesh helper functions for glTF import.
 //!
 //! Contains granny mesh generation from vertex skin data, bone OBB computation,
-//! global_bones heuristic detection, and vertex packer construction.
+//! `global_bones` heuristic detection, and vertex packer construction.
 
 use ugx::{
     GrannyBone, GrannyBoneBinding, GrannyMesh, MAX_UV, Section, UgxVersion, UnivertPacker,
@@ -16,8 +16,13 @@ use ugx::{
 /// rigid models where all sections share the same bone set.
 ///
 /// For third-party glTFs (no extras), each glTF mesh becomes its own `GrannyMesh`.
-/// (name, start_vertex, end_vertex, start_section, end_section, granny_mesh_index)
+/// (name, `start_vertex`, `end_vertex`, `start_section`, `end_section`, `granny_mesh_index`)
 pub(super) type MeshInfo = (String, usize, usize, usize, usize, Option<usize>);
+
+struct MeshGroup {
+    name: String,
+    ranges: Vec<(usize, usize, usize, usize)>,
+}
 
 pub(super) fn generate_granny_meshes_from_vertices(
     vertices: &[UnpackedVertex],
@@ -29,11 +34,6 @@ pub(super) fn generate_granny_meshes_from_vertices(
     // use that to merge multiple glTF meshes into one GrannyMesh. Otherwise each
     // entry stays separate.
     let has_explicit_indices = mesh_infos.iter().any(|m| m.5.is_some());
-
-    struct MeshGroup {
-        name: String,
-        ranges: Vec<(usize, usize, usize, usize)>,
-    }
 
     let groups: Vec<MeshGroup> = if has_explicit_indices {
         let mut map: std::collections::BTreeMap<usize, MeshGroup> =
@@ -73,11 +73,15 @@ pub(super) fn generate_granny_meshes_from_vertices(
                 }
             }
             for section in &sections[ss..es] {
-                if section.global_bones && section.rigid_bone_index >= 0 {
-                    used_bones.insert(section.rigid_bone_index as u16);
+                if section.global_bones
+                    && let Ok(bone_index) = u16::try_from(section.rigid_bone_index)
+                {
+                    used_bones.insert(bone_index);
                 }
-                if (section.global_bones || section.rigid_only) && section.rigid_bone_index >= 0 {
-                    rigid_bone_indices.insert(section.rigid_bone_index as u16);
+                if (section.global_bones || section.rigid_only)
+                    && let Ok(bone_index) = u16::try_from(section.rigid_bone_index)
+                {
+                    rigid_bone_indices.insert(bone_index);
                 }
             }
         }
@@ -101,7 +105,7 @@ pub(super) fn generate_granny_meshes_from_vertices(
         let bone_bindings: Vec<GrannyBoneBinding> = used_bones
             .iter()
             .filter_map(|&idx| {
-                let idx_0based = idx as usize;
+                let idx_0based = usize::from(idx);
                 granny_bones.get(idx_0based).map(|b| {
                     let owns_all = rigid_bone_indices.contains(&idx);
                     let (obb_min, obb_max) =
@@ -133,7 +137,7 @@ pub(super) fn generate_granny_meshes_from_vertices(
 /// into bone-local space using the bone's `inverse_world_matrix`, and returns
 /// the axis-aligned min/max in that space.
 ///
-/// When `owns_all` is true (rigid/global_bones sections), all vertices are
+/// When `owns_all` is true (`rigid/global_bones` sections), all vertices are
 /// considered bound to this bone regardless of their weight values.
 ///
 /// If no vertices reference this bone, returns zeroed min/max.
@@ -184,7 +188,7 @@ fn compute_bone_obb(
     }
 }
 
-/// Detect whether a set of vertices forms a rigid or global_bones section.
+/// Detect whether a set of vertices forms a rigid or `global_bones` section.
 ///
 /// When all vertices are bound to a single common bone with weight ≈ 1.0,
 /// this is the pattern produced by the exporter when it synthesizes skin data
@@ -238,7 +242,7 @@ pub(super) fn detect_global_bones(
         // this case (the vertex buffer has no skin element, and the section
         // is bound to rigid_bone_index).
         // bone_indices are 0-based global, same as rigid_bone_index.
-        (false, true, bone as i32, 1)
+        (false, true, i32::from(bone), 1)
     } else {
         (false, false, i32::MAX, max_bones)
     }
@@ -275,9 +279,9 @@ pub(super) fn build_packer(
             if has_skin {
                 po.push('S');
             }
-            for i in 0..max_texcoords {
+            for digit in "0123456789".chars().take(max_texcoords.min(MAX_UV)) {
                 po.push('T');
-                po.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+                po.push(digit);
             }
             if has_colors {
                 po.push('D');
@@ -286,9 +290,9 @@ pub(super) fn build_packer(
         }
         UgxVersion::Hw2 => {
             let mut po = String::from("P");
-            for i in 0..max_texcoords {
+            for digit in "0123456789".chars().take(max_texcoords.min(MAX_UV)) {
                 po.push('T');
-                po.push(char::from_digit(i as u32, 10).unwrap_or('0'));
+                po.push(digit);
             }
             po.push('N');
             if has_tangents {

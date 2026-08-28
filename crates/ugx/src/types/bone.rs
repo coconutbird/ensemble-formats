@@ -1,4 +1,4 @@
-//! Bone types: Bone, GrannyBone, GrannyMesh, and related skeletal data.
+//! Bone types: Bone, `GrannyBone`, `GrannyMesh`, and related skeletal data.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -28,7 +28,7 @@ pub struct Bone {
 /// (legacy behaviour, lossy due to floating-point decomposition).
 #[derive(Debug, Clone)]
 pub struct GrannyLocalTransform {
-    /// Transform flags (bitmask: 0x1 = position, 0x2 = orientation, 0x4 = scale_shear).
+    /// Transform flags (bitmask: 0x1 = position, 0x2 = orientation, 0x4 = `scale_shear`).
     pub flags: u32,
     /// Local position (xyz).
     pub position: [f32; 3],
@@ -57,7 +57,7 @@ pub struct GrannyBone {
     pub name: String,
     /// Parent bone index (-1 for root).
     pub parent_index: i32,
-    /// Local transform (flags, position, orientation, scale_shear).
+    /// Local transform (flags, position, orientation, `scale_shear`).
     /// Preserved from the original file for bit-perfect round-tripping.
     /// When `None`, the writer derives transforms from inverse world matrices.
     pub local_transform: Option<GrannyLocalTransform>,
@@ -102,7 +102,7 @@ pub struct GrannyBoneBinding {
 /// Each mesh has a name and a list of bone bindings for skinning.
 #[derive(Debug, Clone, Default)]
 pub struct GrannyMesh {
-    /// Mesh name (e.g., "marine_01", "optionalAssaultRifle").
+    /// Mesh name (e.g., "`marine_01`", "optionalAssaultRifle").
     pub name: String,
     /// Full bone binding entries with OBB data.
     pub bone_bindings: Vec<GrannyBoneBinding>,

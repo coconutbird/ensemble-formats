@@ -1,5 +1,15 @@
 use super::*;
 
+fn assert_float_array_bits_eq<const N: usize>(actual: &[f32; N], expected: &[f32; N]) {
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual.to_bits(), expected.to_bits());
+    }
+}
+
+fn assert_float_bits_eq(actual: f32, expected: f32, message: &str) {
+    assert_eq!(actual.to_bits(), expected.to_bits(), "{message}");
+}
+
 #[test]
 fn test_float3_unpack() {
     let data: [u8; 12] = [
@@ -9,7 +19,7 @@ fn test_float3_unpack() {
     ];
     let mut pos = 0;
     let result = VertexElementType::Float3.unpack(&data, &mut pos).unwrap();
-    assert_eq!(result, [1.0, 2.0, 3.0, 1.0]);
+    assert_float_array_bits_eq(&result, &[1.0, 2.0, 3.0, 1.0]);
 }
 
 #[test]
@@ -99,7 +109,7 @@ fn test_unpack_as_indices_ushort4n_not_normalized() {
 fn roundtrip_pack_unpack(ty: VertexElementType, value: [f32; 4]) -> [f32; 4] {
     let mut buf = Vec::new();
     ty.pack(&mut buf, value);
-    assert_eq!(buf.len(), ty.size(), "packed size mismatch for {:?}", ty);
+    assert_eq!(buf.len(), ty.size(), "packed size mismatch for {ty:?}");
     let mut pos = 0;
     ty.unpack(&buf, &mut pos).unwrap()
 }
@@ -108,24 +118,21 @@ fn roundtrip_pack_unpack(ty: VertexElementType, value: [f32; 4]) -> [f32; 4] {
 fn test_float3_roundtrip() {
     let v = [1.0, -2.5, 3.125, 1.0];
     let r = roundtrip_pack_unpack(VertexElementType::Float3, v);
-    assert_eq!(r[0], v[0]);
-    assert_eq!(r[1], v[1]);
-    assert_eq!(r[2], v[2]);
-    assert_eq!(r[3], 1.0);
+    assert_float_array_bits_eq(&r, &v);
 }
 
 #[test]
 fn test_float4_roundtrip() {
     let v = [1.0, -2.5, 3.125, 0.5];
     let r = roundtrip_pack_unpack(VertexElementType::Float4, v);
-    assert_eq!(r, v);
+    assert_float_array_bits_eq(&r, &v);
 }
 
 #[test]
 fn test_ubyte4_roundtrip() {
     let v = [5.0, 10.0, 200.0, 0.0];
     let r = roundtrip_pack_unpack(VertexElementType::UByte4, v);
-    assert_eq!(r, v);
+    assert_float_array_bits_eq(&r, &v);
 }
 
 #[test]
@@ -157,7 +164,7 @@ fn test_dec3n_roundtrip() {
         r[1]
     );
     assert!((r[2] - 1.0).abs() < 0.01, "z: expected ~1.0, got {}", r[2]);
-    assert_eq!(r[3], 1.0, "w: positive handedness should roundtrip");
+    assert_float_bits_eq(r[3], 1.0, "w: positive handedness should roundtrip");
 }
 
 #[test]
@@ -165,7 +172,7 @@ fn test_dec3n_negative_handedness() {
     let v = [0.5, -0.5, 1.0, -1.0];
     let r = roundtrip_pack_unpack(VertexElementType::Dec3N, v);
     assert!((r[0] - 0.5).abs() < 0.01, "x: expected ~0.5, got {}", r[0]);
-    assert_eq!(r[3], -1.0, "w: negative handedness should roundtrip");
+    assert_float_bits_eq(r[3], -1.0, "w: negative handedness should roundtrip");
 }
 
 #[test]
@@ -177,8 +184,8 @@ fn test_dec3n_preserves_minus_512() {
     let r = VertexElementType::Dec3N.unpack(&data, &mut pos).unwrap();
     // -512/511 = -1.00196 — preserved so unpack→repack is byte-identical
     let expected = -512.0f32 / 511.0;
-    assert_eq!(r[0], expected, "x: -512/511 should be preserved");
-    assert_eq!(r[3], 1.0, "w: bits 30-31 = 0b00 → +1.0");
+    assert_float_bits_eq(r[0], expected, "x: -512/511 should be preserved");
+    assert_float_bits_eq(r[3], 1.0, "w: bits 30-31 = 0b00 → +1.0");
 }
 
 #[test]

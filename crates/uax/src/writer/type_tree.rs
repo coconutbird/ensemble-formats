@@ -1,4 +1,4 @@
-//! Granny type tree emission for UAX curve data and file_info schema.
+//! Granny type tree emission for UAX curve data and `file_info` schema.
 //! Each type member is 44 bytes on disk. Terminated by a 44-byte zero entry.
 //!
 //! Two-pass design: build into a temp buffer to measure size, then copy
@@ -272,7 +272,7 @@ pub(super) fn curve_type_tree_size(fmt: u8) -> usize {
     build_tree(0, &mut st, &ms).len()
 }
 
-/// Approximate size of the file_info type tree.
+/// Approximate size of the `file_info` type tree.
 pub(super) const FILE_INFO_TYPE_TREE_SIZE: usize = 8000; // generous upper bound; actual copy truncates
 
 /// Write a curve type tree at `offset` in `buf`. `buf` must be large enough.
@@ -287,7 +287,7 @@ pub(super) fn write_curve_type_tree(
     buf[offset..offset + tree.len()].copy_from_slice(&tree);
 }
 
-/// Write the file_info type tree at `offset` in `buf` and return the actual size written.
+/// Write the `file_info` type tree at `offset` in `buf` and return the actual size written.
 pub(super) fn write_file_info_type_tree(
     buf: &mut Vec<u8>,
     strings: &mut StringTable,

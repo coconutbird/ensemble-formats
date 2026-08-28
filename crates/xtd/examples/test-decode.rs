@@ -1,22 +1,20 @@
-//! Test XTD vertex decoding with a real file.
+//! Exercises XTD vertex decoding with a real file.
 
 use std::env;
 use xtd::Reader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    let path = args
-        .get(1)
-        .map(|s| s.as_str())
-        .unwrap_or("test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtd");
+    let path = args.get(1).map_or(
+        "test_extract/scenario/skirmish/design/blood_gulch/blood_gulch.xtd",
+        std::string::String::as_str,
+    );
 
-    println!("Loading XTD file: {}", path);
+    println!("Loading XTD file: {path}");
     let data = std::fs::read(path)?;
     println!("File size: {} bytes", data.len());
 
     // Debug: print first 64 bytes of atlas data in hex
-    let _atlas_offset = 0x8888; // Approximate - we'll get exact from the file
-
     let file = Reader::read(&data)?;
     println!("\n=== XTD Header ===");
     println!("  Version: 0x{:04X}", file.header.version);
@@ -35,45 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    Mid: {:?}", vertices.header.mid);
     println!("    Range: {:?}", vertices.header.range);
 
-    // Debug: print first few raw packed values
-    println!("\n  Raw atlas data (first 64 bytes after header):");
-    let atlas_data = &file.atlas_data;
-    print!("    Header bytes: ");
-    for byte in atlas_data.iter().take(32) {
-        print!("{:02x} ", byte);
-    }
-    println!();
-
-    // Print first few packed positions (as u32 in hex and decimal)
-    println!("\n  First 8 packed positions (at offset 32):");
-    for i in 0..8 {
-        let offset = 32 + i * 4;
-        if offset + 4 <= atlas_data.len() {
-            let packed_be = u32::from_be_bytes(atlas_data[offset..offset + 4].try_into().unwrap());
-            let x = (packed_be >> 22) & 0x3FF;
-            let y = (packed_be >> 11) & 0x3FF;
-            let z = packed_be & 0x3FF;
-            println!(
-                "    [{}] 0x{:08x} -> X={:4} Y={:4} Z={:4}",
-                i, packed_be, x, y, z
-            );
-        }
-    }
-
-    // Check if first 1024 positions might represent row 0
-    println!("\n  Checking if data is row-major (first 8 vs positions 1024-1031):");
-    for i in 0..4 {
-        let offset0 = 32 + i * 4;
-        let offset1 = 32 + (i + 1024) * 4;
-        if offset1 + 4 <= atlas_data.len() {
-            let p0 = u32::from_be_bytes(atlas_data[offset0..offset0 + 4].try_into().unwrap());
-            let p1 = u32::from_be_bytes(atlas_data[offset1..offset1 + 4].try_into().unwrap());
-            println!(
-                "    Row 0 col {}: 0x{:08x}   Row 1 col {}: 0x{:08x}",
-                i, p0, i, p1
-            );
-        }
-    }
+    print_atlas_debug(&file);
     println!(
         "\n  Terrain grid: {}x{}",
         vertices.num_verts_per_axis, vertices.num_verts_per_axis
@@ -127,24 +87,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Generate indices
-    let indices = vertices.generate_indices();
+    let indices = vertices.generate_indices()?;
     println!(
         "\n  Generated {} indices ({} triangles)",
         indices.len(),
         indices.len() / 3
     );
 
-    // Validate normals
+    print_summary(&vertices, &indices);
+
+    Ok(())
+}
+
+fn print_summary(vertices: &xtd::TerrainVertices, indices: &[u32]) {
     let mut bad_normals = 0;
-    for (i, norm) in vertices.normals.iter().enumerate() {
-        let len = (norm[0] * norm[0] + norm[1] * norm[1] + norm[2] * norm[2]).sqrt();
-        if (len - 1.0).abs() > 0.15 {
+    for (index, normal) in vertices.normals.iter().enumerate() {
+        let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        if (length - 1.0).abs() > 0.15 {
             bad_normals += 1;
             if bad_normals <= 5 {
-                println!(
-                    "  WARNING: Normal {} not normalized: {:?} (len={})",
-                    i, norm, len
-                );
+                println!("  WARNING: Normal {index} not normalized: {normal:?} (len={length})");
             }
         }
     }
@@ -165,6 +127,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             vertices.normals.len()
         );
     }
+}
 
-    Ok(())
+fn print_atlas_debug(file: &xtd::XtdFile) {
+    println!("\n  Raw atlas data (first 64 bytes after header):");
+    let atlas_data = &file.atlas_data;
+    print!("    Header bytes: ");
+    for byte in atlas_data.iter().take(32) {
+        print!("{byte:02x} ");
+    }
+    println!();
+
+    println!("\n  First 8 packed positions (at offset 32):");
+    for index in 0..8 {
+        let offset = 32 + index * 4;
+        if let Some(bytes) = atlas_data.get(offset..offset + 4) {
+            let packed = u32::from_be_bytes(bytes.try_into().expect("four-byte packed position"));
+            let x = (packed >> 22) & 0x3FF;
+            let y = (packed >> 11) & 0x3FF;
+            let z = packed & 0x3FF;
+            println!("    [{index}] 0x{packed:08x} -> X={x:4} Y={y:4} Z={z:4}");
+        }
+    }
+
+    println!("\n  Checking if data is row-major (first 8 vs positions 1024-1031):");
+    for index in 0..4 {
+        let first_offset = 32 + index * 4;
+        let second_offset = 32 + (index + 1024) * 4;
+        let first = atlas_data.get(first_offset..first_offset + 4);
+        let second = atlas_data.get(second_offset..second_offset + 4);
+        if let (Some(first), Some(second)) = (first, second) {
+            let first = u32::from_be_bytes(first.try_into().expect("four-byte packed position"));
+            let second = u32::from_be_bytes(second.try_into().expect("four-byte packed position"));
+            println!("    Row 0 col {index}: 0x{first:08x}   Row 1 col {index}: 0x{second:08x}");
+        }
+    }
 }

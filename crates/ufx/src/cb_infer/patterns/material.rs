@@ -7,6 +7,26 @@ use crate::cb_infer::context::{BlockCtx, feeds_mad_addend, feeds_output, was_sam
 use crate::cb_infer::operand::{component_count, has_neg_one_immediate, has_ones_immediate};
 use crate::cb_infer::types::{Confidence, Semantic, SemanticKind};
 
+fn is_fresnel_sequence(ctx: &BlockCtx<'_>) -> bool {
+    let has_log = ctx
+        .earlier_in_block()
+        .iter()
+        .any(|sm4| matches!(sm4.instruction().opcode, Opcode::Log))
+        || ctx
+            .predecessor_insns()
+            .iter()
+            .any(|instruction| matches!(instruction.opcode, Opcode::Log));
+    let has_exp = ctx
+        .later_in_block()
+        .iter()
+        .any(|sm4| matches!(sm4.instruction().opcode, Opcode::Exp))
+        || ctx
+            .successor_insns()
+            .iter()
+            .any(|instruction| matches!(instruction.opcode, Opcode::Exp));
+    has_log && has_exp
+}
+
 pub(crate) fn try_classify(
     ctx: &BlockCtx<'_>,
     cb_op: &Operand,
@@ -41,29 +61,15 @@ pub(crate) fn try_classify(
     }
 
     // Pattern 6: log/exp Fresnel — mul cb in a log/exp sequence
-    if matches!(insn.opcode, Opcode::Mul) && slot == ps_slot && ops.len() >= 3 {
-        let has_log = ctx
-            .earlier_in_block()
-            .iter()
-            .any(|sm4| matches!(sm4.0.opcode, Opcode::Log))
-            || ctx
-                .predecessor_insns()
-                .iter()
-                .any(|i| matches!(i.opcode, Opcode::Log));
-        let has_exp = ctx
-            .later_in_block()
-            .iter()
-            .any(|sm4| matches!(sm4.0.opcode, Opcode::Exp))
-            || ctx
-                .successor_insns()
-                .iter()
-                .any(|i| matches!(i.opcode, Opcode::Exp));
-        if has_log && has_exp {
-            return Some((
-                Semantic::new(SemanticKind::FresnelPower),
-                Confidence::Medium,
-            ));
-        }
+    if matches!(insn.opcode, Opcode::Mul)
+        && slot == ps_slot
+        && ops.len() >= 3
+        && is_fresnel_sequence(ctx)
+    {
+        return Some((
+            Semantic::new(SemanticKind::FresnelPower),
+            Confidence::Medium,
+        ));
     }
 
     // Pattern 7: mad rN, -spec*normal, cb.xyz → spec override color

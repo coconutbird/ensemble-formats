@@ -7,13 +7,14 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "ufx"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 ufx = { workspace = true }
-d3dasm = { workspace = true }
-cfglib = { workspace = true }
-cfglib-dxbc = { workspace = true }
 clap = { workspace = true }

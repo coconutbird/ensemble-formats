@@ -6,6 +6,10 @@ use thiserror::Error;
 /// XTD parsing errors.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Binary I/O error.
+    #[error("binary I/O error: {0}")]
+    Io(#[from] nostdio::IoError),
+
     /// ECF error.
     #[error("ECF error: {0}")]
     Ecf(#[from] ecf::Error),
@@ -29,6 +33,10 @@ pub enum Error {
     /// Invalid header size.
     #[error("Invalid header size: expected {expected}, got {actual}")]
     InvalidHeaderSize { expected: usize, actual: usize },
+
+    /// A count, size, or offset cannot be represented safely.
+    #[error("{0} is too large for the XTD format")]
+    SizeOverflow(&'static str),
 }
 
 /// Result type for XTD operations.

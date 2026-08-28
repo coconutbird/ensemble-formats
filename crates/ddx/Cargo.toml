@@ -7,11 +7,15 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 ecf = { workspace = true }
 thiserror = { workspace = true }
-miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
-texture2ddecoder = "0.1"
+miniz_oxide.workspace = true
+nostdio.workspace = true
+texture2ddecoder.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]

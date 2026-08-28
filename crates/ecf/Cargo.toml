@@ -7,12 +7,15 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 default = []
 std = ["nostdio/std"]
 
 [dependencies]
 nostdio.workspace = true
-miniz_oxide = "0.8"
+miniz_oxide.workspace = true
 thiserror.workspace = true
 zerocopy.workspace = true

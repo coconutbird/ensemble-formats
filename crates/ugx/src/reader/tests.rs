@@ -1,4 +1,5 @@
 use super::*;
+use crate::constants::EMPTY_OFFSET_SENTINEL;
 use std::{eprint, eprintln, format};
 
 /// Helper: read a test file, skipping if not present on disk.
@@ -20,9 +21,8 @@ fn read_full_ugx_pipeline() {
 
     let mut parsed = 0usize;
     for path in paths {
-        let data = match read_test_file(path) {
-            Some(d) => d,
-            None => continue,
+        let Some(data) = read_test_file(path) else {
+            continue;
         };
 
         let geom = Reader::read(&data).expect(path);
@@ -61,234 +61,172 @@ fn inspect_hw2_ugx() {
     ];
 
     for path in paths {
-        let data = match read_test_file(path) {
-            Some(d) => d,
-            None => {
-                eprintln!("HW2 test file not found, skipping");
-                continue;
-            }
+        let Some(data) = read_test_file(path) else {
+            eprintln!("HW2 test file not found, skipping");
+            continue;
         };
+        inspect_hw2_file(path, &data);
+    }
+}
 
-        let ecf = ecf::Reader::new(&data).unwrap();
+fn inspect_hw2_file(path: &str, data: &[u8]) {
+    let ecf = ecf::Reader::new(data).unwrap();
+    eprintln!("\n=== {} ===", path.rsplit('/').next().unwrap());
+    eprintln!("ECF file ID: 0x{:08X}", ecf.header().id);
+    eprintln!("ECF chunks: {}", ecf.chunks().len());
+    for (index, chunk) in ecf.chunks().iter().enumerate() {
+        eprintln!("  chunk[{index}]: id=0x{:X}, size={}", chunk.id, chunk.size);
+    }
 
-        eprintln!("\n=== {} ===", path.rsplit('/').next().unwrap());
-        eprintln!("ECF file ID: 0x{:08X}", ecf.header().id);
-        eprintln!("ECF chunks: {}", ecf.chunks().len());
-        for (i, chunk) in ecf.chunks().iter().enumerate() {
-            eprintln!("  chunk[{}]: id=0x{:X}, size={}", i, chunk.id, chunk.size);
+    let cached = ecf.chunk_data_by_id(0x700).unwrap();
+    eprintln!("Chunk 0x700 size: {} bytes", cached.len());
+    eprintln!("Signature: 0x{:08X}", read_u32(&cached, 0).unwrap_or(0));
+    print_hex_bytes(&cached, 0, 160);
+    inspect_packed_arrays(&cached);
+    inspect_related_chunks(&ecf);
+    inspect_sections(&cached);
+
+    eprintln!("\n--- Attempting UGX parse ---");
+    match UgxGeom::from_bytes(data) {
+        Ok(geom) => eprintln!(
+            "SUCCESS!\n  Sections: {}\n  Materials: {}\n  Bones: {}",
+            geom.sections.len(),
+            geom.materials.len(),
+            geom.bones.len()
+        ),
+        Err(error) => eprintln!("FAILED: {error:?}"),
+    }
+}
+
+fn inspect_packed_arrays(cached: &[u8]) {
+    eprintln!("\n--- Packed Arrays (after 64-byte header) ---");
+    for array_index in 0..8 {
+        let base = 64 + array_index * 16;
+        let (Some(count), Some(offset)) = (read_u32(cached, base), read_u64(cached, base + 8))
+        else {
+            break;
+        };
+        eprintln!("  Array[{array_index}]: count={count}, offset=0x{offset:X}");
+        let Some(absolute_offset) = usize::try_from(offset).ok() else {
+            continue;
+        };
+        if count <= 1 || absolute_offset >= cached.len() {
+            continue;
         }
-
-        let cached = ecf.chunk_data_by_id(0x700).unwrap();
-        eprintln!("Chunk 0x700 size: {} bytes", cached.len());
-
-        let sig = u32::from_le_bytes([cached[0], cached[1], cached[2], cached[3]]);
-        eprintln!("Signature: 0x{:08X}", sig);
-
-        // Dump first 160 bytes
-        for (i, byte) in cached.iter().enumerate().take(160) {
-            if i % 16 == 0 {
-                eprint!("\n  {:04x}: ", i);
-            }
-            eprint!("{:02x} ", byte);
-        }
-        eprintln!();
-
-        // After 64-byte header, read packed arrays
-        eprintln!("\n--- Packed Arrays (after 64-byte header) ---");
-        for arr_idx in 0..8 {
-            let base = 64 + arr_idx * 16;
-            if base + 16 > cached.len() {
-                break;
-            }
-            let count = u32::from_le_bytes([
-                cached[base],
-                cached[base + 1],
-                cached[base + 2],
-                cached[base + 3],
-            ]);
-            let offset = u64::from_le_bytes([
-                cached[base + 8],
-                cached[base + 9],
-                cached[base + 10],
-                cached[base + 11],
-                cached[base + 12],
-                cached[base + 13],
-                cached[base + 14],
-                cached[base + 15],
-            ]);
+        let next_base = base + 16;
+        let Some(next_offset) = read_u64(cached, next_base + 8) else {
+            continue;
+        };
+        if next_offset > offset && next_offset != EMPTY_OFFSET_SENTINEL {
+            let span = next_offset - offset;
             eprintln!(
-                "  Array[{}]: count={}, offset=0x{:X}",
-                arr_idx, count, offset
+                "    -> span to next: {span} bytes, per-element: {}",
+                span / u64::from(count)
             );
-
-            if count > 1 && (offset as usize) < cached.len() {
-                let next_base = 64 + (arr_idx + 1) * 16;
-                if next_base + 16 <= cached.len() {
-                    let next_offset = u64::from_le_bytes([
-                        cached[next_base + 8],
-                        cached[next_base + 9],
-                        cached[next_base + 10],
-                        cached[next_base + 11],
-                        cached[next_base + 12],
-                        cached[next_base + 13],
-                        cached[next_base + 14],
-                        cached[next_base + 15],
-                    ]);
-                    if next_offset > offset && next_offset != EMPTY_OFFSET_SENTINEL {
-                        let span = next_offset - offset;
-                        eprintln!(
-                            "    -> span to next: {} bytes, per-element: {}",
-                            span,
-                            span / count as u64
-                        );
-                    }
-                }
-            }
-        }
-
-        // Check other chunks
-        for chunk_id in [0x701u64, 0x702, 0x703, 0x704, 0x705] {
-            match ecf.chunk_data_by_id(chunk_id) {
-                Ok(d) => {
-                    eprintln!("\nChunk 0x{:03X}: {} bytes", chunk_id, d.len());
-                    if chunk_id == 0x705 {
-                        let ver = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
-                        eprintln!("  AABB tree version: 0x{:08X}", ver);
-                        let nc = u32::from_le_bytes([d[4], d[5], d[6], d[7]]);
-                        eprintln!("  AABB tree node count: {}", nc);
-                    }
-                }
-                Err(_) => eprintln!("\nChunk 0x{:03X}: NOT FOUND", chunk_id),
-            }
-        }
-
-        // Dump section data (Array[0]) for the childmesh file
-        if cached.len() > 0xA0 {
-            let arr0_count =
-                u32::from_le_bytes([cached[64], cached[65], cached[66], cached[67]]) as usize;
-            let arr0_offset = u64::from_le_bytes([
-                cached[72], cached[73], cached[74], cached[75], cached[76], cached[77], cached[78],
-                cached[79],
-            ]) as usize;
-
-            eprintln!(
-                "\n--- Section data (Array[0]: count={}, offset=0x{:X}) ---",
-                arr0_count, arr0_offset
-            );
-            for sec_idx in 0..arr0_count {
-                let sec_start = arr0_offset + sec_idx * 72;
-                eprintln!("  Section[{}] at 0x{:X}:", sec_idx, sec_start);
-                for row in 0..5 {
-                    let row_start = sec_start + row * 16;
-                    if row_start + 16 <= cached.len() {
-                        eprint!("    {:04x}: ", row_start);
-                        for b in 0..16 {
-                            if row_start + b < cached.len() {
-                                eprint!("{:02x} ", cached[row_start + b]);
-                            }
-                        }
-                        eprintln!();
-                    }
-                }
-                // Remaining 8 bytes
-                let rem_start = sec_start + 64;
-                if rem_start + 8 <= cached.len() {
-                    eprint!("    {:04x}: ", rem_start);
-                    for b in 0..8 {
-                        eprint!("{:02x} ", cached[rem_start + b]);
-                    }
-                    eprintln!();
-                }
-
-                // Parse known fields (assuming same first 40 bytes as DE)
-                if sec_start + 40 <= cached.len() {
-                    let mat_idx = i32::from_le_bytes([
-                        cached[sec_start],
-                        cached[sec_start + 1],
-                        cached[sec_start + 2],
-                        cached[sec_start + 3],
-                    ]);
-                    let acc_idx = i32::from_le_bytes([
-                        cached[sec_start + 4],
-                        cached[sec_start + 5],
-                        cached[sec_start + 6],
-                        cached[sec_start + 7],
-                    ]);
-                    let max_bones = i32::from_le_bytes([
-                        cached[sec_start + 8],
-                        cached[sec_start + 9],
-                        cached[sec_start + 10],
-                        cached[sec_start + 11],
-                    ]);
-                    let rigid_bone = i32::from_le_bytes([
-                        cached[sec_start + 12],
-                        cached[sec_start + 13],
-                        cached[sec_start + 14],
-                        cached[sec_start + 15],
-                    ]);
-                    let ib_ofs = i32::from_le_bytes([
-                        cached[sec_start + 16],
-                        cached[sec_start + 17],
-                        cached[sec_start + 18],
-                        cached[sec_start + 19],
-                    ]);
-                    let num_tris = i32::from_le_bytes([
-                        cached[sec_start + 20],
-                        cached[sec_start + 21],
-                        cached[sec_start + 22],
-                        cached[sec_start + 23],
-                    ]);
-                    let vb_ofs = i32::from_le_bytes([
-                        cached[sec_start + 24],
-                        cached[sec_start + 25],
-                        cached[sec_start + 26],
-                        cached[sec_start + 27],
-                    ]);
-                    let vb_bytes = i32::from_le_bytes([
-                        cached[sec_start + 28],
-                        cached[sec_start + 29],
-                        cached[sec_start + 30],
-                        cached[sec_start + 31],
-                    ]);
-                    let vert_size = i32::from_le_bytes([
-                        cached[sec_start + 32],
-                        cached[sec_start + 33],
-                        cached[sec_start + 34],
-                        cached[sec_start + 35],
-                    ]);
-                    let num_verts = i32::from_le_bytes([
-                        cached[sec_start + 36],
-                        cached[sec_start + 37],
-                        cached[sec_start + 38],
-                        cached[sec_start + 39],
-                    ]);
-                    eprintln!(
-                        "    mat={} acc={} maxBones={} rigidBone={}",
-                        mat_idx, acc_idx, max_bones, rigid_bone
-                    );
-                    eprintln!(
-                        "    ibOfs={} numTris={} vbOfs={} vbBytes={}",
-                        ib_ofs, num_tris, vb_ofs, vb_bytes
-                    );
-                    eprintln!("    vertSize={} numVerts={}", vert_size, num_verts);
-                }
-            }
-        }
-
-        // Now try the actual parser
-        eprintln!("\n--- Attempting UGX parse ---");
-        match UgxGeom::from_bytes(&data) {
-            Ok(geom) => {
-                eprintln!("SUCCESS!");
-                eprintln!("  Sections: {}", geom.sections.len());
-                eprintln!("  Materials: {}", geom.materials.len());
-                eprintln!("  Bones: {}", geom.bones.len());
-            }
-            Err(e) => {
-                eprintln!("FAILED: {:?}", e);
-            }
         }
     }
+}
+
+fn inspect_related_chunks(ecf: &ecf::Reader<'_>) {
+    for chunk_id in [0x701u64, 0x702, 0x703, 0x704, 0x705] {
+        match ecf.chunk_data_by_id(chunk_id) {
+            Ok(data) => {
+                eprintln!("\nChunk 0x{chunk_id:03X}: {} bytes", data.len());
+                if chunk_id == 0x705 {
+                    eprintln!(
+                        "  AABB tree version: 0x{:08X}",
+                        read_u32(&data, 0).unwrap_or(0)
+                    );
+                    eprintln!(
+                        "  AABB tree node count: {}",
+                        read_u32(&data, 4).unwrap_or(0)
+                    );
+                }
+            }
+            Err(_) => eprintln!("\nChunk 0x{chunk_id:03X}: NOT FOUND"),
+        }
+    }
+}
+
+fn inspect_sections(cached: &[u8]) {
+    let Some(section_count) = read_u32(cached, 64).and_then(|value| usize::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(section_offset) = read_u64(cached, 72).and_then(|value| usize::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(section_data) = cached.get(section_offset..) else {
+        return;
+    };
+    eprintln!(
+        "\n--- Section data (Array[0]: count={section_count}, offset=0x{section_offset:X}) ---"
+    );
+    for (index, section) in section_data
+        .as_chunks::<72>()
+        .0
+        .iter()
+        .take(section_count)
+        .enumerate()
+    {
+        let offset = section_offset.saturating_add(index.saturating_mul(72));
+        eprintln!("  Section[{index}] at 0x{offset:X}:");
+        print_hex_bytes(section, offset, section.len());
+        print_section_fields(section);
+    }
+}
+
+fn print_section_fields(section: &[u8; 72]) {
+    let fields: Vec<_> = (0..10)
+        .filter_map(|index| read_i32(section, index * 4))
+        .collect();
+    let [
+        material,
+        accessory,
+        max_bones,
+        rigid_bone,
+        ib_offset,
+        triangle_count,
+        vb_offset,
+        vb_bytes,
+        vertex_size,
+        vertex_count,
+    ] = fields.as_slice()
+    else {
+        return;
+    };
+    eprintln!("    mat={material} acc={accessory} maxBones={max_bones} rigidBone={rigid_bone}");
+    eprintln!(
+        "    ibOfs={ib_offset} numTris={triangle_count} vbOfs={vb_offset} vbBytes={vb_bytes}"
+    );
+    eprintln!("    vertSize={vertex_size} numVerts={vertex_count}");
+}
+
+fn print_hex_bytes(data: &[u8], base_offset: usize, limit: usize) {
+    for (row, bytes) in data[..data.len().min(limit)].chunks(16).enumerate() {
+        let offset = base_offset.saturating_add(row.saturating_mul(16));
+        eprint!("\n  {offset:04x}: ");
+        for byte in bytes {
+            eprint!("{byte:02x} ");
+        }
+    }
+    eprintln!();
+}
+
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    Some(u32::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_i32(data: &[u8], offset: usize) -> Option<i32> {
+    let end = offset.checked_add(4)?;
+    Some(i32::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u64(data: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    Some(u64::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
 }
 
 #[test]
@@ -299,19 +237,16 @@ fn binary_diff_hw2_roundtrip() {
     ];
 
     for path in paths {
-        let original = match read_test_file(path) {
-            Some(d) => d,
-            None => {
-                eprintln!("Skipping {}", path);
-                continue;
-            }
+        let Some(original) = read_test_file(path) else {
+            eprintln!("Skipping {path}");
+            continue;
         };
 
         let geom = UgxGeom::from_bytes(&original).unwrap();
         let round_tripped = geom.to_bytes().unwrap();
 
         let fname = path.rsplit('/').next().unwrap();
-        eprintln!("\n=== {} ===", fname);
+        eprintln!("\n=== {fname} ===");
         eprintln!("Original:      {} bytes", original.len());
         eprintln!("Round-tripped: {} bytes", round_tripped.len());
 
@@ -371,15 +306,15 @@ fn binary_diff_hw2_roundtrip() {
                             orig_data.len(),
                             rt_data.len()
                         );
-                        let chunk_min = orig_data.len().min(rt_data.len());
                         let mut chunk_diffs = 0;
-                        for i in 0..chunk_min {
-                            if orig_data[i] != rt_data[i] {
+                        for (index, (&original_byte, &roundtrip_byte)) in
+                            orig_data.iter().zip(rt_data.iter()).enumerate()
+                        {
+                            if original_byte != roundtrip_byte {
                                 chunk_diffs += 1;
                                 if chunk_diffs <= 20 {
                                     eprintln!(
-                                        "  diff at chunk+0x{:04X}: orig=0x{:02X} vs rt=0x{:02X}",
-                                        i, orig_data[i], rt_data[i]
+                                        "  diff at chunk+0x{index:04X}: orig=0x{original_byte:02X} vs rt=0x{roundtrip_byte:02X}"
                                     );
                                 }
                             }
@@ -387,7 +322,7 @@ fn binary_diff_hw2_roundtrip() {
                         if orig_data.len() != rt_data.len() {
                             eprintln!("  SIZE DIFF: orig={} rt={}", orig_data.len(), rt_data.len());
                         }
-                        eprintln!("  Total chunk byte diffs: {}", chunk_diffs);
+                        eprintln!("  Total chunk byte diffs: {chunk_diffs}");
                     }
                 }
                 Err(_) => {
@@ -410,31 +345,15 @@ fn binary_diff_hw2_roundtrip() {
 #[test]
 fn diag_material_chunk_diff() {
     let path = "/Users/dev/gamedepot/wstore/DUMP/data/maps/rostermode/evenflow_desert/evenflow_desert_water_01/mesh_water.ugx";
-    let original = match read_test_file(path) {
-        Some(d) => d,
-        None => {
-            eprintln!("Skipping material diag");
-            return;
-        }
+    let Some(original) = read_test_file(path) else {
+        eprintln!("Skipping material diag");
+        return;
     };
 
     let orig_ecf = ecf::Reader::new(&original).unwrap();
     let orig_mat = orig_ecf.chunk_data_by_id(0x704).unwrap();
     eprintln!("=== Original 0x704: {} bytes ===", orig_mat.len());
-    // Dump first 80 bytes
-    for row in 0..(80.min(orig_mat.len()) / 16 + 1) {
-        let s = row * 16;
-        let e = (s + 16).min(orig_mat.len());
-        if s >= orig_mat.len() {
-            break;
-        }
-        let hex: std::string::String = orig_mat[s..e]
-            .iter()
-            .map(|b| format!("{b:02X}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        eprintln!("  {s:04X}: {hex}");
-    }
+    print_hex_bytes(&orig_mat, 0, 80);
 
     // Parse the original material data with BDT reader and dump the tree
     match bdt::Reader::read(&orig_mat, bdt::Endian::Little) {
@@ -452,19 +371,7 @@ fn diag_material_chunk_diff() {
     let rt_ecf = ecf::Reader::new(&round_tripped).unwrap();
     let rt_mat = rt_ecf.chunk_data_by_id(0x704).unwrap();
     eprintln!("\n=== Round-tripped 0x704: {} bytes ===", rt_mat.len());
-    for row in 0..(80.min(rt_mat.len()) / 16 + 1) {
-        let s = row * 16;
-        let e = (s + 16).min(rt_mat.len());
-        if s >= rt_mat.len() {
-            break;
-        }
-        let hex: std::string::String = rt_mat[s..e]
-            .iter()
-            .map(|b| format!("{b:02X}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        eprintln!("  {s:04X}: {hex}");
-    }
+    print_hex_bytes(&rt_mat, 0, 80);
 
     match bdt::Reader::read(&rt_mat, bdt::Endian::Little) {
         Ok(Some(root)) => {
@@ -482,12 +389,11 @@ fn dump_bdt(node: &bdt::Node, depth: usize) {
         bdt::Variant::Null => std::string::String::new(),
         v => format!(" text={v:?}"),
     };
-    let attrs: std::string::String = node
-        .attributes
-        .iter()
-        .map(|a| format!(" @{}={:?}", a.name, a.value))
-        .collect();
-    eprintln!("{indent}<{}{}{}>", node.name, attrs, text);
+    eprint!("{indent}<{}", node.name);
+    for attribute in &node.attributes {
+        eprint!(" @{}={:?}", attribute.name, attribute.value);
+    }
+    eprintln!("{text}>");
     for child in &node.children {
         dump_bdt(child, depth + 1);
     }

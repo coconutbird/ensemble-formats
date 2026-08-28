@@ -1,15 +1,41 @@
 //! Material chunk (0x704) builder.
 //!
-//! Serializes materials as a BBinaryDataTree (BDT) packed document.
+//! Serializes materials as a `BBinaryDataTree` (BDT) packed document.
 //! Supports both HW1 legacy format and HW2 Hogan shader-based format.
 
 use alloc::format;
 use alloc::vec::Vec;
+use num_traits::ToPrimitive;
 
 use crate::error::Result;
 use crate::types::{MapType, Material, MaterialData, UgxGeom};
 
-/// Build the material chunk (0x704) as a BBinaryDataTree packed document.
+/// Append a floating-point name/value child.
+fn push_float(parent: &mut bdt::Node, name: &str, value: f32) {
+    let mut node = bdt::Node::new(name);
+    node.text = bdt::Variant::Float(value);
+    parent.children.push(node);
+}
+
+/// Append an unsigned-integer name/value child.
+fn push_uint(parent: &mut bdt::Node, name: &str, value: u32) {
+    let mut node = bdt::Node::new(name);
+    node.text = bdt::Variant::UInt(value);
+    parent.children.push(node);
+}
+
+/// Append a Hogan constant-buffer child node.
+fn push_cb_node(parent: &mut bdt::Node, name: &str, data: &[u8]) {
+    let mut node = bdt::Node::new(name);
+    if data.is_empty() {
+        node.text = bdt::Variant::UInt(0);
+    } else {
+        node.text = bdt::Variant::String(alloc::string::String::from_utf8_lossy(data).into_owned());
+    }
+    parent.children.push(node);
+}
+
+/// Build the material chunk (0x704) as a `BBinaryDataTree` packed document.
 ///
 /// Tree structure (legacy):
 /// ```text
@@ -75,20 +101,9 @@ fn build_material_node(mat: &Material) -> bdt::Node {
     node
 }
 
-/// Build legacy NameValues + Maps children for a material node.
+/// Build legacy `NameValues` + Maps children for a material node.
 fn build_legacy_children(mat: &crate::types::LegacyMaterialData, node: &mut bdt::Node) {
     let mut nv = bdt::Node::new("NameValues");
-
-    fn push_float(nv: &mut bdt::Node, name: &str, val: f32) {
-        let mut n = bdt::Node::new(name);
-        n.text = bdt::Variant::Float(val);
-        nv.children.push(n);
-    }
-    fn push_uint(nv: &mut bdt::Node, name: &str, val: u32) {
-        let mut n = bdt::Node::new(name);
-        n.text = bdt::Variant::UInt(val);
-        nv.children.push(n);
-    }
 
     push_float(&mut nv, "SpecPower", mat.spec_power);
     push_float(&mut nv, "SpecColorR", mat.spec_color[0]);
@@ -100,8 +115,12 @@ fn build_legacy_children(mat: &crate::types::LegacyMaterialData, node: &mut bdt:
     push_float(&mut nv, "EnvFresnelPower", mat.env_fresnel_power);
     push_uint(&mut nv, "AccessoryIndex", mat.accessory_index);
     push_uint(&mut nv, "Flags", mat.flags);
-    push_uint(&mut nv, "BlendType", mat.blend_type as u32);
-    push_uint(&mut nv, "Opacity", (mat.opacity * 255.0) as u32);
+    push_uint(&mut nv, "BlendType", u32::from(mat.blend_type));
+    let opacity = (mat.opacity.clamp(0.0, 1.0) * 255.0)
+        .round()
+        .to_u32()
+        .unwrap_or_default();
+    push_uint(&mut nv, "Opacity", opacity);
 
     node.children.push(nv);
 
@@ -124,11 +143,11 @@ fn build_legacy_children(mat: &crate::types::LegacyMaterialData, node: &mut bdt:
                 .push(bdt::Attribute::with_string("Name", &map.name));
             map_node.attributes.push(bdt::Attribute::new(
                 "Channel",
-                bdt::Variant::Int(map.channel as i32),
+                bdt::Variant::Int(i32::from(map.channel)),
             ));
             map_node.attributes.push(bdt::Attribute::new(
                 "Flags",
-                bdt::Variant::UInt(map.flags as u32),
+                bdt::Variant::UInt(u32::from(map.flags)),
             ));
             type_node.children.push(map_node);
         }
@@ -175,26 +194,6 @@ fn build_hogan_node(hogan: &crate::types::HoganMaterialData) -> bdt::Node {
         "terrainBlending",
         bdt::Variant::Bool(hogan.terrain_blending),
     ));
-
-    // Child nodes: constant buffer data blobs + textures.
-    //
-    // CB data is stored as BDT "string" nodes containing raw binary.
-    // Only emit non-empty blobs to keep the output lean.
-    fn push_cb_node(parent: &mut bdt::Node, name: &str, data: &[u8]) {
-        if data.is_empty() {
-            // Write a UInt(0) placeholder like the engine expects for empty CB data.
-            let mut n = bdt::Node::new(name);
-            n.text = bdt::Variant::UInt(0);
-            parent.children.push(n);
-        } else {
-            let mut n = bdt::Node::new(name);
-            // Store raw bytes as a String variant. Non-UTF-8 bytes will be
-            // lossily converted — see HoganMaterialData docs for details.
-            n.text =
-                bdt::Variant::String(alloc::string::String::from_utf8_lossy(data).into_owned());
-            parent.children.push(n);
-        }
-    }
 
     push_cb_node(&mut node, "VSCBData", &hogan.vs_cb_data);
     push_cb_node(&mut node, "PSCBData", &hogan.ps_cb_data);

@@ -1,4 +1,4 @@
-//! Core node types for the BBinaryDataTree format.
+//! Core node types for the `BBinaryDataTree` format.
 //!
 //! A BDT document is a tree of [`Node`]s. Each node has a name, an optional
 //! text value, zero or more [`Attribute`]s, and zero or more child nodes.
@@ -49,6 +49,7 @@ impl Attribute {
     }
 
     /// Return the value formatted as a string (delegates to [`Variant::to_string_value`]).
+    #[must_use]
     pub fn value_string(&self) -> String {
         self.value.to_string_value()
     }
@@ -103,36 +104,51 @@ impl Node {
     }
 
     /// Look up an attribute by name, returning `None` if not found.
+    #[must_use]
     pub fn get_attribute(&self, name: &str) -> Option<&Attribute> {
         self.attributes.iter().find(|a| a.name == name)
     }
 
     /// Return the text value formatted as a string.
+    #[must_use]
     pub fn text_string(&self) -> String {
         self.text.to_string_value()
     }
 
     /// Returns `true` if this node has any children.
+    #[must_use]
     pub fn has_children(&self) -> bool {
         !self.children.is_empty()
     }
 
     /// Returns `true` if this node has any attributes.
+    #[must_use]
     pub fn has_attributes(&self) -> bool {
         !self.attributes.is_empty()
     }
 
     /// Count this node plus all descendants recursively.
+    #[must_use]
     pub fn node_count(&self) -> usize {
-        1 + self.children.iter().map(|c| c.node_count()).sum::<usize>()
+        1 + self.children.iter().map(Node::node_count).sum::<usize>()
     }
 
     /// Parse a node tree from a byte slice with the given endianness.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the packed document is truncated, malformed, or
+    /// contains an invalid variant type.
     pub fn from_bytes(data: &[u8], endian: Endian) -> Result<Option<Self>> {
         crate::Reader::read(data, endian)
     }
 
     /// Serialize this node tree to bytes with the given endianness.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a count, offset, or value cannot be represented
+    /// by the selected on-disk format.
     pub fn to_bytes(&self, endian: Endian) -> Result<Vec<u8>> {
         crate::Writer::write(self, endian)
     }

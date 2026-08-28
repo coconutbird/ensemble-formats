@@ -32,13 +32,17 @@ pub enum Error {
     #[error("unexpected end of data")]
     UnexpectedEof,
 
-    /// Invalid BDeflateStream signature.
+    /// Invalid `BDeflateStream` signature.
     #[error("invalid BDeflateStream signature: 0x{0:08X}")]
     InvalidDeflateStreamSignature(u32),
 
     /// Decompression error.
     #[error("decompression error: {0}")]
     DecompressionError(String),
+
+    /// A collection or offset is too large for the on-disk format.
+    #[error("{0} is too large for the ECF format")]
+    SizeOverflow(&'static str),
 }
 
 /// Result type for ECF operations.

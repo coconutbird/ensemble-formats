@@ -1,4 +1,4 @@
-//! Compare retail UGX vs roundtripped UGX chunk-by-chunk.
+//! Compares retail and roundtripped UGX files chunk by chunk.
 fn hexdump(data: &[u8], max: usize) {
     for row in 0..max.min(data.len()).div_ceil(16) {
         let off = row * 16;
@@ -6,10 +6,7 @@ fn hexdump(data: &[u8], max: usize) {
             break;
         }
         let end = (off + 16).min(data.len()).min(max);
-        let hex: Vec<String> = data[off..end]
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect();
+        let hex: Vec<String> = data[off..end].iter().map(|b| format!("{b:02X}")).collect();
         println!("    {:04X}: {}", off, hex.join(" "));
     }
 }
@@ -77,22 +74,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if diffs == 0 {
                     println!("  IDENTICAL!");
                 } else {
-                    println!("  {} byte differences", diffs);
+                    println!("  {diffs} byte differences");
                     if let Some(d) = first_diff {
                         println!(
                             "  First diff at 0x{:X}: orig=0x{:02X} rt=0x{:02X}",
                             d, o[d], r[d]
                         );
                         let start = d.saturating_sub(16) & !0xF;
-                        println!("  ORIGINAL around first diff (from 0x{:X}):", start);
+                        println!("  ORIGINAL around first diff (from 0x{start:X}):");
                         hexdump(&o[start..], 96);
-                        println!("  ROUNDTRIPPED around first diff (from 0x{:X}):", start);
+                        println!("  ROUNDTRIPPED around first diff (from 0x{start:X}):");
                         hexdump(&r[start..], 96);
                     }
                 }
             }
-            (Ok(_), Err(_)) => println!("\n--- Chunk 0x{:X}: MISSING in roundtrip ---", chunk_id),
-            (Err(_), Ok(_)) => println!("\n--- Chunk 0x{:X}: NEW in roundtrip ---", chunk_id),
+            (Ok(_), Err(_)) => println!("\n--- Chunk 0x{chunk_id:X}: MISSING in roundtrip ---"),
+            (Err(_), Ok(_)) => println!("\n--- Chunk 0x{chunk_id:X}: NEW in roundtrip ---"),
             (Err(_), Err(_)) => {}
         }
     }

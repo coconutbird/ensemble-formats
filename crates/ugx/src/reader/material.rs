@@ -1,25 +1,25 @@
 //! Material chunk (0x704) parser.
 //!
-//! Reads materials from BBinaryDataTree packed document.
+//! Reads materials from `BBinaryDataTree` packed document.
 
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use num_traits::ToPrimitive;
 
 use crate::error::Result;
 use crate::types::{
     HoganMaterialData, LegacyMaterialData, Map, MapType, Material, MaterialData, ShaderPermutation,
 };
 
-/// Read materials from BBinaryDataTree packed document (chunk 0x704).
+/// Read materials from `BBinaryDataTree` packed document (chunk 0x704).
 ///
 /// The root node's children are individual material nodes. Each material
 /// has a "Name" attribute, map type children (Diffuse, Normal, etc.),
-/// UVW velocity children, and a Properties child (BNameValueMap).
+/// UVW velocity children, and a Properties child (`BNameValueMap`).
 pub(crate) fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
-    let root = match bdt::Reader::read(data, bdt::Endian::Little)? {
-        Some(root) => root,
-        None => return Ok(Vec::new()),
+    let Some(root) = bdt::Reader::read(data, bdt::Endian::Little)? else {
+        return Ok(Vec::new());
     };
 
     let mut materials = Vec::with_capacity(root.children.len());
@@ -30,7 +30,7 @@ pub(crate) fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
     Ok(materials)
 }
 
-/// Read a single material from a BBinaryDataTree node.
+/// Read a single material from a `BBinaryDataTree` node.
 ///
 /// Supports two formats:
 /// - **Legacy** (HW1 + some HW2): `<Material @Name @Ver>` with `<NameValues>` + `<Maps>` children.
@@ -46,8 +46,7 @@ fn read_material(node: &bdt::Node) -> Material {
     // Ver from attribute (4 = HW1, 5 = HW2 legacy; absent for Hogan)
     let material_version = node
         .get_attribute("Ver")
-        .map(|a| variant_to_u32(&a.value))
-        .unwrap_or(4);
+        .map_or(4, |a| variant_to_u32(&a.value));
 
     // Check for HW2 Hogan material format
     let data = if let Some(hogan_node) = node.children.iter().find(|c| c.name == "HoganMaterial") {
@@ -63,7 +62,7 @@ fn read_material(node: &bdt::Node) -> Material {
     }
 }
 
-/// Parse the legacy material format (NameValues + Maps children).
+/// Parse the legacy material format (`NameValues` + Maps children).
 fn read_legacy_material(node: &bdt::Node) -> LegacyMaterialData {
     let mut legacy = LegacyMaterialData::default();
 
@@ -83,7 +82,7 @@ fn read_legacy_material(node: &bdt::Node) -> LegacyMaterialData {
                 "BlendType" => legacy.blend_type = variant_to_u8(&prop.text),
                 "Opacity" => {
                     let raw = variant_to_u32(&prop.text);
-                    legacy.opacity = raw as f32 / 255.0;
+                    legacy.opacity = f32::from(u8::try_from(raw).unwrap_or(u8::MAX)) / 255.0;
                 }
                 _ => {}
             }
@@ -142,24 +141,19 @@ fn read_hogan_material(node: &bdt::Node) -> HoganMaterialData {
 
     let ufx_version = node
         .get_attribute("ufxVersion")
-        .map(|a| variant_to_u32(&a.value))
-        .unwrap_or(9);
+        .map_or(9, |a| variant_to_u32(&a.value));
     let blend_mode = node
         .get_attribute("blendMode")
-        .map(|a| variant_to_u32(&a.value))
-        .unwrap_or(0);
+        .map_or(0, |a| variant_to_u32(&a.value));
     let shadow_requires_consts = node
         .get_attribute("shadowRequiresConsts")
-        .map(|a| variant_to_bool(&a.value))
-        .unwrap_or(false);
+        .is_some_and(|a| variant_to_bool(&a.value));
     let skinned = node
         .get_attribute("skinned")
-        .map(|a| variant_to_bool(&a.value))
-        .unwrap_or(false);
+        .is_some_and(|a| variant_to_bool(&a.value));
     let terrain_blending = node
         .get_attribute("terrainBlending")
-        .map(|a| variant_to_bool(&a.value))
-        .unwrap_or(false);
+        .is_some_and(|a| variant_to_bool(&a.value));
 
     let mut vs_cb_data = Vec::new();
     let mut ps_cb_data = Vec::new();
@@ -198,11 +192,10 @@ fn read_hogan_material(node: &bdt::Node) -> HoganMaterialData {
 
 fn variant_to_f32(v: &bdt::Variant) -> f32 {
     match v {
-        bdt::Variant::Float(f) => *f,
-        bdt::Variant::Double(d) => *d as f32,
-        bdt::Variant::Int(i) => *i as f32,
-        bdt::Variant::UInt(u) => *u as f32,
-        bdt::Variant::Fract24(f) => *f,
+        bdt::Variant::Float(value) | bdt::Variant::Fract24(value) => *value,
+        bdt::Variant::Double(value) => value.to_f32().unwrap_or_default(),
+        bdt::Variant::Int(value) => value.to_f32().unwrap_or_default(),
+        bdt::Variant::UInt(value) => value.to_f32().unwrap_or_default(),
         _ => 0.0,
     }
 }
@@ -210,23 +203,23 @@ fn variant_to_f32(v: &bdt::Variant) -> f32 {
 fn variant_to_u32(v: &bdt::Variant) -> u32 {
     match v {
         bdt::Variant::UInt(u) => *u,
-        bdt::Variant::Int(i) => *i as u32,
+        bdt::Variant::Int(value) => u32::try_from(*value).unwrap_or_default(),
         _ => 0,
     }
 }
 
 fn variant_to_i16(v: &bdt::Variant) -> i16 {
     match v {
-        bdt::Variant::Int(i) => *i as i16,
-        bdt::Variant::UInt(u) => *u as i16,
+        bdt::Variant::Int(value) => i16::try_from(*value).unwrap_or_default(),
+        bdt::Variant::UInt(value) => i16::try_from(*value).unwrap_or_default(),
         _ => 0,
     }
 }
 
 fn variant_to_u8(v: &bdt::Variant) -> u8 {
     match v {
-        bdt::Variant::UInt(u) => *u as u8,
-        bdt::Variant::Int(i) => *i as u8,
+        bdt::Variant::UInt(value) => u8::try_from(*value).unwrap_or_default(),
+        bdt::Variant::Int(value) => u8::try_from(*value).unwrap_or_default(),
         _ => 0,
     }
 }

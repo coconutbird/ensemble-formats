@@ -27,7 +27,7 @@
 //! }
 //! ```
 //!
-//! ## Example (Read/Write with UaxFile)
+//! ## Example (Read/Write with `UaxFile`)
 //!
 //! ```no_run
 //! use uax::UaxFile;
@@ -41,7 +41,7 @@
 //! uax.set_duration(new_duration).unwrap();
 //!
 //! // Write back to file
-//! std::fs::write("modified.uax", uax.to_bytes()).unwrap();
+//! std::fs::write("modified.uax", uax.to_bytes().unwrap()).unwrap();
 //! ```
 
 #![no_std]
@@ -62,10 +62,10 @@ mod file;
 pub use file::UaxFile;
 
 /// UAX ECF file ID (from uaxdefs.h)
-pub const UAX_FILE_ID: u32 = 0xAAC93747;
+pub const UAX_FILE_ID: u32 = 0xAAC9_3747;
 
 /// UAX chunk ID for animation data (from uaxdefs.h)
 pub const UAX_CHUNK_ID: u64 = 0x0700;
 
-/// Expected FromFileName value in valid UAX files
+/// Expected `FromFileName` value in valid UAX files
 pub const UAX_FROM_FILENAME: &str = "gr2ugx";

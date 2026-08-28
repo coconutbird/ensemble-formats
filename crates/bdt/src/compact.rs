@@ -1,18 +1,18 @@
-//! Compact BPackedHeader format reader.
+//! Compact `BPackedHeader` format reader.
 //!
-//! This is the native BBinaryDataTree serialization format, used by material
+//! This is the native `BBinaryDataTree` serialization format, used by material
 //! chunks and other non-XMB packed data. The format uses:
-//! - BPackedHeader (28 bytes): signature, CRC, section sizes
-//! - BPackedNode (8 bytes): compact node with 16-bit indices
-//! - BPackedNameValue (8 bytes): name/value pair with type flags
+//! - `BPackedHeader` (28 bytes): signature, CRC, section sizes
+//! - `BPackedNode` (8 bytes): compact node with 16-bit indices
+//! - `BPackedNameValue` (8 bytes): name/value pair with type flags
 //!
 //! Section layout after header:
 //! [User sections (12 bytes each)]
 //! [Node section]
-//! [NameValue section]
-//! [NameData section (null-terminated strings)]
+//! [`NameValue` section]
+//! [`NameData` section (null-terminated strings)]
 //! [Padding to 16-byte boundary]
-//! [ValueData section (16-byte aligned)]
+//! [`ValueData` section (16-byte aligned)]
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -24,10 +24,11 @@ use crate::raw::{BPackedHeader, CompactNodeRaw, CompactNvRaw};
 use crate::util::{assemble_tree, read_null_terminated_string};
 use crate::variant::Variant;
 
-/// BPackedHeader signature for little-endian data.
+/// `BPackedHeader` signature for little-endian data.
 const PACKED_HEADER_SIG_LE: u8 = 0x3E;
-/// BPackedHeader signature for big-endian data.
+/// `BPackedHeader` signature for big-endian data.
 const PACKED_HEADER_SIG_BE: u8 = 0xE3;
+const PACKED_HEADER_SIZE: usize = 28;
 
 /// Check if data at the given offset starts with a compact format signature.
 pub(crate) fn is_compact_signature(data: &[u8], offset: usize) -> bool {
@@ -35,7 +36,7 @@ pub(crate) fn is_compact_signature(data: &[u8], offset: usize) -> bool {
         && (data[offset] == PACKED_HEADER_SIG_LE || data[offset] == PACKED_HEADER_SIG_BE)
 }
 
-/// Read compact format (BPackedHeader with 0x3E/0xE3 signature).
+/// Read compact format (`BPackedHeader` with 0x3E/0xE3 signature).
 pub(crate) fn read_compact(
     data: &[u8],
     header_offset: usize,
@@ -61,8 +62,7 @@ pub(crate) fn read_compact(
     let value_data_size = header.value_data_size(big_endian);
 
     // Calculate section offsets
-    const HEADER_SIZE: usize = 28;
-    let user_sections_offset = header_offset + HEADER_SIZE;
+    let user_sections_offset = header_offset + PACKED_HEADER_SIZE;
     let node_offset = user_sections_offset + num_user_sections * 12;
     let nv_offset = node_offset + node_section_size;
     let name_data_offset = nv_offset + nv_section_size;
@@ -100,10 +100,16 @@ pub(crate) fn read_compact(
     let value_data = &data[value_data_offset..value_data_offset + value_data_size];
 
     // Build tree
-    build_compact_tree(&nodes_slice, &nvs_slice, name_data, value_data, big_endian)
+    Ok(build_compact_tree(
+        &nodes_slice,
+        &nvs_slice,
+        name_data,
+        value_data,
+        big_endian,
+    ))
 }
 
-/// BPackedNameValue flag constants (from binaryDataTree.h).
+/// `BPackedNameValue` flag constants (from binaryDataTree.h).
 mod nv_flags {
     pub const TYPE_IS_UNSIGNED: u16 = 0x0001;
     pub const DIRECT_ENCODING: u16 = 0x0002;
@@ -130,7 +136,6 @@ enum TypeClass {
 impl TypeClass {
     fn from_flags(flags: u16) -> Self {
         match (flags & nv_flags::TYPE_MASK) >> nv_flags::TYPE_SHIFT {
-            0 => TypeClass::Null,
             1 => TypeClass::Bool,
             2 => TypeClass::Int,
             3 => TypeClass::Float,
@@ -147,9 +152,9 @@ fn build_compact_tree(
     name_data: &[u8],
     value_data: &[u8],
     big_endian: bool,
-) -> Result<Option<Node>> {
+) -> Option<Node> {
     if compact_nodes.is_empty() {
-        return Ok(None);
+        return None;
     }
 
     let mut tree_nodes: Vec<Node> = Vec::with_capacity(compact_nodes.len());
@@ -181,9 +186,8 @@ fn build_compact_tree(
         // First name-value is the node name + text
         let (name, text) = if num_nv > 0 && nv_start < nvs.len() {
             let nv = &nvs[nv_start];
-            let name = read_null_terminated_string(name_data, nv.name_ofs(big_endian) as usize)
-                .unwrap_or_default();
-            let text = decode_compact_value(nv, value_data, big_endian);
+            let name = read_null_terminated_string(name_data, nv.name_ofs(big_endian) as usize);
+            let text = decode_compact_value(*nv, value_data, big_endian);
             (name, text)
         } else {
             (String::new(), Variant::Null)
@@ -196,9 +200,8 @@ fn build_compact_tree(
             let attr_end = (nv_start + num_nv).min(nvs.len());
             for nv in &nvs[attr_start..attr_end] {
                 let attr_name =
-                    read_null_terminated_string(name_data, nv.name_ofs(big_endian) as usize)
-                        .unwrap_or_default();
-                let attr_value = decode_compact_value(nv, value_data, big_endian);
+                    read_null_terminated_string(name_data, nv.name_ofs(big_endian) as usize);
+                let attr_value = decode_compact_value(*nv, value_data, big_endian);
                 attributes.push(Attribute {
                     name: attr_name,
                     value: attr_value,
@@ -241,14 +244,13 @@ fn build_compact_tree(
         .iter()
         .enumerate()
         .find(|(_, pn)| pn.parent_index(big_endian) == 0xFFFF)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
+        .map_or(0, |(i, _)| i);
 
-    Ok(assemble_tree(tree_nodes, &child_indices, root))
+    assemble_tree(tree_nodes, &child_indices, root)
 }
 
-/// Decode a compact BPackedNameValue to a Variant.
-fn decode_compact_value(nv: &CompactNvRaw, value_data: &[u8], big_endian: bool) -> Variant {
+/// Decode a compact `BPackedNameValue` to a Variant.
+fn decode_compact_value(nv: CompactNvRaw, value_data: &[u8], big_endian: bool) -> Variant {
     let flags = nv.flags(big_endian);
     let value = nv.value(big_endian);
     let type_class = TypeClass::from_flags(flags);
@@ -321,9 +323,13 @@ fn decode_compact_int(
         } else {
             let type_size = 1usize << type_size_log2;
             let v = match type_size {
-                1 => (value as u8) as i8 as i32,
-                2 => (value as u16) as i16 as i32,
-                _ => value as i32,
+                1 => i32::from(value.to_le_bytes()[0].cast_signed()),
+                2 => i32::from(i16::from_le_bytes(
+                    value.to_le_bytes()[..2]
+                        .try_into()
+                        .expect("two-byte slice has a fixed length"),
+                )),
+                _ => value.cast_signed(),
             };
             Variant::Int(v)
         }
@@ -331,12 +337,12 @@ fn decode_compact_int(
         let type_size = 1usize << type_size_log2;
         if is_unsigned {
             let v = match type_size {
-                1 => value_bytes[0] as u32,
+                1 => u32::from(value_bytes[0]),
                 2 => {
                     if big_endian {
-                        u16::from_be_bytes([value_bytes[0], value_bytes[1]]) as u32
+                        u32::from(u16::from_be_bytes([value_bytes[0], value_bytes[1]]))
                     } else {
-                        u16::from_le_bytes([value_bytes[0], value_bytes[1]]) as u32
+                        u32::from(u16::from_le_bytes([value_bytes[0], value_bytes[1]]))
                     }
                 }
                 4 => {
@@ -361,12 +367,12 @@ fn decode_compact_int(
             Variant::UInt(v)
         } else {
             let v = match type_size {
-                1 => value_bytes[0] as i8 as i32,
+                1 => i32::from(value_bytes[0].cast_signed()),
                 2 => {
                     if big_endian {
-                        i16::from_be_bytes([value_bytes[0], value_bytes[1]]) as i32
+                        i32::from(i16::from_be_bytes([value_bytes[0], value_bytes[1]]))
                     } else {
-                        i16::from_le_bytes([value_bytes[0], value_bytes[1]]) as i32
+                        i32::from(i16::from_le_bytes([value_bytes[0], value_bytes[1]]))
                     }
                 }
                 4 => {
@@ -386,7 +392,7 @@ fn decode_compact_int(
                         ])
                     }
                 }
-                _ => value as i32,
+                _ => value.cast_signed(),
             };
             Variant::Int(v)
         }

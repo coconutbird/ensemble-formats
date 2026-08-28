@@ -29,13 +29,13 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::io::{NoProgress, Progress, Read, Seek, SeekFrom, SliceCursor};
+use ecf::io::{Cursor, NoProgress, Progress, Read, Seek, SeekFrom};
 use ecf::{EcfChunkHeader, EcfHeader};
 
 use crate::error::{Error, Result};
 use crate::header::{EraArchiveHeader, EraChunkExtra, EraEntry, resolve_filename};
 
-/// Compressed entry data: (compressed_bytes, decompressed_size, tiger128_hash).
+/// Compressed entry data: (`compressed_bytes`, `decompressed_size`, `tiger128_hash`).
 pub type CompressedEntryData = (Vec<u8>, u32, [u8; 16]);
 
 /// An ERA archive reader backed by any [`Read`] + [`Seek`] source.
@@ -63,6 +63,11 @@ impl<R: Read + Seek> Reader<R> {
     ///
     /// Reads all headers and the filename table (chunk 0) up-front.
     /// Entry data is **not** read until [`read_entry`](Self::read_entry) is called.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive headers or filename table are invalid,
+    /// truncated, or cannot be decompressed.
     pub fn new(inner: R) -> Result<Self> {
         Self::parse(inner, None)
     }
@@ -72,6 +77,11 @@ impl<R: Read + Seek> Reader<R> {
     /// Same as [`new`](Self::new), but stores the key so that
     /// [`verify_signature`](Self::verify_signature) can be called without
     /// an explicit key argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive headers or filename table are invalid,
+    /// truncated, or cannot be decompressed.
     pub fn with_public_key(inner: R, public_key: [u8; 20]) -> Result<Self> {
         Self::parse(inner, Some(public_key))
     }
@@ -92,7 +102,7 @@ impl<R: Read + Seek> Reader<R> {
         let archive_header = EraArchiveHeader::from_bytes(&archive_buf)?;
 
         // Seek to chunk headers start
-        let chunk_start = ecf_header.header_size as u64;
+        let chunk_start = u64::from(ecf_header.header_size);
         inner
             .seek(SeekFrom::Start(chunk_start))
             .map_err(|_| Error::UnexpectedEof)?;
@@ -112,7 +122,7 @@ impl<R: Read + Seek> Reader<R> {
             let chunk = EcfChunkHeader::from_bytes(&chunk_buf[pos..])?;
             pos += EcfChunkHeader::SIZE;
 
-            let extra = if ecf_header.chunk_extra_data_size >= EraChunkExtra::SIZE as u16 {
+            let extra = if usize::from(ecf_header.chunk_extra_data_size) >= EraChunkExtra::SIZE {
                 let extra = EraChunkExtra::from_bytes(&chunk_buf[pos..])?;
                 pos += ecf_header.chunk_extra_data_size as usize;
                 extra
@@ -134,9 +144,11 @@ impl<R: Read + Seek> Reader<R> {
         }
 
         // Read & decompress filename table (always chunk 0)
-        let filename_table = if !entries.is_empty() {
+        let filename_table = if entries.is_empty() {
+            Vec::new()
+        } else {
             let e = &entries[0];
-            let start = e.chunk.offset as u64;
+            let start = u64::from(e.chunk.offset);
             let size = e.chunk.size as usize;
             inner
                 .seek(SeekFrom::Start(start))
@@ -146,8 +158,6 @@ impl<R: Read + Seek> Reader<R> {
                 .read_exact(&mut raw)
                 .map_err(|_| Error::UnexpectedEof)?;
             entries[0].decompress(&raw)?
-        } else {
-            Vec::new()
         };
 
         // Resolve filenames
@@ -221,6 +231,11 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     /// Read and decompress the data for an entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index` is invalid or the entry cannot be read or
+    /// decompressed.
     pub fn read_entry(&mut self, index: usize) -> Result<Vec<u8>> {
         let entry = self
             .entries
@@ -230,7 +245,7 @@ impl<R: Read + Seek> Reader<R> {
                 count: self.entries.len(),
             })?;
 
-        let start = entry.chunk.offset as u64;
+        let start = u64::from(entry.chunk.offset);
         let size = entry.chunk.size as usize;
 
         self.inner
@@ -247,7 +262,12 @@ impl<R: Read + Seek> Reader<R> {
 
     /// Read compressed data for an entry WITHOUT decompressing.
     ///
-    /// Returns: (compressed_data, decompressed_size, tiger128_hash).
+    /// Returns: (`compressed_data`, `decompressed_size`, `tiger128_hash`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index` is invalid or the compressed entry cannot be
+    /// read.
     pub fn read_entry_compressed(&mut self, index: usize) -> Result<CompressedEntryData> {
         let entry = self
             .entries
@@ -257,7 +277,7 @@ impl<R: Read + Seek> Reader<R> {
                 count: self.entries.len(),
             })?;
 
-        let start = entry.chunk.offset as u64;
+        let start = u64::from(entry.chunk.offset);
         let size = entry.chunk.size as usize;
         let decomp_size = entry.extra.decomp_size;
         let tiger128 = entry.extra.comp_tiger128;
@@ -275,6 +295,11 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     /// Read multiple entries sequentially.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any requested index is invalid or cannot be read or
+    /// decompressed.
     pub fn read_entries(&mut self, indices: &[usize]) -> Result<Vec<Vec<u8>>> {
         let mut results = Vec::with_capacity(indices.len());
         for &idx in indices {
@@ -284,6 +309,10 @@ impl<R: Read + Seek> Reader<R> {
     }
 
     /// Read compressed data for multiple entries sequentially.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any requested index is invalid or cannot be read.
     pub fn read_entries_compressed(
         &mut self,
         indices: &[usize],
@@ -299,6 +328,10 @@ impl<R: Read + Seek> Reader<R> {
     ///
     /// Skips the filename table (entry 0) and iterates entries 1..N.
     /// Equivalent to `read_all_with_progress` with [`NoProgress`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an entry cannot be read or decompressed.
     pub fn read_all(&mut self, handler: impl FnMut(usize, &EraEntry, Vec<u8>)) -> Result<()> {
         self.read_all_with_progress(handler, &mut NoProgress)
     }
@@ -311,6 +344,11 @@ impl<R: Read + Seek> Reader<R> {
     ///
     /// The [`Progress`] implementation receives `(bytes_read, total_bytes)`
     /// and should return `true` to continue or `false` to cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an entry cannot be read or decompressed, or if the
+    /// progress callback cancels the operation.
     pub fn read_all_with_progress(
         &mut self,
         mut handler: impl FnMut(usize, &EraEntry, Vec<u8>),
@@ -320,7 +358,7 @@ impl<R: Read + Seek> Reader<R> {
             .entries
             .iter()
             .skip(1)
-            .map(|e| e.extra.decomp_size as u64)
+            .map(|e| u64::from(e.extra.decomp_size))
             .sum();
         let mut bytes_read: u64 = 0;
 
@@ -371,6 +409,10 @@ impl<R: Read + Seek> Reader<R> {
     ///
     /// Returns `Ok(true)` if valid, `Ok(false)` if unsigned or no key set,
     /// or `Err` if the signature is malformed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the signature is malformed or truncated.
     pub fn verify_signature(&self) -> Result<bool> {
         let Some(key) = &self.public_key else {
             return Ok(false);
@@ -386,6 +428,10 @@ impl<R: Read + Seek> Reader<R> {
     ///
     /// Returns `Ok(true)` if valid, `Ok(false)` if verification fails,
     /// or `Err` if the signature is malformed or missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the signature is malformed or truncated.
     pub fn verify_signature_with_key(&self, public_key: &[u8; 20]) -> Result<bool> {
         if self.signature.is_empty() {
             return Ok(false);
@@ -405,21 +451,30 @@ impl<R: Read + Seek> Reader<R> {
     }
 }
 
-impl<'a> Reader<SliceCursor<'a>> {
+impl<'a> Reader<Cursor<&'a [u8]>> {
     /// Parse an ERA archive from a decrypted byte slice.
     ///
-    /// This wraps the slice in a [`SliceCursor`] so no copy is made.
+    /// This wraps the slice in a [`Cursor`] so no copy is made.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive headers or filename table are invalid,
+    /// truncated, or cannot be decompressed.
     pub fn from_bytes(data: &'a [u8]) -> Result<Self> {
-        Self::new(SliceCursor::new(data))
+        Self::new(Cursor::new(data))
     }
 }
 
 impl<R: Read + Seek> Reader<crate::crypto::decrypt::Reader<R>> {
     /// Parse an encrypted ERA archive, decrypting on the fly.
     ///
-    /// Wraps the source in a [`crypto::decrypt::Reader`] so data is decrypted
+    /// Wraps the source in a [`crate::crypto::decrypt::Reader`] so data is decrypted
     /// block-by-block as it is read — the full archive is never materialised
     /// in memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if decryption or archive parsing fails.
     pub fn from_encrypted(inner: R, keys: crate::TeaKeys) -> Result<Self> {
         Self::new(crate::crypto::decrypt::Reader::new(inner, keys))
     }

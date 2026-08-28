@@ -32,5 +32,5 @@ pub const MAX_VERSION: u64 = 2;
 /// Maximum filename length (engine limit at 0x1FF).
 pub const MAX_FILENAME_LEN: u64 = 0x1FF;
 
-/// Size of the fixed portion of the header (magic + version + entry_count).
+/// Size of the fixed portion of the header (magic + version + `entry_count`).
 pub const HEADER_SIZE: usize = 6 + 8 + 8;

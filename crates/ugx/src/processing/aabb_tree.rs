@@ -5,8 +5,8 @@
 
 use alloc::vec::Vec;
 
-use crate::UgxGeom;
 use crate::types::aabb_tree::{AABB_NULL_INDEX, AabbTree, AabbTreeNode};
+use crate::{Error, Result, UgxGeom};
 
 /// Per-section AABB + centroid used for section-level BVH construction.
 struct SectionAABB {
@@ -32,45 +32,47 @@ impl UgxGeom {
     /// - `node.index` is always 0 (matching originals).
     /// - Leaf nodes group spatially-close sections; internal nodes are pure
     ///   bounding volumes.
-    pub fn rebuild_aabb_tree(&mut self) -> Vec<Vec<i32>> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if section vertex data is malformed or a node or
+    /// section index cannot be represented by the UGX format.
+    pub fn rebuild_aabb_tree(&mut self) -> Result<Vec<Vec<i32>>> {
         if self.sections.is_empty() {
             self.aabb_tree = None;
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Compute per-section AABBs
         let mut sec_aabbs = Vec::new();
-        for si in 0..self.sections.len() {
-            let verts = match self.unpack_section_vertices(si) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if verts.is_empty() {
+        for section_index in 0..self.sections.len() {
+            let vertices = self.unpack_section_vertices(section_index)?;
+            if vertices.is_empty() {
                 continue;
             }
-            let mut smin = [f32::MAX; 3];
-            let mut smax = [f32::MIN; 3];
-            for v in &verts {
-                for k in 0..3 {
-                    smin[k] = smin[k].min(v.position[k]);
-                    smax[k] = smax[k].max(v.position[k]);
+            let mut section_min = [f32::MAX; 3];
+            let mut section_max = [f32::MIN; 3];
+            for vertex in &vertices {
+                for axis in 0..3 {
+                    section_min[axis] = section_min[axis].min(vertex.position[axis]);
+                    section_max[axis] = section_max[axis].max(vertex.position[axis]);
                 }
             }
             sec_aabbs.push(SectionAABB {
-                section_idx: si,
-                min: smin,
-                max: smax,
+                section_idx: section_index,
+                min: section_min,
+                max: section_max,
                 centroid: [
-                    (smin[0] + smax[0]) * 0.5,
-                    (smin[1] + smax[1]) * 0.5,
-                    (smin[2] + smax[2]) * 0.5,
+                    f32::midpoint(section_min[0], section_max[0]),
+                    f32::midpoint(section_min[1], section_max[1]),
+                    f32::midpoint(section_min[2], section_max[2]),
                 ],
             });
         }
 
         if sec_aabbs.is_empty() {
             self.aabb_tree = None;
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Build a section-level BVH. Each leaf holds a set of section indices.
@@ -83,11 +85,41 @@ impl UgxGeom {
             &mut nodes,
             &mut node_sections,
             AABB_NULL_INDEX,
-        );
+        )?;
 
         self.aabb_tree = Some(AabbTree { nodes });
-        node_sections
+        Ok(node_sections)
     }
+}
+
+/// Add a leaf node and its section mapping.
+fn push_leaf(
+    sections: &[SectionAABB],
+    indices: &[usize],
+    nodes: &mut Vec<AabbTreeNode>,
+    leaf_sections: &mut Vec<Vec<i32>>,
+    parent_index: u32,
+    min: [f32; 3],
+    max: [f32; 3],
+) -> Result<u32> {
+    let node_index = crate::checked_u32(nodes.len(), "AABB-tree node index")?;
+    let section_indices = indices
+        .iter()
+        .map(|&index| crate::checked_i32(sections[index].section_idx, "section index"))
+        .collect::<Result<Vec<_>>>()?;
+    nodes.push(AabbTreeNode {
+        min,
+        max,
+        parent: parent_index,
+        children: [AABB_NULL_INDEX, AABB_NULL_INDEX],
+        index: 0,
+        obj_indices: Vec::new(),
+        split_plane: 0.0,
+    });
+    let node_position = crate::checked_usize(u64::from(node_index), "AABB-tree node index")?;
+    leaf_sections.resize_with(node_position, Vec::new);
+    leaf_sections.push(section_indices);
+    Ok(node_index)
 }
 
 /// Recursively build a section-level BVH. Returns the index of the created node.
@@ -100,39 +132,22 @@ fn build_section_bvh(
     nodes: &mut Vec<AabbTreeNode>,
     leaf_sections: &mut Vec<Vec<i32>>,
     parent_idx: u32,
-) -> u32 {
+) -> Result<u32> {
     let (min, max) = compute_section_aabb(secs, indices);
-    let node_idx = nodes.len() as u32;
+    let node_idx = crate::checked_u32(nodes.len(), "AABB-tree node index")?;
 
     // Leaf: 1-2 sections or can't split
     if indices.len() <= 2 {
-        let sec_indices: Vec<i32> = indices
-            .iter()
-            .map(|&i| secs[i].section_idx as i32)
-            .collect();
-        nodes.push(AabbTreeNode {
-            min,
-            max,
-            parent: parent_idx,
-            children: [AABB_NULL_INDEX, AABB_NULL_INDEX],
-            index: 0,
-            obj_indices: Vec::new(),
-            split_plane: 0.0,
-        });
-        while leaf_sections.len() < node_idx as usize {
-            leaf_sections.push(Vec::new());
-        }
-        leaf_sections.push(sec_indices);
-        return node_idx;
+        return push_leaf(secs, indices, nodes, leaf_sections, parent_idx, min, max);
     }
 
     // Find longest axis of centroid spread
     let mut c_min = [f32::MAX; 3];
     let mut c_max = [f32::MIN; 3];
-    for &i in indices {
-        for k in 0..3 {
-            c_min[k] = c_min[k].min(secs[i].centroid[k]);
-            c_max[k] = c_max[k].max(secs[i].centroid[k]);
+    for &section_index in indices {
+        for axis in 0..3 {
+            c_min[axis] = c_min[axis].min(secs[section_index].centroid[axis]);
+            c_max[axis] = c_max[axis].max(secs[section_index].centroid[axis]);
         }
     }
     let extents = [
@@ -150,45 +165,28 @@ fn build_section_bvh(
 
     // If no spatial spread, make a single leaf with all sections
     if extents[split_axis] < 1e-7 {
-        let sec_indices: Vec<i32> = indices
-            .iter()
-            .map(|&i| secs[i].section_idx as i32)
-            .collect();
-        nodes.push(AabbTreeNode {
-            min,
-            max,
-            parent: parent_idx,
-            children: [AABB_NULL_INDEX, AABB_NULL_INDEX],
-            index: 0,
-            obj_indices: Vec::new(),
-            split_plane: 0.0,
-        });
-        while leaf_sections.len() < node_idx as usize {
-            leaf_sections.push(Vec::new());
-        }
-        leaf_sections.push(sec_indices);
-        return node_idx;
+        return push_leaf(secs, indices, nodes, leaf_sections, parent_idx, min, max);
     }
 
-    let split_value = (c_min[split_axis] + c_max[split_axis]) * 0.5;
+    let split_value = f32::midpoint(c_min[split_axis], c_max[split_axis]);
 
     // Partition
     let mut left: Vec<usize> = Vec::new();
     let mut right: Vec<usize> = Vec::new();
-    for &i in indices {
-        if secs[i].centroid[split_axis] <= split_value {
-            left.push(i);
+    for &section_index in indices {
+        if secs[section_index].centroid[split_axis] <= split_value {
+            left.push(section_index);
         } else {
-            right.push(i);
+            right.push(section_index);
         }
     }
 
     // Fallback: if one side empty, split sorted in half
     if left.is_empty() || right.is_empty() {
         let mut sorted: Vec<usize> = indices.to_vec();
-        sorted.sort_by(|&a, &b| {
-            secs[a].centroid[split_axis]
-                .partial_cmp(&secs[b].centroid[split_axis])
+        sorted.sort_by(|&left_index, &right_index| {
+            secs[left_index].centroid[split_axis]
+                .partial_cmp(&secs[right_index].centroid[split_axis])
                 .unwrap_or(core::cmp::Ordering::Equal)
         });
         let mid = sorted.len() / 2;
@@ -207,29 +205,33 @@ fn build_section_bvh(
         split_plane: 0.0,
     });
     // Internal nodes have empty section lists
-    while leaf_sections.len() < node_idx as usize {
-        leaf_sections.push(Vec::new());
-    }
-
+    let node_position = crate::checked_usize(u64::from(node_idx), "AABB-tree node index")?;
+    leaf_sections.resize_with(node_position, Vec::new);
     leaf_sections.push(Vec::new());
 
-    let left_idx = build_section_bvh(secs, &left, nodes, leaf_sections, node_idx);
-    nodes[node_idx as usize].children[0] = left_idx;
+    let left_idx = build_section_bvh(secs, &left, nodes, leaf_sections, node_idx)?;
+    nodes
+        .get_mut(node_position)
+        .ok_or(Error::SizeOverflow("AABB-tree node index"))?
+        .children[0] = left_idx;
 
-    let right_idx = build_section_bvh(secs, &right, nodes, leaf_sections, node_idx);
-    nodes[node_idx as usize].children[1] = right_idx;
+    let right_idx = build_section_bvh(secs, &right, nodes, leaf_sections, node_idx)?;
+    nodes
+        .get_mut(node_position)
+        .ok_or(Error::SizeOverflow("AABB-tree node index"))?
+        .children[1] = right_idx;
 
-    node_idx
+    Ok(node_idx)
 }
 
 /// Compute the AABB enclosing a set of section AABBs.
 fn compute_section_aabb(secs: &[SectionAABB], indices: &[usize]) -> ([f32; 3], [f32; 3]) {
     let mut min = [f32::MAX; 3];
     let mut max = [f32::MIN; 3];
-    for &idx in indices {
-        for k in 0..3 {
-            min[k] = min[k].min(secs[idx].min[k]);
-            max[k] = max[k].max(secs[idx].max[k]);
+    for &section_index in indices {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(secs[section_index].min[axis]);
+            max[axis] = max[axis].max(secs[section_index].max[axis]);
         }
     }
     (min, max)

@@ -3,11 +3,11 @@
 use alloc::vec::Vec;
 
 use ecf::Writer as EcfWriter;
-use ecf::io::WriteBe;
+use nostdio::WriteBe;
 
 use crate::{
     CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK, CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD,
-    CHUNK_XTT_HEADER, FILENAME_SIZE, FoliageQNChunk, Result, XttFile, XttFoliage, XttHeader,
+    CHUNK_XTT_HEADER, Error, FILENAME_SIZE, FoliageQNChunk, Result, XttFile, XttFoliage, XttHeader,
     XttLinker,
 };
 
@@ -16,6 +16,11 @@ pub struct Writer;
 
 impl Writer {
     /// Write an XTT file to a byte vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection is too large for the on-disk format or
+    /// the ECF container cannot be finalized.
     pub fn write(file: &XttFile) -> Result<Vec<u8>> {
         file.to_bytes()
     }
@@ -23,6 +28,11 @@ impl Writer {
 
 impl XttFile {
     /// Serialize this XTT file to bytes (ECF container).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a collection is too large for the on-disk format or
+    /// the ECF container cannot be finalized.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         Writer::write_inner(self)
     }
@@ -49,11 +59,11 @@ impl Writer {
                 }
                 CHUNK_ATLAS_ALBEDO => file.albedo_data.clone(),
                 CHUNK_ROAD => file.road_data.clone(),
-                CHUNK_FOLIAGE_HEADER => Self::write_foliage_header(&file.foliage),
+                CHUNK_FOLIAGE_HEADER => Self::write_foliage_header(&file.foliage)?,
                 CHUNK_FOLIAGE_QN => {
                     let qn = &file.foliage.qn_chunks[foliage_qn_idx];
                     foliage_qn_idx += 1;
-                    Self::write_foliage_qn_chunk(qn)
+                    Self::write_foliage_qn_chunk(qn)?
                 }
                 _ => continue,
             };
@@ -106,10 +116,16 @@ impl Writer {
         buf
     }
 
-    fn write_foliage_header(foliage: &XttFoliage) -> Vec<u8> {
+    fn write_foliage_header(foliage: &XttFoliage) -> Result<Vec<u8>> {
         let num_sets = foliage.sets.len();
-        let mut buf = Vec::with_capacity(4 + num_sets * FILENAME_SIZE);
-        buf.write_u32_be(num_sets as u32).unwrap();
+        let encoded_count =
+            u32::try_from(num_sets).map_err(|_| Error::SizeOverflow("foliage set count"))?;
+        let capacity = num_sets
+            .checked_mul(FILENAME_SIZE)
+            .and_then(|size| size.checked_add(4))
+            .ok_or(Error::SizeOverflow("foliage header"))?;
+        let mut buf = Vec::with_capacity(capacity);
+        buf.write_u32_be(encoded_count).unwrap();
 
         for set in &foliage.sets {
             let mut filename_bytes = [0u8; FILENAME_SIZE];
@@ -119,13 +135,21 @@ impl Writer {
             buf.extend_from_slice(&filename_bytes);
         }
 
-        buf
+        Ok(buf)
     }
 
-    fn write_foliage_qn_chunk(qn: &FoliageQNChunk) -> Vec<u8> {
-        let num_sets = qn.num_sets as usize;
-        let total_index_buffer_size: usize = qn.index_buffers.iter().map(|b| b.len()).sum();
-        let total_size = 8 + num_sets * 4 * 3 + 4 + total_index_buffer_size;
+    fn write_foliage_qn_chunk(qn: &FoliageQNChunk) -> Result<Vec<u8>> {
+        let num_sets =
+            usize::try_from(qn.num_sets).map_err(|_| Error::SizeOverflow("foliage set count"))?;
+        let total_index_buffer_size: usize =
+            qn.index_buffers.iter().map(alloc::vec::Vec::len).sum();
+        let table_size = num_sets
+            .checked_mul(12)
+            .ok_or(Error::SizeOverflow("foliage QN tables"))?;
+        let total_size = 12usize
+            .checked_add(table_size)
+            .and_then(|size| size.checked_add(total_index_buffer_size))
+            .ok_or(Error::SizeOverflow("foliage QN chunk"))?;
 
         let mut buf = Vec::with_capacity(total_size);
         buf.write_u32_be(qn.qn_parent_index).unwrap();
@@ -138,16 +162,27 @@ impl Writer {
             buf.write_i32_be(count).unwrap();
         }
 
-        let total_physical_memory: i32 = qn.index_buffers.iter().map(|b| b.len() as i32).sum();
+        let encoded_sizes: Vec<i32> = qn
+            .index_buffers
+            .iter()
+            .map(|buffer| {
+                i32::try_from(buffer.len()).map_err(|_| Error::SizeOverflow("foliage index buffer"))
+            })
+            .collect::<Result<_>>()?;
+        let total_physical_memory = encoded_sizes.iter().try_fold(0i32, |total, size| {
+            total
+                .checked_add(*size)
+                .ok_or(Error::SizeOverflow("foliage index buffers"))
+        })?;
         buf.write_i32_be(total_physical_memory).unwrap();
 
-        for b in &qn.index_buffers {
-            buf.write_i32_be(b.len() as i32).unwrap();
+        for size in encoded_sizes {
+            buf.write_i32_be(size).unwrap();
         }
-        for b in &qn.index_buffers {
-            buf.extend_from_slice(b);
+        for buffer in &qn.index_buffers {
+            buf.extend_from_slice(buffer);
         }
 
-        buf
+        Ok(buf)
     }
 }

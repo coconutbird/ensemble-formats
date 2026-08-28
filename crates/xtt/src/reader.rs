@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use ecf::Reader as EcfReader;
+use nostdio::{Cursor, ReadBe};
 use zerocopy::Ref;
 
 use crate::{
@@ -19,21 +20,64 @@ const XTT_FILENAME_SIZE: usize = 256;
 
 /// Helper: read a big-endian i32 from a slice at the given offset.
 #[inline]
-fn read_i32_be(data: &[u8], off: usize) -> i32 {
-    i32::from_be_bytes(data[off..off + 4].try_into().unwrap())
+fn read_i32_be(data: &[u8], offset: usize) -> Result<i32> {
+    let mut cursor = Cursor::new(data.get(offset..).ok_or(Error::UnexpectedEof)?);
+    Ok(cursor.read_i32_be()?)
 }
 
 /// Helper: read a big-endian u32 from a slice at the given offset.
 #[inline]
-fn read_u32_be(data: &[u8], off: usize) -> u32 {
-    u32::from_be_bytes(data[off..off + 4].try_into().unwrap())
+fn read_u32_be(data: &[u8], offset: usize) -> Result<u32> {
+    let mut cursor = Cursor::new(data.get(offset..).ok_or(Error::UnexpectedEof)?);
+    Ok(cursor.read_u32_be()?)
+}
+
+/// Helper: read a big-endian f32 from a slice at the given offset.
+#[inline]
+fn read_f32_be(data: &[u8], offset: usize) -> Result<f32> {
+    let mut cursor = Cursor::new(data.get(offset..).ok_or(Error::UnexpectedEof)?);
+    Ok(cursor.read_f32_be()?)
 }
 
 /// Helper: read a null-terminated string from a fixed-size byte region.
-fn read_filename(data: &[u8], off: usize, max_len: usize) -> String {
-    let region = &data[off..off + max_len];
-    let end = region.iter().position(|&b| b == 0).unwrap_or(max_len);
-    String::from_utf8_lossy(&region[..end]).into_owned()
+fn read_filename(data: &[u8], offset: usize, max_len: usize) -> Result<String> {
+    let end = offset
+        .checked_add(max_len)
+        .ok_or(Error::SizeOverflow("filename range"))?;
+    let region = data.get(offset..end).ok_or(Error::UnexpectedEof)?;
+    let name_end = region
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(region.len());
+    Ok(String::from_utf8_lossy(&region[..name_end]).into_owned())
+}
+
+fn nonnegative_count(value: i32, field: &'static str) -> Result<usize> {
+    usize::try_from(value).map_err(|_| Error::InvalidChunkData(format!("Invalid {field}: {value}")))
+}
+
+fn checked_slice(data: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
+    let end = offset
+        .checked_add(len)
+        .ok_or(Error::SizeOverflow("chunk field range"))?;
+    data.get(offset..end).ok_or(Error::UnexpectedEof)
+}
+
+fn advance_offset(offset: &mut usize, amount: usize) -> Result<()> {
+    *offset = offset
+        .checked_add(amount)
+        .ok_or(Error::SizeOverflow("chunk offset"))?;
+    Ok(())
+}
+
+fn linker_alpha_size(layer_count: usize) -> Result<usize> {
+    let aligned_layers = ((layer_count - 1) >> 2) + 1;
+    aligned_layers
+        .checked_mul(XttLinker::ALPHA_TEXTURE_WIDTH)
+        .and_then(|size| size.checked_mul(XttLinker::ALPHA_TEXTURE_HEIGHT))
+        .and_then(|size| size.checked_mul(XttLinker::ALPHA_BPP))
+        .map(|bits| bits >> 3)
+        .ok_or(Error::SizeOverflow("linker alpha payload"))
 }
 
 /// XTT file reader.
@@ -41,6 +85,11 @@ pub struct Reader;
 
 impl Reader {
     /// Read an XTT file from a byte slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container or any recognized XTT chunk is
+    /// invalid or truncated.
     pub fn read(data: &[u8]) -> Result<XttFile> {
         XttFile::from_bytes(data)
     }
@@ -48,6 +97,11 @@ impl Reader {
 
 impl XttFile {
     /// Parse an XTT file from a byte slice (ECF container).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container or any recognized XTT chunk is
+    /// invalid or truncated.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let ecf = EcfReader::new(data)?;
 
@@ -143,25 +197,22 @@ fn read_linker(data: &[u8]) -> Result<XttLinker> {
     let is_fully_opaque = i32::from_be_bytes(raw.is_fully_opaque);
     let num_splat_layers = i32::from_be_bytes(raw.num_splat_layers);
     let num_decal_layers = i32::from_be_bytes(raw.num_decal_layers);
+    let splat_layer_count = nonnegative_count(num_splat_layers, "splat layer count")?;
+    let decal_layer_count = nonnegative_count(num_decal_layers, "decal layer count")?;
     let mut off = XttLinker::HEADER_SIZE;
 
     // Parse splat layer IDs
-    let mut splat_layer_ids = Vec::with_capacity(num_splat_layers as usize);
-    for _ in 0..num_splat_layers {
-        splat_layer_ids.push(read_i32_be(data, off));
-        off += 4;
+    let mut splat_layer_ids = Vec::with_capacity(splat_layer_count);
+    for _ in 0..splat_layer_count {
+        splat_layer_ids.push(read_i32_be(data, off)?);
+        advance_offset(&mut off, 4)?;
     }
 
     // Parse splat alpha data (if more than 1 layer)
-    let splat_alpha_data = if num_splat_layers > 1 {
-        let num_aligned_layers = ((num_splat_layers - 1) >> 2) + 1;
-        let mem_size = (num_aligned_layers as usize
-            * XttLinker::ALPHA_TEXTURE_WIDTH
-            * XttLinker::ALPHA_TEXTURE_HEIGHT
-            * XttLinker::ALPHA_BPP)
-            >> 3;
-        let alpha_data = data[off..off + mem_size].to_vec();
-        off += mem_size;
+    let splat_alpha_data = if splat_layer_count > 1 {
+        let mem_size = linker_alpha_size(splat_layer_count)?;
+        let alpha_data = checked_slice(data, off, mem_size)?.to_vec();
+        advance_offset(&mut off, mem_size)?;
         alpha_data
     } else {
         Vec::new()
@@ -171,19 +222,15 @@ fn read_linker(data: &[u8]) -> Result<XttLinker> {
     let mut decal_layer_ids = Vec::new();
     let mut decal_alpha_data = Vec::new();
 
-    if num_decal_layers > 0 {
-        for _ in 0..num_decal_layers {
-            decal_layer_ids.push(read_i32_be(data, off));
-            off += 4;
+    if decal_layer_count > 0 {
+        decal_layer_ids.reserve(decal_layer_count);
+        for _ in 0..decal_layer_count {
+            decal_layer_ids.push(read_i32_be(data, off)?);
+            advance_offset(&mut off, 4)?;
         }
 
-        let num_aligned_layers = ((num_decal_layers - 1) >> 2) + 1;
-        let mem_size = (num_aligned_layers as usize
-            * XttLinker::ALPHA_TEXTURE_WIDTH
-            * XttLinker::ALPHA_TEXTURE_HEIGHT
-            * XttLinker::ALPHA_BPP)
-            >> 3;
-        decal_alpha_data = data[off..off + mem_size].to_vec();
+        let mem_size = linker_alpha_size(decal_layer_count)?;
+        decal_alpha_data = checked_slice(data, off, mem_size)?.to_vec();
     }
 
     Ok(XttLinker {
@@ -203,7 +250,7 @@ fn read_linker(data: &[u8]) -> Result<XttLinker> {
     })
 }
 
-/// Parse header_extra data to extract active textures, decals, and decal instances.
+/// Parse `header_extra` data to extract active textures, decals, and decal instances.
 fn parse_header_extra(file: &mut XttFile) -> Result<()> {
     if file.header_extra.is_empty() {
         return Ok(());
@@ -213,33 +260,41 @@ fn parse_header_extra(file: &mut XttFile) -> Result<()> {
     let mut off = 0;
 
     // Parse active textures
-    for _ in 0..file.header.num_active_textures {
+    let active_texture_count =
+        nonnegative_count(file.header.num_active_textures, "active texture count")?;
+    for _ in 0..active_texture_count {
         let (tex, consumed) = read_active_texture(data, off)?;
         file.active_textures.push(tex);
-        off += consumed;
+        advance_offset(&mut off, consumed)?;
     }
 
     // Parse active decals
-    for _ in 0..file.header.num_active_decals {
-        let filename = read_filename(data, off, 256);
-        off += 256;
+    let active_decal_count =
+        nonnegative_count(file.header.num_active_decals, "active decal count")?;
+    for _ in 0..active_decal_count {
+        let filename = read_filename(data, off, XTT_FILENAME_SIZE)?;
+        advance_offset(&mut off, XTT_FILENAME_SIZE)?;
         file.active_decals.push(ActiveDecalInfo { filename });
     }
 
     // Parse decal instances
-    for _ in 0..file.header.num_active_decal_instances {
-        let active_decal_index = read_i32_be(data, off);
-        off += 4;
-        let rotation = f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
-        off += 4;
-        let tile_center_x = f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
-        off += 4;
-        let tile_center_y = f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
-        off += 4;
-        let u_scale = f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
-        off += 4;
-        let v_scale = f32::from_be_bytes(data[off..off + 4].try_into().unwrap());
-        off += 4;
+    let decal_instance_count = nonnegative_count(
+        file.header.num_active_decal_instances,
+        "active decal instance count",
+    )?;
+    for _ in 0..decal_instance_count {
+        let active_decal_index = read_i32_be(data, off)?;
+        advance_offset(&mut off, 4)?;
+        let rotation = read_f32_be(data, off)?;
+        advance_offset(&mut off, 4)?;
+        let tile_center_x = read_f32_be(data, off)?;
+        advance_offset(&mut off, 4)?;
+        let tile_center_y = read_f32_be(data, off)?;
+        advance_offset(&mut off, 4)?;
+        let u_scale = read_f32_be(data, off)?;
+        advance_offset(&mut off, 4)?;
+        let v_scale = read_f32_be(data, off)?;
+        advance_offset(&mut off, 4)?;
         file.decal_instances.push(ActiveDecalInstance {
             active_decal_index,
             rotation,
@@ -254,16 +309,18 @@ fn parse_header_extra(file: &mut XttFile) -> Result<()> {
 }
 
 /// Read a single active texture from the data at the given offset.
-/// Returns (texture, bytes_consumed).
+/// Returns (texture, `bytes_consumed`).
 fn read_active_texture(data: &[u8], off: usize) -> Result<(ActiveTextureInfo, usize)> {
-    let filename = read_filename(data, off, 256);
-    let mut pos = off + 256;
-    let u_scale = read_i32_be(data, pos);
-    pos += 4;
-    let v_scale = read_i32_be(data, pos);
-    pos += 4;
-    let blend_op = read_i32_be(data, pos);
-    pos += 4;
+    let filename = read_filename(data, off, XTT_FILENAME_SIZE)?;
+    let mut pos = off
+        .checked_add(XTT_FILENAME_SIZE)
+        .ok_or(Error::SizeOverflow("active texture offset"))?;
+    let u_scale = read_i32_be(data, pos)?;
+    advance_offset(&mut pos, 4)?;
+    let v_scale = read_i32_be(data, pos)?;
+    advance_offset(&mut pos, 4)?;
+    let blend_op = read_i32_be(data, pos)?;
+    advance_offset(&mut pos, 4)?;
 
     Ok((
         ActiveTextureInfo {
@@ -282,13 +339,14 @@ fn read_foliage_header(data: &[u8]) -> Result<Vec<FoliageSetInfo>> {
         return Ok(Vec::new());
     }
 
-    let num_sets = read_u32_be(data, 0) as usize;
+    let num_sets = usize::try_from(read_u32_be(data, 0)?)
+        .map_err(|_| Error::SizeOverflow("foliage set count"))?;
     let mut off = 4;
     let mut sets = Vec::with_capacity(num_sets);
 
     for _ in 0..num_sets {
-        let filename = read_filename(data, off, XTT_FILENAME_SIZE);
-        off += XTT_FILENAME_SIZE;
+        let filename = read_filename(data, off, XTT_FILENAME_SIZE)?;
+        advance_offset(&mut off, XTT_FILENAME_SIZE)?;
         sets.push(FoliageSetInfo { filename });
     }
 
@@ -302,36 +360,39 @@ fn read_foliage_qn_chunk(data: &[u8]) -> Result<FoliageQNChunk> {
     }
 
     let mut off = 0;
-    let qn_parent_index = read_u32_be(data, off);
-    off += 4;
-    let num_sets = read_u32_be(data, off);
-    off += 4;
+    let qn_parent_index = read_u32_be(data, off)?;
+    advance_offset(&mut off, 4)?;
+    let num_sets = read_u32_be(data, off)?;
+    advance_offset(&mut off, 4)?;
+    let set_count =
+        usize::try_from(num_sets).map_err(|_| Error::SizeOverflow("foliage set count"))?;
 
-    let mut set_indices = Vec::with_capacity(num_sets as usize);
-    for _ in 0..num_sets {
-        set_indices.push(read_i32_be(data, off));
-        off += 4;
+    let mut set_indices = Vec::with_capacity(set_count);
+    for _ in 0..set_count {
+        set_indices.push(read_i32_be(data, off)?);
+        advance_offset(&mut off, 4)?;
     }
 
-    let mut set_poly_counts = Vec::with_capacity(num_sets as usize);
-    for _ in 0..num_sets {
-        set_poly_counts.push(read_i32_be(data, off));
-        off += 4;
+    let mut set_poly_counts = Vec::with_capacity(set_count);
+    for _ in 0..set_count {
+        set_poly_counts.push(read_i32_be(data, off)?);
+        advance_offset(&mut off, 4)?;
     }
 
-    let _total_physical_memory = read_i32_be(data, off);
-    off += 4;
+    let _total_physical_memory = read_i32_be(data, off)?;
+    advance_offset(&mut off, 4)?;
 
-    let mut ind_mem_sizes = Vec::with_capacity(num_sets as usize);
-    for _ in 0..num_sets {
-        ind_mem_sizes.push(read_i32_be(data, off) as usize);
-        off += 4;
+    let mut index_buffer_sizes = Vec::with_capacity(set_count);
+    for _ in 0..set_count {
+        let size = nonnegative_count(read_i32_be(data, off)?, "foliage index buffer size")?;
+        index_buffer_sizes.push(size);
+        advance_offset(&mut off, 4)?;
     }
 
-    let mut index_buffers = Vec::with_capacity(num_sets as usize);
-    for &size in &ind_mem_sizes {
-        index_buffers.push(data[off..off + size].to_vec());
-        off += size;
+    let mut index_buffers = Vec::with_capacity(set_count);
+    for size in index_buffer_sizes {
+        index_buffers.push(checked_slice(data, off, size)?.to_vec());
+        advance_offset(&mut off, size)?;
     }
 
     Ok(FoliageQNChunk {

@@ -3,7 +3,7 @@
 //! Contains `Matrix4x4` (row-major 4×4) and `QForm` (quaternion + translation)
 //! used for bone transforms in UGX geometry data.
 
-use nostdio::{ReadLe, SliceCursor};
+use nostdio::{Cursor, ReadLe};
 
 use crate::error::Result;
 
@@ -39,12 +39,14 @@ impl Default for Matrix4x4 {
 
 impl Matrix4x4 {
     /// Get translation from the matrix (row 3, columns 0-2).
+    #[must_use]
     pub fn translation(&self) -> [f32; 3] {
         [self.rows[3][0], self.rows[3][1], self.rows[3][2]]
     }
 
     /// Convert to glTF column-major format (16-element array).
     /// glTF expects: [m00, m10, m20, m30, m01, m11, m21, m31, m02, m12, m22, m32, m03, m13, m23, m33]
+    #[must_use]
     pub fn to_gltf_column_major(&self) -> [f32; 16] {
         let m = &self.rows;
         [
@@ -56,6 +58,7 @@ impl Matrix4x4 {
     }
 
     /// Create an identity matrix.
+    #[must_use]
     pub fn identity() -> Self {
         Self {
             rows: [
@@ -68,6 +71,7 @@ impl Matrix4x4 {
     }
 
     /// Invert this 4x4 matrix. Returns None if the matrix is singular.
+    #[must_use]
     pub fn inverse(&self) -> Option<Self> {
         let m = &self.rows;
 
@@ -154,15 +158,19 @@ impl Matrix4x4 {
     }
 
     /// Multiply two matrices: self * other
+    #[must_use]
     pub fn multiply(&self, other: &Self) -> Self {
-        let a = &self.rows;
-        let b = &other.rows;
+        let left_rows = &self.rows;
+        let right_rows = &other.rows;
         let mut result = [[0.0f32; 4]; 4];
 
-        for i in 0..4 {
-            for j in 0..4 {
-                result[i][j] =
-                    a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
+        for row_index in 0..4 {
+            for column_index in 0..4 {
+                result[row_index][column_index] = left_rows[row_index][0]
+                    * right_rows[0][column_index]
+                    + left_rows[row_index][1] * right_rows[1][column_index]
+                    + left_rows[row_index][2] * right_rows[2][column_index]
+                    + left_rows[row_index][3] * right_rows[3][column_index];
             }
         }
 
@@ -170,6 +178,7 @@ impl Matrix4x4 {
     }
 
     /// Transpose the matrix (swap rows and columns).
+    #[must_use]
     pub fn transpose(&self) -> Self {
         let m = &self.rows;
         Self {
@@ -184,46 +193,56 @@ impl Matrix4x4 {
 
     /// Extract rotation as a quaternion [x, y, z, w] from the 3x3 rotation part.
     /// Uses the Shepperd method for numerical stability.
+    #[must_use]
     pub fn to_quaternion(&self) -> [f32; 4] {
-        let m = &self.rows;
-        let m00 = m[0][0];
-        let m11 = m[1][1];
-        let m22 = m[2][2];
+        let matrix = &self.rows;
+        let m00 = matrix[0][0];
+        let m11 = matrix[1][1];
+        let m22 = matrix[2][2];
         let trace = m00 + m11 + m22;
 
-        let (x, y, z, w) = if trace > 0.0 {
-            let s = (trace + 1.0).sqrt() * 2.0;
-            let w = 0.25 * s;
-            let x = (m[2][1] - m[1][2]) / s;
-            let y = (m[0][2] - m[2][0]) / s;
-            let z = (m[1][0] - m[0][1]) / s;
-            (x, y, z, w)
+        let (quaternion_x, quaternion_y, quaternion_z, quaternion_w) = if trace > 0.0 {
+            let scale = (trace + 1.0).sqrt() * 2.0;
+            let quaternion_w = 0.25 * scale;
+            let quaternion_x = (matrix[2][1] - matrix[1][2]) / scale;
+            let quaternion_y = (matrix[0][2] - matrix[2][0]) / scale;
+            let quaternion_z = (matrix[1][0] - matrix[0][1]) / scale;
+            (quaternion_x, quaternion_y, quaternion_z, quaternion_w)
         } else if m00 > m11 && m00 > m22 {
-            let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
-            let w = (m[2][1] - m[1][2]) / s;
-            let x = 0.25 * s;
-            let y = (m[0][1] + m[1][0]) / s;
-            let z = (m[0][2] + m[2][0]) / s;
-            (x, y, z, w)
+            let scale = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
+            let quaternion_w = (matrix[2][1] - matrix[1][2]) / scale;
+            let quaternion_x = 0.25 * scale;
+            let quaternion_y = (matrix[0][1] + matrix[1][0]) / scale;
+            let quaternion_z = (matrix[0][2] + matrix[2][0]) / scale;
+            (quaternion_x, quaternion_y, quaternion_z, quaternion_w)
         } else if m11 > m22 {
-            let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
-            let w = (m[0][2] - m[2][0]) / s;
-            let x = (m[0][1] + m[1][0]) / s;
-            let y = 0.25 * s;
-            let z = (m[1][2] + m[2][1]) / s;
-            (x, y, z, w)
+            let scale = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
+            let quaternion_w = (matrix[0][2] - matrix[2][0]) / scale;
+            let quaternion_x = (matrix[0][1] + matrix[1][0]) / scale;
+            let quaternion_y = 0.25 * scale;
+            let quaternion_z = (matrix[1][2] + matrix[2][1]) / scale;
+            (quaternion_x, quaternion_y, quaternion_z, quaternion_w)
         } else {
-            let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
-            let w = (m[1][0] - m[0][1]) / s;
-            let x = (m[0][2] + m[2][0]) / s;
-            let y = (m[1][2] + m[2][1]) / s;
-            let z = 0.25 * s;
-            (x, y, z, w)
+            let scale = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
+            let quaternion_w = (matrix[1][0] - matrix[0][1]) / scale;
+            let quaternion_x = (matrix[0][2] + matrix[2][0]) / scale;
+            let quaternion_y = (matrix[1][2] + matrix[2][1]) / scale;
+            let quaternion_z = 0.25 * scale;
+            (quaternion_x, quaternion_y, quaternion_z, quaternion_w)
         };
 
-        let len = (x * x + y * y + z * z + w * w).sqrt();
-        if len > 1e-10 {
-            [x / len, y / len, z / len, w / len]
+        let length = (quaternion_x * quaternion_x
+            + quaternion_y * quaternion_y
+            + quaternion_z * quaternion_z
+            + quaternion_w * quaternion_w)
+            .sqrt();
+        if length > 1e-10 {
+            [
+                quaternion_x / length,
+                quaternion_y / length,
+                quaternion_z / length,
+                quaternion_w / length,
+            ]
         } else {
             [0.0, 0.0, 0.0, 1.0]
         }
@@ -232,23 +251,43 @@ impl Matrix4x4 {
 
 impl Matrix4x4 {
     /// Read a 4×4 row-major matrix from 64 bytes of little-endian `f32` data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is truncated or the cursor position
+    /// cannot be represented on the target platform.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let mut cur = SliceCursor::new(&data[*pos..]);
+        let remaining = data
+            .get(*pos..)
+            .ok_or_else(|| crate::Error::UnexpectedEof {
+                context: "matrix".into(),
+            })?;
+        let mut cur = Cursor::new(remaining);
         let mut rows = [[0.0f32; 4]; 4];
         for row in &mut rows {
             for col in row {
                 *col = cur.read_f32_le()?;
             }
         }
-        *pos += cur.position();
+        crate::advance_position(pos, cur.position(), "binary cursor position")?;
         Ok(Self { rows })
     }
 }
 
 impl QForm {
     /// Read a quaternion + translation from 28 bytes of little-endian `f32` data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is truncated or the cursor position
+    /// cannot be represented on the target platform.
     pub fn read(data: &[u8], pos: &mut usize) -> Result<Self> {
-        let mut cur = SliceCursor::new(&data[*pos..]);
+        let remaining = data
+            .get(*pos..)
+            .ok_or_else(|| crate::Error::UnexpectedEof {
+                context: "quaternion transform".into(),
+            })?;
+        let mut cur = Cursor::new(remaining);
         let rotation = [
             cur.read_f32_le()?,
             cur.read_f32_le()?,
@@ -256,7 +295,7 @@ impl QForm {
             cur.read_f32_le()?,
         ];
         let translation = [cur.read_f32_le()?, cur.read_f32_le()?, cur.read_f32_le()?];
-        *pos += cur.position();
+        crate::advance_position(pos, cur.position(), "binary cursor position")?;
         Ok(Self {
             rotation,
             translation,

@@ -3,7 +3,6 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::error::Result;
 use crate::node::Node;
 
 /// Assemble a tree from flat nodes by cloning children into parents.
@@ -33,25 +32,21 @@ pub(crate) fn assemble_tree(
 }
 
 /// Read a null-terminated UTF-8 string from a byte slice at the given offset.
-pub(crate) fn read_null_terminated_string(data: &[u8], offset: usize) -> Result<String> {
+pub(crate) fn read_null_terminated_string(data: &[u8], offset: usize) -> String {
     if offset >= data.len() {
-        return Ok(String::new());
+        return String::new();
     }
     let end = data[offset..]
         .iter()
         .position(|&b| b == 0)
         .unwrap_or(data.len() - offset);
-    Ok(String::from_utf8_lossy(&data[offset..offset + end]).into_owned())
+    String::from_utf8_lossy(&data[offset..offset + end]).into_owned()
 }
 
 /// Read a null-terminated UTF-16 string from a byte slice at the given offset.
-pub(crate) fn read_null_terminated_wstring(
-    data: &[u8],
-    offset: usize,
-    big_endian: bool,
-) -> Result<String> {
+pub(crate) fn read_null_terminated_wstring(data: &[u8], offset: usize, big_endian: bool) -> String {
     if offset >= data.len() {
-        return Ok(String::new());
+        return String::new();
     }
     let mut chars = Vec::new();
     let mut i = offset;
@@ -67,11 +62,11 @@ pub(crate) fn read_null_terminated_wstring(
         chars.push(c);
         i += 2;
     }
-    Ok(String::from_utf16_lossy(&chars))
+    String::from_utf16_lossy(&chars)
 }
 
 /// Decode a direct-encoded string from the lower 24 bits of a variant value.
-pub(crate) fn decode_direct_string(data_bits: u32) -> Result<String> {
+pub(crate) fn decode_direct_string(data_bits: u32) -> String {
     let mut bytes = Vec::new();
     let b0 = (data_bits & 0xFF) as u8;
     let b1 = ((data_bits >> 8) & 0xFF) as u8;
@@ -85,5 +80,5 @@ pub(crate) fn decode_direct_string(data_bits: u32) -> Result<String> {
     if b2 != 0 {
         bytes.push(b2);
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    String::from_utf8_lossy(&bytes).into_owned()
 }

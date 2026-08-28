@@ -1,4 +1,4 @@
-//! Compact BPackedHeader format writer.
+//! Compact `BPackedHeader` format writer.
 //!
 //! Serialises a [`Node`] tree into the compact BDT format (signature `0x3E`),
 //! which is the native `BBinaryDataTree` on-disk representation used by
@@ -18,23 +18,45 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::node::Node;
 use crate::variant::Variant;
 
-/// Compact format writer producing the `0x3E` BPackedHeader binary layout.
+/// Compact format writer producing the `0x3E` `BPackedHeader` binary layout.
 pub struct CompactWriter;
+
+fn checked_u8(value: usize, field: &'static str) -> Result<u8> {
+    u8::try_from(value).map_err(|_| Error::SizeOverflow(field))
+}
+
+fn checked_u16(value: usize, field: &'static str) -> Result<u16> {
+    u16::try_from(value).map_err(|_| Error::SizeOverflow(field))
+}
+
+fn checked_u32(value: usize, field: &'static str) -> Result<u32> {
+    u32::try_from(value).map_err(|_| Error::SizeOverflow(field))
+}
 
 impl CompactWriter {
     /// Write a node tree in compact format (little-endian).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a count, offset, string, or value is too large
+    /// for the compact on-disk representation.
     pub fn write(root: &Node) -> Result<Vec<u8>> {
         Self::write_endian(root, false)
     }
 
     /// Write a node tree in compact format with explicit endianness.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a count, offset, string, or value is too large
+    /// for the compact on-disk representation.
     pub fn write_endian(root: &Node, big_endian: bool) -> Result<Vec<u8>> {
         let mut ctx = CompactCtx::new(big_endian);
-        ctx.collect(root);
+        ctx.collect(root)?;
         ctx.build()
     }
 }
@@ -77,19 +99,19 @@ impl CompactCtx {
     }
 
     /// Add a name string, deduplicating.
-    fn add_name(&mut self, name: &str) -> u16 {
+    fn add_name(&mut self, name: &str) -> Result<u16> {
         if let Some(&ofs) = self.name_offsets.get(name) {
-            return ofs;
+            return Ok(ofs);
         }
-        let ofs = self.name_data.len() as u16;
+        let ofs = checked_u16(self.name_data.len(), "name data offset")?;
         self.name_data.extend_from_slice(name.as_bytes());
         self.name_data.push(0);
         self.name_offsets.insert(name.into(), ofs);
-        ofs
+        Ok(ofs)
     }
 
     /// Encode a Variant into compact NV flags + value.
-    fn encode_variant(&mut self, variant: &Variant) -> (u16, u32) {
+    fn encode_variant(&mut self, variant: &Variant) -> Result<(u16, u32)> {
         // nv_flags bit layout:
         // bit 0: TYPE_IS_UNSIGNED
         // bit 1: DIRECT_ENCODING
@@ -98,43 +120,42 @@ impl CompactCtx {
         // bit 8: LAST_NAME_VALUE (set later)
         // bits 9-15: size (for strings)
         match variant {
-            Variant::Null => (0x0002, 0), // Null, direct
             Variant::Bool(v) => {
                 let flags: u16 = (1 << 2) | 0x0002; // Bool + direct
-                let value = if *v { 1u32 } else { 0u32 };
-                (flags, value)
+                let value = u32::from(*v);
+                Ok((flags, value))
             }
             Variant::Int(v) => {
                 // Direct encoding: value fits in u32
                 let flags: u16 = (2 << 2) | 0x0002 | (2 << 5); // Int + direct + size_log2=2
-                (flags, *v as u32)
+                Ok((flags, (*v).cast_unsigned()))
             }
             Variant::UInt(v) => {
                 let flags: u16 = (2 << 2) | 0x0002 | 0x0001 | (2 << 5); // Int + direct + unsigned + size_log2=2
-                (flags, *v)
+                Ok((flags, *v))
             }
             Variant::Float(v) => {
                 // Use direct encoding for all f32 values — the bits fit in u32
                 let flags: u16 = (3 << 2) | 0x0002 | (2 << 5); // Float + direct + size_log2=2
-                (flags, v.to_bits())
+                Ok((flags, v.to_bits()))
             }
             Variant::Double(v) => {
                 // Indirect: store in value_data
-                let offset = self.value_data.len() as u32;
+                let offset = checked_u32(self.value_data.len(), "value data offset")?;
                 if self.big_endian {
                     self.value_data.extend_from_slice(&v.to_be_bytes());
                 } else {
                     self.value_data.extend_from_slice(&v.to_le_bytes());
                 }
                 let flags: u16 = (3 << 2) | (3 << 5); // Float type + size_log2=3 (8 bytes), NOT direct
-                (flags, offset)
+                Ok((flags, offset))
             }
             Variant::String(s) => self.encode_string_value(s),
-            _ => (0x0002, 0), // Fallback to null for unsupported types
+            _ => Ok((0x0002, 0)), // Fallback to null for unsupported types
         }
     }
 
-    fn encode_string_value(&mut self, s: &str) -> (u16, u32) {
+    fn encode_string_value(&mut self, s: &str) -> Result<(u16, u32)> {
         let bytes = s.as_bytes();
         let len = bytes.len();
 
@@ -142,20 +163,20 @@ impl CompactCtx {
             // Direct encoding: pack bytes into value u32
             let mut value = 0u32;
             for (i, &b) in bytes.iter().enumerate() {
-                value |= (b as u32) << (i * 8);
+                value |= u32::from(b) << (i * 8);
             }
-            let size_field = (len as u16) << 9;
+            let size_field = checked_u16(len, "inline string length")? << 9;
             let flags: u16 = (4 << 2) | 0x0002 | size_field; // String + direct + size
-            (flags, value)
+            Ok((flags, value))
         } else {
             // Indirect: store in value_data
-            let offset = self.value_data.len() as u32;
+            let offset = checked_u32(self.value_data.len(), "value data offset")?;
             self.value_data.extend_from_slice(bytes);
             self.value_data.push(0);
-            let size = if len < 127 { len as u16 } else { 127u16 };
+            let size = checked_u16(len.min(127), "string length")?;
             let size_field = size << 9;
             let flags: u16 = (4 << 2) | size_field; // String, NOT direct
-            (flags, offset)
+            Ok((flags, offset))
         }
     }
 
@@ -164,7 +185,7 @@ impl CompactCtx {
     /// The compact format requires that for any node with `first_child=F`
     /// and `num_children=N`, the child nodes occupy indices `F..F+N`
     /// consecutively in the node array.
-    fn collect(&mut self, root: &Node) {
+    fn collect(&mut self, root: &Node) -> Result<()> {
         use alloc::collections::VecDeque;
 
         // BFS queue: (source Node ref, parent index in self.nodes)
@@ -172,12 +193,12 @@ impl CompactCtx {
         queue.push_back((root, 0xFFFF));
 
         while let Some((node, parent)) = queue.pop_front() {
-            let node_idx = self.nodes.len() as u16;
+            let node_idx = checked_u16(self.nodes.len(), "node index")?;
 
             // Build name-values for this node
-            let nv_start = self.nvs.len() as u16;
-            let name_ofs = self.add_name(&node.name);
-            let (text_flags, text_value) = self.encode_variant(&node.text);
+            let nv_start = checked_u16(self.nvs.len(), "name-value index")?;
+            let name_ofs = self.add_name(&node.name)?;
+            let (text_flags, text_value) = self.encode_variant(&node.text)?;
             self.nvs.push(CNv {
                 name_offset: name_ofs,
                 flags: text_flags,
@@ -185,8 +206,8 @@ impl CompactCtx {
             });
 
             for attr in &node.attributes {
-                let attr_name_ofs = self.add_name(&attr.name);
-                let (attr_flags, attr_value) = self.encode_variant(&attr.value);
+                let attr_name_ofs = self.add_name(&attr.name)?;
+                let (attr_flags, attr_value) = self.encode_variant(&attr.value)?;
                 self.nvs.push(CNv {
                     name_offset: attr_name_ofs,
                     flags: attr_flags,
@@ -194,7 +215,7 @@ impl CompactCtx {
                 });
             }
 
-            let num_nvs = (self.nvs.len() - nv_start as usize) as u8;
+            let num_nvs = checked_u8(self.nvs.len() - usize::from(nv_start), "name-value count")?;
             if num_nvs > 0 {
                 let last_idx = self.nvs.len() - 1;
                 self.nvs[last_idx].flags |= 0x0100; // cLastNameValueMask
@@ -205,7 +226,7 @@ impl CompactCtx {
             self.nodes.push(CNode {
                 parent_index: parent,
                 first_child: 0,
-                num_children: node.children.len() as u8,
+                num_children: checked_u8(node.children.len(), "child count")?,
                 nv_offset: nv_start,
                 num_nvs,
             });
@@ -230,11 +251,16 @@ impl CompactCtx {
                 continue;
             }
             // Find first node with parent_index == i
-            let first = self.nodes.iter().position(|n| n.parent_index == i as u16);
+            let parent_index = checked_u16(i, "parent index")?;
+            let first = self
+                .nodes
+                .iter()
+                .position(|n| n.parent_index == parent_index);
             if let Some(f) = first {
-                self.nodes[i].first_child = f as u16;
+                self.nodes[i].first_child = checked_u16(f, "first child index")?;
             }
         }
+        Ok(())
     }
 
     /// Serialize collected data into the compact binary format.
@@ -273,12 +299,18 @@ impl CompactCtx {
         // CRC-32 placeholder (filled after data section is written)
         self.write_u32(&mut buf, 0);
         // data_size
-        self.write_u32(&mut buf, data_size as u32);
+        self.write_u32(&mut buf, checked_u32(data_size, "data size")?);
         // section sizes
-        self.write_u32(&mut buf, node_section_size as u32);
-        self.write_u32(&mut buf, nv_section_size as u32);
-        self.write_u32(&mut buf, name_data_size as u32);
-        self.write_u32(&mut buf, value_data_size as u32);
+        self.write_u32(
+            &mut buf,
+            checked_u32(node_section_size, "node section size")?,
+        );
+        self.write_u32(
+            &mut buf,
+            checked_u32(nv_section_size, "name-value section size")?,
+        );
+        self.write_u32(&mut buf, checked_u32(name_data_size, "name data size")?);
+        self.write_u32(&mut buf, checked_u32(value_data_size, "value data size")?);
 
         // Node section
         for node in &self.nodes {
@@ -320,7 +352,7 @@ impl CompactCtx {
         let hdr_crc = crate::checksum::crc16_ccitt(&buf[..HEADER_SIZE]);
         buf[2] = saved_byte2;
         // Store low byte of CRC-16 result as the checksum byte
-        buf[2] = hdr_crc as u8;
+        buf[2] = hdr_crc.to_le_bytes()[0];
 
         Ok(buf)
     }
@@ -362,7 +394,7 @@ mod tests {
 
         let data = CompactWriter::write(&root).unwrap();
         println!("Written {} bytes", data.len());
-        println!("Hex: {:02X?}", &data);
+        println!("Hex: {data:02X?}");
 
         let parsed = Reader::read(&data, Endian::Little).unwrap();
         let node = parsed.expect("should parse");
@@ -465,8 +497,8 @@ mod tests {
             }
         }
 
-        let maps_node = m.children.iter().find(|c| c.name == "Maps").unwrap();
-        let diff_node = maps_node
+        let maps_container = m.children.iter().find(|c| c.name == "Maps").unwrap();
+        let diff_node = maps_container
             .children
             .iter()
             .find(|c| c.name == "diffuse")

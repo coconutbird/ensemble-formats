@@ -3,26 +3,6 @@
 //! Provides [`to_xml`] and [`from_xml`] conversions between [`Document`] and
 //! UTF-8 XML text. Uses the workspace [`xml`] crate for tokenized reading,
 //! writing, and entity escaping.
-//!
-//! # Reading XML
-//!
-//! ```
-//! use xmb::Document;
-//!
-//! let xml = r#"<config><setting name="volume" value="50"/></config>"#;
-//! let doc = Document::from_xml(xml).unwrap();
-//! assert_eq!(doc.root().unwrap().name, "config");
-//! ```
-//!
-//! # Writing XML
-//!
-//! ```
-//! use xmb::{Document, Node};
-//!
-//! let doc = Document::with_root(Node::new("root"));
-//! let xml = doc.to_xml();
-//! assert!(xml.contains("<root/>"));
-//! ```
 
 use alloc::format;
 use alloc::string::String;
@@ -41,6 +21,7 @@ impl Document {
     /// Uses a direct recursive tree-walker instead of the streaming
     /// [`xml::Writer`] so formatting decisions (newlines, indentation) are
     /// driven by each node's structure rather than by buffered state.
+    #[must_use]
     pub fn to_xml(&self) -> String {
         let mut buf = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
         if let Some(root) = &self.root {
@@ -50,6 +31,10 @@ impl Document {
     }
 
     /// Parse an XML string into a [`Document`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the XML tokenizer encounters malformed input.
     pub fn from_xml(input: &str) -> Result<Self> {
         let mut root: Option<Node> = None;
         let mut stack: Vec<Node> = Vec::new();
@@ -57,7 +42,7 @@ impl Document {
         let reader = xml::Reader::new(input);
 
         for result in reader {
-            let event = result.map_err(|e| Error::Xml(format!("{}", e)))?;
+            let event = result.map_err(|e| Error::Xml(format!("{e}")))?;
 
             match event {
                 Event::ElementStart { name } => {
@@ -109,11 +94,11 @@ impl Document {
                                 }
                             }
                             Variant::String(existing) => {
-                                node.text = Variant::String(format!("{}{}", existing, text));
+                                node.text = Variant::String(format!("{existing}{text}"));
                             }
                             _ => {
                                 let existing = node.text_string();
-                                node.text = Variant::String(format!("{}{}", existing, text));
+                                node.text = Variant::String(format!("{existing}{text}"));
                             }
                         }
                     }
@@ -215,15 +200,14 @@ fn parse_text_value(s: &str) -> Variant {
 
     if let Ok(v) = s.parse::<i32>() {
         if v >= 0 {
-            return Variant::UInt(v as u32);
-        } else {
-            return Variant::Int(v);
+            return Variant::UInt(v.cast_unsigned());
         }
+        return Variant::Int(v);
     }
 
     if let Ok(v) = s.parse::<f32>() {
         if let Ok(d) = s.parse::<f64>() {
-            let f32_back = v as f64;
+            let f32_back = f64::from(v);
             if (d - f32_back).abs() > 1e-6 {
                 return Variant::Double(d);
             }

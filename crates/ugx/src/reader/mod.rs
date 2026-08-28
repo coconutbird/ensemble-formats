@@ -28,7 +28,7 @@
 //!
 //! ## Packed Data Format (Definitive Edition x64)
 //!
-//! The BCachedData chunk uses a "packed" format where pointers are stored as
+//! The `BCachedData` chunk uses a "packed" format where pointers are stored as
 //! offsets relative to the chunk start. This makes the data position-independent.
 //!
 //! ### Packed Array Layout (16 bytes)
@@ -47,7 +47,7 @@
 //! +0x00: uint64 offset    - Offset to null-terminated string (0xFFFFFFFFFFFFFFFF = NULL)
 //! ```
 //!
-//! ## BCachedData Layout (Chunk 0x700)
+//! ## `BCachedData` Layout (Chunk 0x700)
 //!
 //! Corresponds to C++ `BUGXGeom::BCachedData`:
 //! ```text
@@ -69,7 +69,7 @@
 //! +0x90: BPackedArray<BVector3> boneBoundsHigh (16 bytes)
 //! ```
 //!
-//! ## BSection Layout (152 bytes on-disk)
+//! ## `BSection` Layout (152 bytes on-disk)
 //!
 //! Corresponds to C++ `BUGXGeom::BSection`:
 //! ```text
@@ -90,7 +90,7 @@
 //! +0x94: int32 padding
 //! ```
 //!
-//! ## UnivertPacker Layout (84 bytes on-disk)
+//! ## `UnivertPacker` Layout (84 bytes on-disk)
 //!
 //! Corresponds to C++ `Unigeom::BUnpacker`:
 //! ```text
@@ -110,12 +110,15 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use zerocopy::Ref;
 
-use nostdio::{ReadLe, SliceCursor};
+use nostdio::{Cursor, ReadLe};
 
-use crate::constants::*;
+use crate::constants::{
+    ECF_AABB_TREE_CHUNK_ID, ECF_CACHED_DATA_CHUNK_ID, ECF_GRANNY_CHUNK_ID, ECF_IB_CHUNK_ID,
+    ECF_MATERIAL_CHUNK_ID, ECF_VB_CHUNK_ID, GEOM_HEADER_SIGNATURE_HW1, GEOM_HEADER_SIGNATURE_HW2,
+};
 use crate::error::{Error, Result};
 use crate::types::raw::GeomHeaderRaw;
-use crate::types::*;
+use crate::types::{AABB, Material, Sphere, UgxGeom};
 
 use crate::types::UgxVersion;
 use cached_data::{
@@ -127,11 +130,21 @@ use material::read_materials as parse_materials;
 
 impl UgxGeom {
     /// Parse UGX geometry from a byte slice (ECF container).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container or any required UGX chunk is
+    /// invalid, missing, truncated, or fails checksum validation.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         Self::from_bytes_impl(data, true)
     }
 
     /// Parse UGX geometry from a byte slice, skipping ECF checksum validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container or any required UGX chunk is
+    /// invalid, missing, or truncated.
     pub fn from_bytes_unchecked(data: &[u8]) -> Result<Self> {
         Self::from_bytes_impl(data, false)
     }
@@ -161,16 +174,16 @@ impl UgxGeom {
 
         let num_indices = ib_data.len() / 2;
         let mut index_buffer = Vec::with_capacity(num_indices);
-        let mut ib_cur = SliceCursor::new(&ib_data);
+        let mut ib_cur = Cursor::new(&ib_data);
         for _ in 0..num_indices {
             index_buffer.push(ib_cur.read_u16_le()?);
         }
 
         Self::parse_cached_data(
             &cached_data,
-            granny_data,
-            material_data,
-            aabb_tree_raw,
+            granny_data.as_deref(),
+            material_data.as_deref(),
+            aabb_tree_raw.as_deref(),
             vertex_buffer,
             index_buffer,
         )
@@ -179,9 +192,9 @@ impl UgxGeom {
     /// Parse the cached data chunk (0x700) containing header, sections, bones, etc.
     fn parse_cached_data(
         data: &[u8],
-        granny_data: Option<Vec<u8>>,
-        material_data: Option<Vec<u8>>,
-        aabb_tree_raw: Option<Vec<u8>>,
+        granny_data: Option<&[u8]>,
+        material_data: Option<&[u8]>,
+        aabb_tree_raw: Option<&[u8]>,
         vertex_buffer: Vec<u8>,
         index_buffer: Vec<u16>,
     ) -> Result<Self> {
@@ -217,17 +230,17 @@ impl UgxGeom {
 
         // Validate the Granny chunk: the engine checks FromFileName == "gr2ugx"
         // at +0x10 before parsing. If the chunk exists but is invalid, error out.
-        if let Some(ref granny) = granny_data {
+        if let Some(granny) = granny_data {
             validate_granny_chunk(granny)?;
         }
 
-        let (granny_bones, skeleton_lod_type) = if let Some(ref granny) = granny_data {
+        let (granny_bones, skeleton_lod_type) = if let Some(granny) = granny_data {
             parse_granny_bones(granny)?
         } else {
             (Vec::new(), 0)
         };
 
-        let granny_meshes = if let Some(ref granny) = granny_data {
+        let granny_meshes = if let Some(granny) = granny_data {
             parse_granny_meshes(granny)?
         } else {
             Vec::new()
@@ -241,13 +254,13 @@ impl UgxGeom {
 
         let bone_bounds = read_bone_bounds(data, pos)?;
 
-        let materials = if let Some(ref mat_data) = material_data {
-            parse_materials(mat_data).unwrap_or_default()
+        let materials = if let Some(mat_data) = material_data {
+            parse_materials(mat_data)?
         } else {
             Vec::new()
         };
 
-        let aabb_tree = if let Some(ref tree_data) = aabb_tree_raw {
+        let aabb_tree = if let Some(tree_data) = aabb_tree_raw {
             Some(aabb_tree::read_aabb_tree(tree_data)?)
         } else {
             None
@@ -263,18 +276,20 @@ impl UgxGeom {
             skeleton_lod_type,
             bone_bounds,
             sections,
-            accessories,
-            valid_accessories,
             vertex_buffer,
             index_buffer,
+            accessories,
+            valid_accessories,
             rigid_only,
             rigid_bone_index,
             max_instances,
             instance_index_multiplier,
             large_geom_bone_index,
-            all_sections_rigid,
-            all_sections_skinned,
-            global_bones,
+            flags: crate::GeometryFlags {
+                all_sections_rigid,
+                all_sections_skinned,
+                global_bones,
+            },
             aabb_tree,
         })
     }
@@ -283,8 +298,12 @@ impl UgxGeom {
 /// Read only the materials from a UGX file, skipping geometry, bones, etc.
 ///
 /// Opens the ECF container, extracts chunk 0x704 (materials), and parses
-/// the BBinaryDataTree document. This is much cheaper than a full
+/// the `BBinaryDataTree` document. This is much cheaper than a full
 /// [`UgxGeom::from_bytes`] parse when you only need texture/material info.
+///
+/// # Errors
+///
+/// Returns an error if the ECF container or material chunk is invalid.
 pub fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
     let ecf = ecf::Reader::new(data)?;
     match ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID) {
@@ -298,6 +317,11 @@ pub struct Reader;
 
 impl Reader {
     /// Read a UGX file from a byte slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container or any required UGX chunk is
+    /// invalid, missing, truncated, or fails checksum validation.
     pub fn read(data: &[u8]) -> Result<UgxGeom> {
         UgxGeom::from_bytes(data)
     }

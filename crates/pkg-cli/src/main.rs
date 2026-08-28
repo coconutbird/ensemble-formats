@@ -22,14 +22,20 @@ fn format_size(bytes: u64) -> String {
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;
     if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
+        format_scaled_size(bytes, GB, "GB")
     } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
+        format_scaled_size(bytes, MB, "MB")
     } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
+        format_scaled_size(bytes, KB, "KB")
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
+}
+
+fn format_scaled_size(bytes: u64, unit: u64, suffix: &str) -> String {
+    let whole = bytes / unit;
+    let tenths = (bytes % unit) * 10 / unit;
+    format!("{whole}.{tenths} {suffix}")
 }
 
 #[derive(Parser)]
@@ -116,9 +122,9 @@ fn main() {
 }
 
 fn open_archive(path: &str) -> Result<pkg::Reader<BufReader<fs::File>>, String> {
-    let file = fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    let file = fs::File::open(path).map_err(|e| format!("Failed to open {path}: {e}"))?;
     let reader = BufReader::new(file);
-    pkg::Reader::new(reader).map_err(|e| format!("Failed to parse PKG: {}", e))
+    pkg::Reader::new(reader).map_err(|e| format!("Failed to parse PKG: {e}"))
 }
 
 // --- JSON output types ---
@@ -168,9 +174,9 @@ struct ExtractedFile {
 
 fn err_exit(msg: &str, json: bool, code: i32) -> i32 {
     if json {
-        eprintln!(r#"{{"error": "{}"}}"#, msg);
+        eprintln!(r#"{{"error": "{msg}"}}"#);
     } else {
-        eprintln!("Error: {}", msg);
+        eprintln!("Error: {msg}");
     }
     code
 }
@@ -202,7 +208,7 @@ fn list_archive(path: &str, json: bool) -> i32 {
         };
         println!("{}", serde_json::to_string(&output).unwrap());
     } else {
-        println!("Files in {}:", path);
+        println!("Files in {path}:");
         println!();
 
         let max_name_len = entries
@@ -274,7 +280,7 @@ fn info_archive(path: &str, json: bool) -> i32 {
         };
         println!("{}", serde_json::to_string(&output).unwrap());
     } else {
-        println!("Archive: {}", path);
+        println!("Archive: {path}");
         println!();
         println!("  Magic              capack");
         println!("  Version            {}", archive.version());
@@ -285,6 +291,97 @@ fn info_archive(path: &str, json: bool) -> i32 {
     }
 
     exit_code::SUCCESS
+}
+
+fn entries_to_extract(
+    archive: &pkg::Reader<BufReader<fs::File>>,
+    pattern: Option<&glob::Pattern>,
+    specific_files: &[String],
+) -> Vec<(usize, String)> {
+    archive
+        .entries()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let normalized = entry.filename.replace('\\', "/");
+            let selected = if specific_files.is_empty() {
+                pattern.is_none_or(|candidate| candidate.matches(&normalized))
+            } else {
+                specific_files.iter().any(|filename| {
+                    let filename = filename.replace('\\', "/");
+                    normalized == filename || normalized.ends_with(&format!("/{filename}"))
+                })
+            };
+            selected.then_some((index, normalized))
+        })
+        .collect()
+}
+
+fn extract_entry(
+    archive: &mut pkg::Reader<BufReader<fs::File>>,
+    index: usize,
+    normalized: &str,
+    outdir: &Path,
+    json: bool,
+    quiet: bool,
+    files: &mut Vec<ExtractedFile>,
+) -> bool {
+    let filename = archive.entries()[index].filename.clone();
+    let data = match archive.read_entry(index) {
+        Ok(data) => data,
+        Err(error) => {
+            if json {
+                files.push(ExtractedFile {
+                    filename,
+                    success: false,
+                    error: Some(error.to_string()),
+                });
+            } else if !quiet {
+                eprintln!("  Error reading {normalized}: {error}");
+            }
+            return false;
+        }
+    };
+
+    let file_path = outdir.join(normalized);
+    if let Some(parent) = file_path.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        if json {
+            files.push(ExtractedFile {
+                filename,
+                success: false,
+                error: Some(format!("mkdir: {error}")),
+            });
+        } else if !quiet {
+            eprintln!("  Error creating directory for {normalized}: {error}");
+        }
+        return false;
+    }
+
+    if let Err(error) = fs::write(&file_path, data) {
+        if json {
+            files.push(ExtractedFile {
+                filename,
+                success: false,
+                error: Some(format!("write: {error}")),
+            });
+        } else if !quiet {
+            eprintln!("  Error writing {normalized}: {error}");
+        }
+        return false;
+    }
+
+    if json {
+        files.push(ExtractedFile {
+            filename,
+            success: true,
+            error: None,
+        });
+    } else if !quiet {
+        println!("  {normalized}");
+    }
+    true
 }
 
 fn extract_archive(
@@ -302,21 +399,20 @@ fn extract_archive(
 
     let pattern = filter.map(|f| {
         glob::Pattern::new(f).unwrap_or_else(|e| {
-            eprintln!("Invalid glob pattern '{}': {}", f, e);
+            eprintln!("Invalid glob pattern '{f}': {e}");
             std::process::exit(exit_code::ERROR);
         })
     });
 
     let default_outdir = Path::new(path)
         .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "output".to_string());
+        .map_or_else(|| "output".to_string(), |s| s.to_string_lossy().to_string());
     let outdir_str = outdir.unwrap_or(&default_outdir);
     let outdir = Path::new(outdir_str);
 
     if let Err(e) = fs::create_dir_all(outdir) {
         return err_exit(
-            &format!("Failed to create output directory: {}", e),
+            &format!("Failed to create output directory: {e}"),
             json,
             exit_code::IO_ERROR,
         );
@@ -330,90 +426,22 @@ fn extract_archive(
     let mut errors = 0;
     let mut files = Vec::new();
 
-    // Collect indices and filenames first (entries() borrows immutably).
-    let to_extract: Vec<(usize, String)> = archive
-        .entries()
-        .iter()
-        .enumerate()
-        .filter_map(|(i, entry)| {
-            let normalized = entry.filename.replace('\\', "/");
-            let matches = if !specific_files.is_empty() {
-                specific_files.iter().any(|f| {
-                    let f_normalized = f.replace('\\', "/");
-                    normalized == f_normalized
-                        || normalized.ends_with(&format!("/{}", f_normalized))
-                })
-            } else if let Some(ref pat) = pattern {
-                pat.matches(&normalized)
-            } else {
-                true
-            };
-            if matches { Some((i, normalized)) } else { None }
-        })
-        .collect();
+    let to_extract = entries_to_extract(&archive, pattern.as_ref(), specific_files);
 
     for (index, normalized) in &to_extract {
-        let filename = archive.entries()[*index].filename.clone();
-
-        let data = match archive.read_entry(*index) {
-            Ok(d) => d,
-            Err(e) => {
-                if json {
-                    files.push(ExtractedFile {
-                        filename,
-                        success: false,
-                        error: Some(format!("{}", e)),
-                    });
-                } else if !quiet {
-                    eprintln!("  Error reading {}: {}", normalized, e);
-                }
-                errors += 1;
-                continue;
-            }
-        };
-
-        let file_path = outdir.join(normalized);
-
-        if let Some(parent) = file_path.parent()
-            && let Err(e) = fs::create_dir_all(parent)
-        {
-            if json {
-                files.push(ExtractedFile {
-                    filename,
-                    success: false,
-                    error: Some(format!("mkdir: {}", e)),
-                });
-            } else if !quiet {
-                eprintln!("  Error creating directory for {}: {}", normalized, e);
-            }
+        if extract_entry(
+            &mut archive,
+            *index,
+            normalized,
+            outdir,
+            json,
+            quiet,
+            &mut files,
+        ) {
+            success += 1;
+        } else {
             errors += 1;
-            continue;
         }
-
-        if let Err(e) = fs::write(&file_path, &data) {
-            if json {
-                files.push(ExtractedFile {
-                    filename,
-                    success: false,
-                    error: Some(format!("write: {}", e)),
-                });
-            } else if !quiet {
-                eprintln!("  Error writing {}: {}", normalized, e);
-            }
-            errors += 1;
-            continue;
-        }
-
-        if json {
-            files.push(ExtractedFile {
-                filename,
-                success: true,
-                error: None,
-            });
-        } else if !quiet {
-            println!("  {}", normalized);
-        }
-        success += 1;
     }
 
     if json {
@@ -427,7 +455,7 @@ fn extract_archive(
         println!("{}", serde_json::to_string(&output).unwrap());
     } else if !quiet {
         println!();
-        println!("Extracted {} files ({} errors)", success, errors);
+        println!("Extracted {success} files ({errors} errors)");
     }
 
     if errors > 0 {
@@ -447,6 +475,29 @@ struct CreateOutput {
     error: Option<String>,
 }
 
+fn create_failure(
+    output_path: &str,
+    input_dir: &str,
+    files_added: usize,
+    error: String,
+    json: bool,
+    code: i32,
+) -> i32 {
+    if json {
+        let output = CreateOutput {
+            archive: output_path.to_string(),
+            input_dir: input_dir.to_string(),
+            files_added,
+            success: false,
+            error: Some(error),
+        };
+        println!("{}", serde_json::to_string(&output).unwrap());
+    } else {
+        eprintln!("Error: {error}");
+    }
+    code
+}
+
 fn create_archive(
     output_path: &str,
     input_dir: &str,
@@ -458,23 +509,18 @@ fn create_archive(
     let input_path = Path::new(input_dir);
 
     if !input_path.is_dir() {
-        if json {
-            let output = CreateOutput {
-                archive: output_path.to_string(),
-                input_dir: input_dir.to_string(),
-                files_added: 0,
-                success: false,
-                error: Some(format!("{} is not a directory", input_dir)),
-            };
-            println!("{}", serde_json::to_string(&output).unwrap());
-        } else {
-            eprintln!("Error: {} is not a directory", input_dir);
-        }
-        return exit_code::FILE_NOT_FOUND;
+        return create_failure(
+            output_path,
+            input_dir,
+            0,
+            format!("{input_dir} is not a directory"),
+            json,
+            exit_code::FILE_NOT_FOUND,
+        );
     }
 
     if !quiet && !json {
-        println!("Creating {} from {}...", output_path, input_dir);
+        println!("Creating {output_path} from {input_dir}...");
     }
 
     let mut writer = pkg::Writer::new();
@@ -485,58 +531,43 @@ fn create_archive(
 
     let mut file_count = 0;
     if let Err(e) = collect_files(input_path, input_path, &mut writer, &mut file_count) {
-        if json {
-            let output = CreateOutput {
-                archive: output_path.to_string(),
-                input_dir: input_dir.to_string(),
-                files_added: file_count,
-                success: false,
-                error: Some(format!("Error collecting files: {}", e)),
-            };
-            println!("{}", serde_json::to_string(&output).unwrap());
-        } else {
-            eprintln!("Error collecting files: {}", e);
-        }
-        return exit_code::IO_ERROR;
+        return create_failure(
+            output_path,
+            input_dir,
+            file_count,
+            format!("collecting files: {e}"),
+            json,
+            exit_code::IO_ERROR,
+        );
     }
 
     if !quiet && !json {
-        println!("  Collected {} files", file_count);
+        println!("  Collected {file_count} files");
     }
 
     let archive_bytes = match writer.finalize() {
         Ok(b) => b,
         Err(e) => {
-            if json {
-                let output = CreateOutput {
-                    archive: output_path.to_string(),
-                    input_dir: input_dir.to_string(),
-                    files_added: file_count,
-                    success: false,
-                    error: Some(format!("Error building archive: {}", e)),
-                };
-                println!("{}", serde_json::to_string(&output).unwrap());
-            } else {
-                eprintln!("Error building archive: {}", e);
-            }
-            return exit_code::ERROR;
+            return create_failure(
+                output_path,
+                input_dir,
+                file_count,
+                format!("building archive: {e}"),
+                json,
+                exit_code::ERROR,
+            );
         }
     };
 
     if let Err(e) = fs::write(output_path, &archive_bytes) {
-        if json {
-            let output = CreateOutput {
-                archive: output_path.to_string(),
-                input_dir: input_dir.to_string(),
-                files_added: file_count,
-                success: false,
-                error: Some(format!("Error writing file: {}", e)),
-            };
-            println!("{}", serde_json::to_string(&output).unwrap());
-        } else {
-            eprintln!("Error writing {}: {}", output_path, e);
-        }
-        return exit_code::IO_ERROR;
+        return create_failure(
+            output_path,
+            input_dir,
+            file_count,
+            format!("writing {output_path}: {e}"),
+            json,
+            exit_code::IO_ERROR,
+        );
     }
 
     if json {

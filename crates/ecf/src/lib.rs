@@ -22,7 +22,7 @@
 //! └──────────────────────────────────────┘
 //! ```
 //!
-//! Chunk data may be stored raw or compressed with BDeflateStream (EA's
+//! Chunk data may be stored raw or compressed with `BDeflateStream` (EA's
 //! custom wrapper around raw deflate). The [`Reader`] handles
 //! decompression transparently.
 //!
@@ -80,35 +80,35 @@ pub use checksum::adler32;
 /// ECF header magic number (`0xDABA7737`).
 ///
 /// All ECF files begin with this 4-byte big-endian value.
-pub const HEADER_MAGIC: u32 = 0xDABA7737;
+pub const HEADER_MAGIC: u32 = 0xDABA_7737;
 
 /// Byte-swapped header magic (`0x3777BADA`).
 ///
 /// Encountering this value at offset 0 indicates the file was written in
 /// little-endian byte order (not standard, but handled for robustness).
-pub const HEADER_MAGIC_INVERTED: u32 = 0x3777BADA;
+pub const HEADER_MAGIC_INVERTED: u32 = 0x3777_BADA;
 
-/// Per-chunk resource flags stored in [`ChunkHeader::resource_flags`].
+/// Per-chunk resource flags stored in [`EcfChunkHeader::resource_flags`].
 pub mod resource_flags {
     /// Bit 0 — memory region is contiguous.
     pub const CONTIGUOUS: u16 = 1 << 0;
     /// Bit 1 — memory region is write-combined.
     pub const WRITE_COMBINED: u16 = 1 << 1;
-    /// Bit 2 — chunk data is compressed with BDeflateStream.
+    /// Bit 2 — chunk data is compressed with `BDeflateStream`.
     pub const IS_DEFLATE_STREAM: u16 = 1 << 2;
     /// Bit 3 — chunk contains a resource tag.
     pub const IS_RESOURCE_TAG: u16 = 1 << 3;
 }
 
 /// Compression method for a chunk, derived from the low nibble of
-/// [`ChunkHeader::flags`].
+/// [`EcfChunkHeader::flags`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionMethod {
     /// No compression — data is stored verbatim.
     Stored,
     /// Raw deflate (no zlib/gzip wrapper).
     DeflateRaw,
-    /// BDeflateStream — EA's custom deflate wrapper with checksums.
+    /// `BDeflateStream` — EA's custom deflate wrapper with checksums.
     DeflateStream,
     /// Unrecognised compression nibble.
     Unknown(u8),
@@ -116,6 +116,7 @@ pub enum CompressionMethod {
 
 impl CompressionMethod {
     /// Decode the compression method from the low nibble of chunk flags.
+    #[must_use]
     pub fn from_flags(flags: u8) -> Self {
         match flags & 0x0F {
             0 => Self::Stored,
@@ -127,6 +128,7 @@ impl CompressionMethod {
 }
 
 /// Round `value` up to the next multiple of `alignment` (must be a power of two).
+#[must_use]
 pub fn align_up(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
@@ -140,8 +142,8 @@ mod tests {
     #[test]
     fn test_ecf_roundtrip_single_chunk() {
         let data = b"Hello, ECF World!".to_vec();
-        let file_id = 0x12345678;
-        let chunk_id = 0xDEADBEEF;
+        let file_id = 0x1234_5678;
+        let chunk_id = 0xDEAD_BEEF;
 
         let mut writer = Writer::new(file_id);
         writer.add_chunk(chunk_id, data.clone());
@@ -159,7 +161,7 @@ mod tests {
         let data1 = b"First chunk".to_vec();
         let data2 = b"Second chunk with more data".to_vec();
         let data3 = vec![0u8; 100];
-        let file_id = 0xABCD1234;
+        let file_id = 0xABCD_1234;
 
         let mut writer = Writer::new(file_id);
         writer.add_chunk(0x1111, data1.clone());
@@ -178,11 +180,11 @@ mod tests {
     fn test_ecf_compressed_chunk_roundtrip() {
         let data =
             b"This is some data that will be compressed using BDeflateStream format!".to_vec();
-        let file_id = 0x11111111;
-        let chunk_id = 0x22222222;
+        let file_id = 0x1111_1111;
+        let chunk_id = 0x2222_2222;
 
         let mut writer = Writer::new(file_id);
-        writer.add_chunk_compressed(chunk_id, data.clone()).unwrap();
+        writer.add_chunk_compressed(chunk_id, &data).unwrap();
         let bytes = writer.finalize().expect("Failed to finalize");
 
         let reader = Reader::new(&bytes).expect("Failed to read");

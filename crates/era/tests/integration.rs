@@ -72,7 +72,9 @@ fn roundtrip_identical_bytes() {
 
 #[test]
 fn large_file() {
-    let large_data: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+    let large_data: Vec<u8> = (0..1000)
+        .map(|i| u8::try_from(i % 256).expect("value is reduced modulo 256"))
+        .collect();
 
     let mut writer = Writer::new();
     writer.add_file("large.bin", large_data.clone());
@@ -87,7 +89,8 @@ fn large_file() {
 #[test]
 fn tea_encrypt_decrypt_roundtrip() {
     let keys = TeaKeys::default_archive_keys();
-    let original: [u8; 64] = core::array::from_fn(|i| i as u8);
+    let original: [u8; 64] =
+        core::array::from_fn(|i| u8::try_from(i).expect("array index is below 64"));
     let mut encrypted = [0u8; 64];
     let mut decrypted = [0u8; 64];
 
@@ -105,16 +108,18 @@ fn parallel_encryption_roundtrip() {
     };
 
     let keys = TeaKeys::default_archive_keys();
-    let original: Vec<u8> = (0..640).map(|i| (i % 256) as u8).collect();
+    let original: Vec<u8> = (0..640)
+        .map(|i| u8::try_from(i % 256).expect("value is reduced modulo 256"))
+        .collect();
 
     let mut data1 = original.clone();
-    tea_encrypt_data_parallel(&keys, &mut data1, 0);
-    tea_decrypt_data_parallel(&keys, &mut data1, 0);
+    tea_encrypt_data_parallel(&keys, &mut data1, 0).expect("parallel encryption failed");
+    tea_decrypt_data_parallel(&keys, &mut data1, 0).expect("parallel decryption failed");
     assert_eq!(original, data1);
 
     let mut data2 = original.clone();
-    tea_encrypt_data(&keys, &mut data2, 0);
-    tea_decrypt_data_parallel(&keys, &mut data2, 0);
+    tea_encrypt_data(&keys, &mut data2, 0).expect("encryption failed");
+    tea_decrypt_data_parallel(&keys, &mut data2, 0).expect("parallel decryption failed");
     assert_eq!(original, data2);
 }
 
@@ -123,7 +128,7 @@ fn precompressed_file() {
     let mut writer = Writer::new();
     writer.add_file("regular.txt", b"Regular file".to_vec());
 
-    let compressed = compress_file_data(b"Pre-compressed data");
+    let compressed = compress_file_data(b"Pre-compressed data").expect("compression failed");
     writer.add_compressed_file(
         "precomp.txt",
         compressed.data.clone(),
@@ -237,7 +242,7 @@ fn write_to_with_precompressed() {
     let mut writer = Writer::new();
     writer.add_file("regular.txt", b"Regular file".to_vec());
 
-    let compressed = compress_file_data(b"Pre-compressed data");
+    let compressed = compress_file_data(b"Pre-compressed data").expect("compression failed");
     writer.add_compressed_file(
         "precomp.txt",
         compressed.data.clone(),
@@ -324,7 +329,7 @@ fn merkle_sign_verify_different_depths() {
         let public_key = private_key.public_key(&header_hash);
         let signature = sign(&private_key, &header_hash).expect("signing failed");
         let valid = verify(&public_key, &header_hash, &signature).expect("verify failed");
-        assert!(valid, "depth {} should verify", depth);
+        assert!(valid, "depth {depth} should verify");
     }
 }
 

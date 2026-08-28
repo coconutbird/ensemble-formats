@@ -5,6 +5,9 @@ use alloc::vec::Vec;
 use crate::constants::{GRANNY_HAS_ORIENTATION, GRANNY_HAS_POSITION, GRANNY_HAS_SCALE_SHEAR};
 use crate::types::{Matrix4x4, UgxGeom};
 
+/// Tolerance used to decide whether a transform component is non-default.
+const FLAG_EPS: f32 = 1e-4;
+
 pub(super) struct FallbackTransform {
     pub flags: u32,
     pub position: [f32; 3],
@@ -28,13 +31,14 @@ pub(super) fn compute_fallback_local_transforms(geom: &UgxGeom) -> Vec<FallbackT
         .map(|(i, bone)| {
             // DX row-vector: World = Local * ParentWorld
             // Therefore:    Local = World * ParentWorld^{-1} = World * ParentIWM
-            let local_matrix =
-                if bone.parent_index >= 0 && (bone.parent_index as usize) < bone_count {
-                    let parent_idx = bone.parent_index as usize;
-                    world_matrices[i].multiply(&geom.granny_bones[parent_idx].inverse_world_matrix)
-                } else {
-                    world_matrices[i].clone()
-                };
+            let parent_index = usize::try_from(bone.parent_index)
+                .ok()
+                .filter(|&index| index < bone_count);
+            let local_matrix = if let Some(parent_idx) = parent_index {
+                world_matrices[i].multiply(&geom.granny_bones[parent_idx].inverse_world_matrix)
+            } else {
+                world_matrices[i].clone()
+            };
 
             let position = local_matrix.translation();
             let m = &local_matrix.rows;
@@ -85,8 +89,6 @@ pub(super) fn compute_fallback_local_transforms(geom: &UgxGeom) -> Vec<FallbackT
                     rt.rows[2][0] * m[0][2] + rt.rows[2][1] * m[1][2] + rt.rows[2][2] * m[2][2],
                 ],
             ];
-
-            const FLAG_EPS: f32 = 1e-4;
 
             let mut flags = 0u32;
             if position[0].abs() > FLAG_EPS

@@ -1,4 +1,4 @@
-//! CRC checksums for BPackedHeader validation.
+//! CRC checksums for `BPackedHeader` validation.
 //!
 //! The engine's `BDT_BPackedDocumentReader_init` validates two checksums:
 //! - **Header checksum** (byte 2): CRC-16/CCITT over the 28-byte header with byte 2 zeroed
@@ -10,9 +10,9 @@
 /// Matches the engine's `word_141184C40` table.
 const CRC16_TABLE: [u16; 256] = {
     let mut table = [0u16; 256];
-    let mut i = 0usize;
+    let mut i = 0u16;
     while i < 256 {
-        let mut crc = (i as u16) << 8;
+        let mut crc = i << 8;
         let mut j = 0;
         while j < 8 {
             if crc & 0x8000 != 0 {
@@ -22,7 +22,7 @@ const CRC16_TABLE: [u16; 256] = {
             }
             j += 1;
         }
-        table[i] = crc;
+        table[i as usize] = crc;
         i += 1;
     }
     table
@@ -34,9 +34,9 @@ const CRC16_TABLE: [u16; 256] = {
 /// Matches the engine's `dword_1411845F0` table.
 const CRC32_TABLE: [u32; 256] = {
     let mut table = [0u32; 256];
-    let mut i = 0usize;
+    let mut i = 0u32;
     while i < 256 {
-        let mut crc = i as u32;
+        let mut crc = i;
         let mut j = 0;
         while j < 8 {
             if crc & 1 != 0 {
@@ -46,7 +46,7 @@ const CRC32_TABLE: [u32; 256] = {
             }
             j += 1;
         }
-        table[i] = crc;
+        table[i as usize] = crc;
         i += 1;
     }
     table
@@ -54,13 +54,14 @@ const CRC32_TABLE: [u32; 256] = {
 
 /// Compute the CRC-16/CCITT header checksum.
 ///
-/// The engine computes this over the 28-byte BPackedHeader with byte 2 zeroed,
+/// The engine computes this over the 28-byte `BPackedHeader` with byte 2 zeroed,
 /// using init=0xFFFF and final XOR ~crc (complement).
+#[must_use]
 pub fn crc16_ccitt(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
     for &b in data {
-        let idx = ((crc >> 8) ^ b as u16) as u8;
-        crc = (crc << 8) ^ CRC16_TABLE[idx as usize];
+        let idx = ((crc >> 8) ^ u16::from(b)).to_le_bytes()[0];
+        crc = (crc << 8) ^ CRC16_TABLE[usize::from(idx)];
     }
     !crc
 }
@@ -68,11 +69,12 @@ pub fn crc16_ccitt(data: &[u8]) -> u16 {
 /// Compute the CRC-32 data checksum.
 ///
 /// Standard CRC-32 with init=0xFFFFFFFF and final XOR ~crc.
+#[must_use]
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &b in data {
-        let idx = ((crc ^ b as u32) & 0xFF) as u8;
-        crc = (crc >> 8) ^ CRC32_TABLE[idx as usize];
+        let idx = (crc ^ u32::from(b)).to_le_bytes()[0];
+        crc = (crc >> 8) ^ CRC32_TABLE[usize::from(idx)];
     }
     !crc
 }
@@ -105,6 +107,6 @@ mod tests {
         assert_eq!(CRC32_TABLE[0], 0x0000_0000);
         assert_eq!(CRC32_TABLE[1], 0x7707_3096);
         assert_eq!(CRC32_TABLE[2], 0xEE0E_612C);
-        assert_eq!(CRC32_TABLE[3], 0x990951BA);
+        assert_eq!(CRC32_TABLE[3], 0x9909_51BA);
     }
 }

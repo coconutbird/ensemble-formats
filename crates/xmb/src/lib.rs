@@ -46,16 +46,16 @@ pub use reader::Reader;
 pub use writer::Writer;
 
 /// XMB signature in the packed data header.
-pub const SIGNATURE: u32 = 0x71439800;
+pub const SIGNATURE: u32 = 0x7143_9800;
 
 /// ECF file ID for XMB containers.
-pub const ECF_FILE_ID: u32 = 0xE43ABC00;
+pub const ECF_FILE_ID: u32 = 0xE43A_BC00;
 
 /// ECF chunk ID for the packed BDT data.
-pub const PACKED_DATA_CHUNK_ID: u64 = 0xA9C96500;
+pub const PACKED_DATA_CHUNK_ID: u64 = 0xA9C9_6500;
 
 /// ECF chunk ID for file info (unused in practice).
-pub const FILE_INFO_CHUNK_ID: u64 = 0xA9C96501;
+pub const FILE_INFO_CHUNK_ID: u64 = 0xA9C9_6501;
 
 #[cfg(test)]
 mod tests {

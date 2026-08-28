@@ -21,7 +21,7 @@ pub(crate) fn try_classify(
         let block_insns = ctx.block_insns();
         let has_discard = block_insns
             .iter()
-            .any(|sm4| matches!(sm4.0.opcode, Opcode::Discard));
+            .any(|sm4| matches!(sm4.instruction().opcode, Opcode::Discard));
         if has_discard {
             return Some((
                 Semantic::new(SemanticKind::AlphaTestRef),

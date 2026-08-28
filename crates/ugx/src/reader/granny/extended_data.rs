@@ -9,9 +9,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::constants::GRANNY_TYPE_DEF_STRIDE;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::types::{GrannyMemberType, GrannyTypeMember, GrannyVariant};
-use nostdio::{ReadLe, SliceCursor, read_null_terminated_string};
+use nostdio::{Cursor, ReadLe, read_null_terminated_string};
+
+use super::{data_range, data_tail, pointer_offset};
 
 /// Parse a `GrannyDataTypeDefinition[]` array starting at `offset` in `data`.
 ///
@@ -23,14 +25,11 @@ pub(super) fn parse_type_def_array(data: &[u8], offset: usize) -> Result<Vec<Gra
 
     // Guard against infinite recursion / corrupt data
     for _ in 0..256 {
-        if pos + GRANNY_TYPE_DEF_STRIDE > data.len() {
-            break;
-        }
-
-        let mut cur = SliceCursor::new(&data[pos..]);
+        let entry = data_range(data, pos, GRANNY_TYPE_DEF_STRIDE, "Granny type definition")?;
+        let mut cur = Cursor::new(entry);
         let member_type_raw = cur.read_u32_le()?;
-        let name_ptr = cur.read_u64_le()? as usize;
-        let ref_type_ptr = cur.read_u64_le()? as usize;
+        let name_pointer = cur.read_u64_le()?;
+        let reference_type_pointer = cur.read_u64_le()?;
         let array_width = cur.read_u32_le()?;
         let extra0 = cur.read_u32_le()?;
         let extra1 = cur.read_u32_le()?;
@@ -42,19 +41,25 @@ pub(super) fn parse_type_def_array(data: &[u8], offset: usize) -> Result<Vec<Gra
             Some(t) => t,
             None => {
                 // Unknown type — skip it but continue
-                pos += GRANNY_TYPE_DEF_STRIDE;
+                pos = pos
+                    .checked_add(GRANNY_TYPE_DEF_STRIDE)
+                    .ok_or(Error::SizeOverflow("Granny type definition"))?;
                 continue;
             }
         };
 
-        let name = if name_ptr > 0 && name_ptr < data.len() {
-            read_null_terminated_string(&data[name_ptr..])
+        let name = if name_pointer > 0 {
+            let name_offset = pointer_offset(name_pointer, "Granny member name")?;
+            data_tail(data, name_offset, "Granny member name")
+                .map_or_else(|_| String::new(), read_null_terminated_string)
         } else {
             String::new()
         };
 
         // Recursively parse nested type definitions for Reference/Inline types
-        let reference_type = if ref_type_ptr > 0 && ref_type_ptr < data.len() {
+        let reference_type = if reference_type_pointer > 0 {
+            let reference_type_offset =
+                pointer_offset(reference_type_pointer, "Granny reference type")?;
             match member_type {
                 GrannyMemberType::Inline
                 | GrannyMemberType::Reference
@@ -62,7 +67,7 @@ pub(super) fn parse_type_def_array(data: &[u8], offset: usize) -> Result<Vec<Gra
                 | GrannyMemberType::ArrayOfReferences
                 | GrannyMemberType::VariantReference
                 | GrannyMemberType::ReferenceToVariantArray => {
-                    Some(parse_type_def_array(data, ref_type_ptr)?)
+                    Some(parse_type_def_array(data, reference_type_offset)?)
                 }
                 _ => None,
             }
@@ -78,34 +83,252 @@ pub(super) fn parse_type_def_array(data: &[u8], offset: usize) -> Result<Vec<Gra
             extra: [extra0, extra1, extra2],
         });
 
-        pos += GRANNY_TYPE_DEF_STRIDE;
+        pos = pos
+            .checked_add(GRANNY_TYPE_DEF_STRIDE)
+            .ok_or(Error::SizeOverflow("Granny type definition"))?;
     }
 
     Ok(members)
 }
 
+/// Resolve a member's zero-as-one array width.
+fn member_width(member: &GrannyTypeMember) -> Result<usize> {
+    crate::checked_usize(
+        u64::from(member.array_width.max(1)),
+        "Granny member array width",
+    )
+}
+
 /// Compute the total byte size of a type definition (sum of all member sizes).
-fn compute_type_size(members: &[GrannyTypeMember]) -> usize {
-    let mut total = 0;
-    for m in members {
-        let unit = match m.member_type {
+fn compute_type_size(members: &[GrannyTypeMember]) -> Result<usize> {
+    let mut total = 0usize;
+    for member in members {
+        let unit = match member.member_type {
             GrannyMemberType::Inline => {
-                if let Some(ref nested) = m.reference_type {
-                    compute_type_size(nested)
+                if let Some(ref nested) = member.reference_type {
+                    compute_type_size(nested)?
                 } else {
                     0
                 }
             }
             other => other.unit_size().unwrap_or(0),
         };
-        let width = if m.array_width == 0 {
-            1
-        } else {
-            m.array_width as usize
-        };
-        total += unit * width;
+        let member_size = unit
+            .checked_mul(member_width(member)?)
+            .ok_or(Error::SizeOverflow("Granny member size"))?;
+        total = total
+            .checked_add(member_size)
+            .ok_or(Error::SizeOverflow("Granny type size"))?;
     }
-    total
+    Ok(total)
+}
+
+/// Read a repeated numeric value from the variant-data cursor.
+fn read_values<T>(
+    data: &[u8],
+    position: &mut usize,
+    count: usize,
+    mut read: impl FnMut(&mut Cursor<&[u8]>) -> Result<T>,
+) -> Result<Vec<T>> {
+    let mut cursor = Cursor::new(data_tail(data, *position, "Granny variant data")?);
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        values.push(read(&mut cursor)?);
+    }
+    crate::advance_position(position, cursor.position(), "Granny data cursor")?;
+    Ok(values)
+}
+
+/// Copy raw bytes from the variant-data cursor and advance it safely.
+fn read_raw_bytes(data: &[u8], position: &mut usize, size: usize) -> Result<Vec<u8>> {
+    let bytes = data_range(data, *position, size, "Granny variant bytes")?.to_vec();
+    *position = position
+        .checked_add(size)
+        .ok_or(Error::SizeOverflow("Granny variant bytes"))?;
+    Ok(bytes)
+}
+
+/// Read a serialized pointer from the variant-data cursor.
+fn read_pointer(data: &[u8], position: &mut usize) -> Result<u64> {
+    let mut cursor = Cursor::new(data_tail(data, *position, "Granny pointer")?);
+    let pointer = cursor.read_u64_le()?;
+    crate::advance_position(position, cursor.position(), "Granny data cursor")?;
+    Ok(pointer)
+}
+
+/// Parse scalar and fixed-width numeric member types.
+fn parse_numeric_member(
+    data: &[u8],
+    position: &mut usize,
+    member_type: GrannyMemberType,
+    width: usize,
+) -> Result<Option<GrannyVariant>> {
+    let value = match member_type {
+        GrannyMemberType::Real32 => {
+            GrannyVariant::Real32(read_values(data, position, width, |cursor| {
+                Ok(cursor.read_f32_le()?)
+            })?)
+        }
+        GrannyMemberType::Int8 | GrannyMemberType::BinormalInt8 => {
+            let bytes = read_raw_bytes(data, position, width)?;
+            GrannyVariant::Int8(bytes.into_iter().map(u8::cast_signed).collect())
+        }
+        GrannyMemberType::UInt8 | GrannyMemberType::NormalUInt8 => {
+            GrannyVariant::UInt8(read_raw_bytes(data, position, width)?)
+        }
+        GrannyMemberType::Int16 | GrannyMemberType::BinormalInt16 => {
+            GrannyVariant::Int16(read_values(data, position, width, |cursor| {
+                Ok(cursor.read_i16_le()?)
+            })?)
+        }
+        GrannyMemberType::UInt16 | GrannyMemberType::NormalUInt16 | GrannyMemberType::Real16 => {
+            GrannyVariant::UInt16(read_values(data, position, width, |cursor| {
+                Ok(cursor.read_u16_le()?)
+            })?)
+        }
+        GrannyMemberType::Int32 => {
+            GrannyVariant::Int32(read_values(data, position, width, |cursor| {
+                Ok(cursor.read_i32_le()?)
+            })?)
+        }
+        GrannyMemberType::UInt32 => {
+            GrannyVariant::UInt32(read_values(data, position, width, |cursor| {
+                Ok(cursor.read_u32_le()?)
+            })?)
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(value))
+}
+
+/// Parse a `ReferenceToArray` member and its nested elements.
+fn parse_reference_array(
+    data: &[u8],
+    position: &mut usize,
+    member: &GrannyTypeMember,
+) -> Result<GrannyVariant> {
+    let mut cursor = Cursor::new(data_tail(data, *position, "Granny reference array")?);
+    let count = crate::checked_usize(
+        u64::from(cursor.read_u32_le()?),
+        "Granny reference-array count",
+    )?;
+    let array_pointer = cursor.read_u64_le()?;
+    crate::advance_position(position, cursor.position(), "Granny data cursor")?;
+
+    let Some(nested_type) = member.reference_type.as_ref() else {
+        return Ok(GrannyVariant::Reference(None));
+    };
+    if count == 0 || array_pointer == 0 {
+        return Ok(GrannyVariant::Reference(None));
+    }
+
+    let array_offset = pointer_offset(array_pointer, "Granny reference array")?;
+    let element_size = compute_type_size(nested_type)?;
+    let mut elements = Vec::with_capacity(count);
+    for index in 0..count {
+        let relative = index
+            .checked_mul(element_size)
+            .ok_or(Error::SizeOverflow("Granny reference-array offset"))?;
+        let element_offset = array_offset
+            .checked_add(relative)
+            .ok_or(Error::SizeOverflow("Granny reference-array offset"))?;
+        data_range(
+            data,
+            element_offset,
+            element_size,
+            "Granny reference-array element",
+        )?;
+        elements.push((
+            format!("{index}"),
+            parse_variant_data(data, element_offset, nested_type)?,
+        ));
+    }
+
+    Ok(GrannyVariant::Reference(Some(Box::new(
+        GrannyVariant::Struct(elements),
+    ))))
+}
+
+/// Parse pointer-based, inline, and opaque member types.
+fn parse_complex_member(
+    data: &[u8],
+    position: &mut usize,
+    member: &GrannyTypeMember,
+    width: usize,
+) -> Result<GrannyVariant> {
+    match member.member_type {
+        GrannyMemberType::StringMember => {
+            let pointer = read_pointer(data, position)?;
+            let value = if pointer == 0 {
+                String::new()
+            } else {
+                let offset = pointer_offset(pointer, "Granny string")?;
+                data_tail(data, offset, "Granny string")
+                    .map_or_else(|_| String::new(), read_null_terminated_string)
+            };
+            Ok(GrannyVariant::StringVal(value))
+        }
+        GrannyMemberType::Reference => {
+            let pointer = read_pointer(data, position)?;
+            let Some(nested_type) = member.reference_type.as_ref() else {
+                return Ok(GrannyVariant::Reference(None));
+            };
+            if pointer == 0 {
+                return Ok(GrannyVariant::Reference(None));
+            }
+            let offset = pointer_offset(pointer, "Granny reference")?;
+            data_tail(data, offset, "Granny reference")?;
+            let nested = parse_variant_data(data, offset, nested_type)?;
+            Ok(GrannyVariant::Reference(Some(Box::new(nested))))
+        }
+        GrannyMemberType::VariantReference => {
+            let mut cursor = Cursor::new(data_tail(data, *position, "Granny variant reference")?);
+            let type_pointer = cursor.read_u64_le()?;
+            let data_pointer = cursor.read_u64_le()?;
+            crate::advance_position(position, cursor.position(), "Granny data cursor")?;
+            if type_pointer == 0 || data_pointer == 0 {
+                return Ok(GrannyVariant::VariantReference(None));
+            }
+            let type_offset = pointer_offset(type_pointer, "Granny variant type")?;
+            let data_offset = pointer_offset(data_pointer, "Granny variant value")?;
+            let nested_type = parse_type_def_array(data, type_offset)?;
+            let nested = parse_variant_data(data, data_offset, &nested_type)?;
+            Ok(GrannyVariant::VariantReference(Some(Box::new(nested))))
+        }
+        GrannyMemberType::Inline => {
+            let Some(nested_type) = member.reference_type.as_ref() else {
+                return Ok(GrannyVariant::Empty);
+            };
+            let nested = parse_variant_data(data, *position, nested_type)?;
+            let size = compute_type_size(nested_type)?
+                .checked_mul(width)
+                .ok_or(Error::SizeOverflow("Granny inline data"))?;
+            *position = position
+                .checked_add(size)
+                .ok_or(Error::SizeOverflow("Granny inline data"))?;
+            Ok(nested)
+        }
+        GrannyMemberType::Transform => {
+            let size = 68usize
+                .checked_mul(width)
+                .ok_or(Error::SizeOverflow("Granny transform"))?;
+            Ok(GrannyVariant::RawBytes(read_raw_bytes(
+                data, position, size,
+            )?))
+        }
+        GrannyMemberType::ReferenceToArray => parse_reference_array(data, position, member),
+        GrannyMemberType::EmptyReference | GrannyMemberType::End => Ok(GrannyVariant::Empty),
+        other => {
+            let size = other
+                .unit_size()
+                .unwrap_or(0)
+                .checked_mul(width)
+                .ok_or(Error::SizeOverflow("Granny member data"))?;
+            Ok(GrannyVariant::RawBytes(read_raw_bytes(
+                data, position, size,
+            )?))
+        }
+    }
 }
 
 /// Parse variant data described by `members` from `data` starting at `offset`.
@@ -117,194 +340,19 @@ pub(super) fn parse_variant_data(
     members: &[GrannyTypeMember],
 ) -> Result<GrannyVariant> {
     let mut fields = Vec::new();
-    let mut cur = offset;
+    let mut position = offset;
 
-    for m in members {
-        let width = if m.array_width == 0 {
-            1
+    for member in members {
+        let width = member_width(member)?;
+        let value = if let Some(value) =
+            parse_numeric_member(data, &mut position, member.member_type, width)?
+        {
+            value
         } else {
-            m.array_width as usize
+            parse_complex_member(data, &mut position, member, width)?
         };
 
-        let value = match m.member_type {
-            GrannyMemberType::Real32 => {
-                let mut vals = Vec::with_capacity(width);
-                let mut sc = SliceCursor::new(&data[cur..]);
-                for _ in 0..width {
-                    vals.push(sc.read_f32_le()?);
-                }
-                cur += sc.position();
-                GrannyVariant::Real32(vals)
-            }
-            GrannyMemberType::Int8 | GrannyMemberType::BinormalInt8 => {
-                let end = cur + width;
-                let vals: Vec<i8> = if end <= data.len() {
-                    data[cur..end].iter().map(|&b| b as i8).collect()
-                } else {
-                    Vec::new()
-                };
-                cur = end;
-                GrannyVariant::Int8(vals)
-            }
-
-            GrannyMemberType::UInt8 | GrannyMemberType::NormalUInt8 => {
-                let end = cur + width;
-                let vals: Vec<u8> = if end <= data.len() {
-                    data[cur..end].to_vec()
-                } else {
-                    Vec::new()
-                };
-                cur = end;
-                GrannyVariant::UInt8(vals)
-            }
-            GrannyMemberType::Int16 | GrannyMemberType::BinormalInt16 => {
-                let mut vals = Vec::with_capacity(width);
-                let mut sc = SliceCursor::new(&data[cur..]);
-                for _ in 0..width {
-                    vals.push(sc.read_i16_le()?);
-                }
-                cur += sc.position();
-                GrannyVariant::Int16(vals)
-            }
-            GrannyMemberType::UInt16
-            | GrannyMemberType::NormalUInt16
-            | GrannyMemberType::Real16 => {
-                let mut vals = Vec::with_capacity(width);
-                let mut sc = SliceCursor::new(&data[cur..]);
-                for _ in 0..width {
-                    vals.push(sc.read_u16_le()?);
-                }
-                cur += sc.position();
-                GrannyVariant::UInt16(vals)
-            }
-            GrannyMemberType::Int32 => {
-                let mut vals = Vec::with_capacity(width);
-                let mut sc = SliceCursor::new(&data[cur..]);
-                for _ in 0..width {
-                    vals.push(sc.read_i32_le()?);
-                }
-                cur += sc.position();
-                GrannyVariant::Int32(vals)
-            }
-            GrannyMemberType::UInt32 => {
-                let mut vals = Vec::with_capacity(width);
-                let mut sc = SliceCursor::new(&data[cur..]);
-                for _ in 0..width {
-                    vals.push(sc.read_u32_le()?);
-                }
-                cur += sc.position();
-                GrannyVariant::UInt32(vals)
-            }
-            GrannyMemberType::StringMember => {
-                // 8-byte pointer to null-terminated string
-                let mut sc = SliceCursor::new(&data[cur..]);
-                let str_ptr = sc.read_u64_le()? as usize;
-                cur += sc.position();
-                let s = if str_ptr > 0 && str_ptr < data.len() {
-                    read_null_terminated_string(&data[str_ptr..])
-                } else {
-                    String::new()
-                };
-                GrannyVariant::StringVal(s)
-            }
-            GrannyMemberType::Reference => {
-                // 8-byte pointer to nested data
-                let mut sc = SliceCursor::new(&data[cur..]);
-                let ref_ptr = sc.read_u64_le()? as usize;
-                cur += sc.position();
-                if ref_ptr > 0 && ref_ptr < data.len() {
-                    if let Some(ref nested_type) = m.reference_type {
-                        let nested = parse_variant_data(data, ref_ptr, nested_type)?;
-                        GrannyVariant::Reference(Some(Box::new(nested)))
-                    } else {
-                        GrannyVariant::Reference(None)
-                    }
-                } else {
-                    GrannyVariant::Reference(None)
-                }
-            }
-            GrannyMemberType::VariantReference => {
-                // 16 bytes: type_def_ptr (u64) + data_ptr (u64)
-                let mut sc = SliceCursor::new(&data[cur..]);
-                let type_ptr = sc.read_u64_le()? as usize;
-                let data_ptr = sc.read_u64_le()? as usize;
-                cur += sc.position();
-                if type_ptr > 0 && type_ptr < data.len() && data_ptr > 0 && data_ptr < data.len() {
-                    let nested_type = parse_type_def_array(data, type_ptr)?;
-                    let nested = parse_variant_data(data, data_ptr, &nested_type)?;
-                    GrannyVariant::VariantReference(Some(Box::new(nested)))
-                } else {
-                    GrannyVariant::VariantReference(None)
-                }
-            }
-            GrannyMemberType::Inline => {
-                if let Some(ref nested_type) = m.reference_type {
-                    let nested = parse_variant_data(data, cur, nested_type)?;
-                    let size = compute_type_size(nested_type);
-                    cur += size * width;
-                    nested
-                } else {
-                    GrannyVariant::Empty
-                }
-            }
-            GrannyMemberType::Transform => {
-                // 68 bytes raw
-                let size = 68 * width;
-                let end = cur + size;
-                let raw = if end <= data.len() {
-                    data[cur..end].to_vec()
-                } else {
-                    Vec::new()
-                };
-                cur = end;
-                GrannyVariant::RawBytes(raw)
-            }
-            GrannyMemberType::ReferenceToArray => {
-                // u32 count + u64 pointer
-                let mut sc = SliceCursor::new(&data[cur..]);
-                let count = sc.read_u32_le()? as usize;
-                let arr_ptr = sc.read_u64_le()? as usize;
-                cur += sc.position();
-                if count > 0 && arr_ptr > 0 && arr_ptr < data.len() {
-                    if let Some(ref nested_type) = m.reference_type {
-                        let elem_size = compute_type_size(nested_type);
-                        let mut elements = Vec::with_capacity(count);
-                        for i in 0..count {
-                            let elem_offset = arr_ptr + i * elem_size;
-                            if elem_offset + elem_size <= data.len() {
-                                elements.push(parse_variant_data(data, elem_offset, nested_type)?);
-                            }
-                        }
-                        GrannyVariant::Reference(Some(Box::new(GrannyVariant::Struct(
-                            elements
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, v)| (format!("{}", i), v))
-                                .collect(),
-                        ))))
-                    } else {
-                        GrannyVariant::Reference(None)
-                    }
-                } else {
-                    GrannyVariant::Reference(None)
-                }
-            }
-            GrannyMemberType::EmptyReference | GrannyMemberType::End => GrannyVariant::Empty,
-            _ => {
-                // Unknown — skip based on unit size
-                let size = m.member_type.unit_size().unwrap_or(0) * width;
-                let end = cur + size;
-                let raw = if end <= data.len() {
-                    data[cur..end].to_vec()
-                } else {
-                    Vec::new()
-                };
-                cur = end;
-                GrannyVariant::RawBytes(raw)
-            }
-        };
-
-        fields.push((m.name.clone(), value));
+        fields.push((member.name.clone(), value));
     }
 
     Ok(GrannyVariant::Struct(fields))

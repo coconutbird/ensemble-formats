@@ -31,11 +31,11 @@ pub enum GrannyMemberType {
     ArrayOfReferences = 4,
     /// Variant reference — `{type_def_ptr, data_ptr}` pair.
     VariantReference = 5,
-    /// Pointer to a variant array (count + type_def + data).
+    /// Pointer to a variant array (count + `type_def` + data).
     ReferenceToVariantArray = 7,
     /// Pointer to null-terminated string.
     StringMember = 8,
-    /// 68-byte Granny transform (flags + pos + quat + scale_shear).
+    /// 68-byte Granny transform (flags + pos + quat + `scale_shear`).
     Transform = 9,
     /// 32-bit float.
     Real32 = 10,
@@ -67,6 +67,7 @@ pub enum GrannyMemberType {
 
 impl GrannyMemberType {
     /// Convert from raw u32. Returns `None` for unknown type IDs.
+    #[must_use]
     pub fn from_u32(v: u32) -> Option<Self> {
         match v {
             0 => Some(Self::End),
@@ -95,19 +96,18 @@ impl GrannyMemberType {
         }
     }
 
-    /// Size in bytes of a single element of this type (not counting ArrayWidth).
+    /// Size in bytes of a single element of this type (not counting `ArrayWidth`).
     ///
     /// Returns `None` for types whose size depends on context (Inline, End).
+    #[must_use]
     pub fn unit_size(self) -> Option<usize> {
         match self {
-            Self::End => Some(0),
-            Self::Inline => None,                      // computed recursively
-            Self::Reference => Some(8),                // u64 pointer
-            Self::ReferenceToArray => Some(12),        // u32 count + u64 pointer
-            Self::ArrayOfReferences => Some(12),       // u32 count + u64 pointer
-            Self::VariantReference => Some(16),        // u64 type_ptr + u64 data_ptr
+            Self::End | Self::EmptyReference => Some(0),
+            Self::Inline => None, // computed recursively
+            Self::Reference | Self::StringMember => Some(8), // u64 pointer
+            Self::ReferenceToArray | Self::ArrayOfReferences => Some(12), // count + pointer
+            Self::VariantReference => Some(16), // u64 type_ptr + u64 data_ptr
             Self::ReferenceToVariantArray => Some(20), // u32 count + u64 type_ptr + u64 data_ptr (but engine says 0)
-            Self::StringMember => Some(8),             // u64 pointer
             Self::Transform => Some(68),               // 4 + 12 + 16 + 36
             Self::Real32 | Self::Int32 | Self::UInt32 => Some(4),
             Self::Int8 | Self::UInt8 | Self::BinormalInt8 | Self::NormalUInt8 => Some(1),
@@ -116,7 +116,6 @@ impl GrannyMemberType {
             | Self::BinormalInt16
             | Self::NormalUInt16
             | Self::Real16 => Some(2),
-            Self::EmptyReference => Some(0),
         }
     }
 }
@@ -136,7 +135,7 @@ impl GrannyMemberType {
 pub struct GrannyTypeMember {
     /// The member type (Real32, String, Reference, etc.).
     pub member_type: GrannyMemberType,
-    /// Member name (e.g. "TrackMask", "UserDefinedProperties").
+    /// Member name (e.g. "`TrackMask`", "`UserDefinedProperties`").
     pub name: String,
     /// For Reference/Inline types, the nested type definition.
     pub reference_type: Option<Vec<GrannyTypeMember>>,
@@ -149,12 +148,12 @@ pub struct GrannyTypeMember {
 /// A parsed Granny2 variant value.
 ///
 /// This is the recursive data tree described by `GrannyDataTypeDefinition` arrays.
-/// Each bone's ExtendedData is one of these.
+/// Each bone's `ExtendedData` is one of these.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum GrannyVariant {
     /// A struct with named fields.
     Struct(Vec<(String, GrannyVariant)>),
-    /// 32-bit float (possibly an array if ArrayWidth > 1).
+    /// 32-bit float (possibly an array if `ArrayWidth` > 1).
     Real32(Vec<f32>),
     /// 8-bit signed integer array.
     Int8(Vec<i8>),
@@ -172,7 +171,7 @@ pub enum GrannyVariant {
     StringVal(String),
     /// Reference to another variant (possibly null).
     Reference(Option<Box<GrannyVariant>>),
-    /// Variant reference (type + data, used for ExtendedData itself).
+    /// Variant reference (type + data, used for `ExtendedData` itself).
     VariantReference(Option<Box<GrannyVariant>>),
     /// Empty/null reference.
     #[default]

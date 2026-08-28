@@ -37,6 +37,11 @@ pub use error::Error;
 ///
 /// This is the XMB equivalent of `serde_json::from_str` — it parses the XMB
 /// file and deserializes the root node into `T` in one call.
+///
+/// # Errors
+///
+/// Returns an error if `data` is not a valid XMB document, has no root node,
+/// or its root cannot be deserialized as `T`.
 pub fn from_bytes<'de, T: serde::Deserialize<'de>>(data: &[u8]) -> Result<T, Error> {
     let doc = xmb::Reader::read(data)?;
     let root = doc.root().ok_or(Error::EmptyDocument)?;
@@ -48,6 +53,11 @@ pub fn from_bytes<'de, T: serde::Deserialize<'de>>(data: &[u8]) -> Result<T, Err
 /// Returns `(value, warnings)` — the parse succeeds even when there are
 /// extra fields or type mismatches; inspect the warnings to discover
 /// schema differences in game data files.
+///
+/// # Errors
+///
+/// Returns an error if `data` is not a valid XMB document, has no root node,
+/// or its root cannot be deserialized as `T`.
 pub fn from_bytes_warned<'de, T: serde::Deserialize<'de>>(
     data: &[u8],
 ) -> Result<(T, alloc::vec::Vec<Warning>), Error> {
@@ -59,6 +69,11 @@ pub fn from_bytes_warned<'de, T: serde::Deserialize<'de>>(
 /// Deserialize a `T` from an XML string.
 ///
 /// This is the XMB equivalent of `serde_json::from_str` for raw XML text.
+///
+/// # Errors
+///
+/// Returns an error if `xml` is malformed, has no root node, or its root
+/// cannot be deserialized as `T`.
 pub fn from_str<'de, T: serde::Deserialize<'de>>(xml: &str) -> Result<T, Error> {
     let doc = xmb::Document::from_xml(xml)?;
     let root = doc.root().ok_or(Error::EmptyDocument)?;
@@ -68,6 +83,11 @@ pub fn from_str<'de, T: serde::Deserialize<'de>>(xml: &str) -> Result<T, Error> 
 /// Deserialize a `T` from an XML string, collecting diagnostic warnings.
 ///
 /// Returns `(value, warnings)` — see [`from_bytes_warned`] for details.
+///
+/// # Errors
+///
+/// Returns an error if `xml` is malformed, has no root node, or its root
+/// cannot be deserialized as `T`.
 pub fn from_str_warned<'de, T: serde::Deserialize<'de>>(
     xml: &str,
 ) -> Result<(T, alloc::vec::Vec<Warning>), Error> {
@@ -80,6 +100,11 @@ pub fn from_str_warned<'de, T: serde::Deserialize<'de>>(
 ///
 /// Use this when you already have a parsed document and want to avoid
 /// re-parsing the bytes.
+///
+/// # Errors
+///
+/// Returns an error if `doc` has no root node or its root cannot be
+/// deserialized as `T`.
 pub fn from_document<'de, T: serde::Deserialize<'de>>(doc: &xmb::Document) -> Result<T, Error> {
     let root = doc.root().ok_or(Error::EmptyDocument)?;
     bdt_serde::from_node(root).map_err(Error::Deserialize)
@@ -89,6 +114,11 @@ pub fn from_document<'de, T: serde::Deserialize<'de>>(doc: &xmb::Document) -> Re
 /// diagnostic warnings.
 ///
 /// Returns `(value, warnings)` — see [`from_bytes_warned`] for details.
+///
+/// # Errors
+///
+/// Returns an error if `doc` has no root node or its root cannot be
+/// deserialized as `T`.
 pub fn from_document_warned<'de, T: serde::Deserialize<'de>>(
     doc: &xmb::Document,
 ) -> Result<(T, alloc::vec::Vec<Warning>), Error> {

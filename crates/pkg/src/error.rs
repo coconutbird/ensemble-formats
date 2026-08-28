@@ -38,6 +38,10 @@ pub enum Error {
     /// Operation cancelled by progress callback.
     #[error("operation cancelled")]
     Cancelled,
+
+    /// A collection or offset is too large for the current platform.
+    #[error("{0} is too large for this platform")]
+    SizeOverflow(&'static str),
 }
 
 impl From<nostdio::IoError> for Error {

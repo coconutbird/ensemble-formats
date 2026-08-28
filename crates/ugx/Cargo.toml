@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 default = ["std"]
 std = ["ecf/std"]
@@ -15,9 +18,10 @@ std = ["ecf/std"]
 bdt = { workspace = true }
 ecf = { workspace = true }
 nostdio = { workspace = true }
+num-traits = { workspace = true }
 thiserror = { workspace = true }
 half = { workspace = true }
 zerocopy.workspace = true
-ufx = { version = "0.1.0", path = "../ufx" }
+ufx.workspace = true
 
 [dev-dependencies]

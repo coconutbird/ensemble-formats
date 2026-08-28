@@ -1,6 +1,7 @@
 //! Skeleton import from glTF skin data.
 
-use ugx::{Bone, GrannyBone, Matrix4x4, Result};
+use num_traits::ToPrimitive;
+use ugx::{Bone, Error, GrannyBone, Matrix4x4, Result};
 
 use crate::granny_json::{json_to_type_members, json_to_variant};
 
@@ -53,33 +54,20 @@ pub(crate) fn import_skeleton(
         let name = node
             .name
             .clone()
-            .unwrap_or_else(|| format!("bone_{}", joint_idx));
+            .unwrap_or_else(|| format!("bone_{joint_idx}"));
 
-        // Find parent: look through all joint nodes to find one that has this node as a child
-        let mut parent_index: i32 = -1;
-        for (other_idx, other_node_idx) in skin.joints.iter().enumerate() {
-            if other_idx == joint_idx {
-                continue;
-            }
-
-            let other_node = &root.nodes[other_node_idx.value()];
-            if let Some(ref children) = other_node.children
-                && children.iter().any(|c| c.value() == joint_node_idx.value())
-            {
-                parent_index = other_idx as i32;
-                break;
-            }
-        }
+        let parent_index = find_parent_index(root, skin, joint_idx, joint_node_idx.value())?;
 
         // Read inverse bind matrix (16 floats)
         // Our export wrote DX row-major matrix rows flat into glTF column-major storage.
         // So on import we just read the 16 floats back as DX row-major.
-        let ibm_offset = joint_idx * 16;
+        let matrices = ibm_data.as_chunks::<16>().0;
+        let matrix = matrices.get(joint_idx).ok_or_else(|| {
+            Error::UnsupportedFormat("Inverse-bind-matrix accessor is too short".into())
+        })?;
         let mut rows = [[0.0f32; 4]; 4];
-        for r in 0..4 {
-            for c in 0..4 {
-                rows[r][c] = ibm_data[ibm_offset + r * 4 + c];
-            }
+        for (row, values) in rows.iter_mut().zip(matrix.as_chunks::<4>().0) {
+            *row = *values;
         }
         let model_to_bone = Matrix4x4 { rows };
 
@@ -106,6 +94,29 @@ pub(crate) fn import_skeleton(
     Ok((bones, granny_bones))
 }
 
+fn find_parent_index(
+    root: &gltf_json::Root,
+    skin: &gltf_json::Skin,
+    joint_index: usize,
+    joint_node_index: usize,
+) -> Result<i32> {
+    for (candidate_index, candidate_node_index) in skin.joints.iter().enumerate() {
+        if candidate_index == joint_index {
+            continue;
+        }
+        let candidate = &root.nodes[candidate_node_index.value()];
+        if candidate.children.as_ref().is_some_and(|children| {
+            children
+                .iter()
+                .any(|child| child.value() == joint_node_index)
+        }) {
+            return i32::try_from(candidate_index)
+                .map_err(|_| Error::SizeOverflow("skeleton parent index"));
+        }
+    }
+    Ok(-1)
+}
+
 /// Parsed bone extras from glTF node.
 struct BoneExtras {
     extended_data: Option<ugx::GrannyVariant>,
@@ -125,13 +136,12 @@ impl Default for BoneExtras {
 
 /// Read bone Granny metadata from glTF node extras.
 ///
-/// Reads extended data (type + variant) and lod_error written by our
+/// Reads extended data (type + variant) and `lod_error` written by our
 /// exporter. Local transforms are NOT stored in extras — they are
 /// recomputed from inverse world matrices by the writer.
 fn read_bone_extras(extras: &gltf_json::Extras) -> BoneExtras {
-    let raw = match extras.as_ref() {
-        Some(raw) => raw,
-        None => return BoneExtras::default(),
+    let Some(raw) = extras.as_ref() else {
+        return BoneExtras::default();
     };
 
     let val: serde_json::Value = match serde_json::from_str(raw.get()) {
@@ -156,8 +166,8 @@ fn read_bone_extras(extras: &gltf_json::Extras) -> BoneExtras {
     // LOD error
     let lod_error = val
         .get("granny_lod_error")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as f32)
+        .and_then(gltf_json::Value::as_f64)
+        .and_then(|value| value.to_f32())
         .unwrap_or(0.0);
 
     BoneExtras {

@@ -4,14 +4,17 @@
 //! then traverses the x64 native pointer layout to build high-level
 //! [`Animation`] / [`TrackGroup`] / [`TransformTrack`] types.
 //!
-//! Uses [`nostdio::SliceCursor`] and [`nostdio::ReadLe`] for all binary
+//! Uses [`nostdio::Cursor`] and [`nostdio::ReadLe`] for all binary
 //! field access.
 
 use alloc::vec::Vec;
 
-use nostdio::{ReadLe, Seek, SeekFrom, SliceCursor};
+use nostdio::{Cursor, ReadLe, Seek, SeekFrom};
 
-use crate::types::*;
+use crate::types::{
+    Animation, CurveData, CurvePayload, TrackGroup, Transform, TransformTrack, animation,
+    curve_data_header, curve2, file_info, track_group, transform, transform_track,
+};
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID};
 use ecf::Reader as EcfReader;
 
@@ -23,6 +26,11 @@ impl Reader {
     ///
     /// Returns the first animation in the file (UAX files always contain
     /// exactly one animation).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the ECF container is invalid, the UAX chunk is
+    /// missing or truncated, or no animation can be resolved.
     pub fn read(data: &[u8]) -> Result<Animation> {
         let ecf = EcfReader::new(data)?;
 
@@ -55,15 +63,15 @@ impl Reader {
 // ============================================================================
 
 /// Seek to `off` and read a u64 LE, returning `None` on failure.
-fn cursor_u64(c: &mut SliceCursor, off: usize) -> Option<u64> {
+fn cursor_u64(c: &mut Cursor<&[u8]>, off: usize) -> Option<u64> {
     c.seek(SeekFrom::Start(off as u64)).ok()?;
     c.read_u64_le().ok()
 }
 
 /// Read a Granny pointer (u64 LE offset) and validate it as an in-bounds offset.
-fn cursor_ptr(c: &mut SliceCursor, off: usize) -> Option<usize> {
-    let v = cursor_u64(c, off)? as usize;
-    if v == 0 || v >= c.len() {
+fn cursor_ptr(c: &mut Cursor<&[u8]>, off: usize) -> Option<usize> {
+    let v = usize::try_from(cursor_u64(c, off)?).ok()?;
+    if v == 0 || v >= c.get_ref().len() {
         None
     } else {
         Some(v)
@@ -71,26 +79,26 @@ fn cursor_ptr(c: &mut SliceCursor, off: usize) -> Option<usize> {
 }
 
 /// Seek to `off` and read an i32 LE, returning `None` on failure.
-fn cursor_i32(c: &mut SliceCursor, off: usize) -> Option<i32> {
+fn cursor_i32(c: &mut Cursor<&[u8]>, off: usize) -> Option<i32> {
     c.seek(SeekFrom::Start(off as u64)).ok()?;
     c.read_i32_le().ok()
 }
 
 /// Seek to `off` and read a u32 LE, returning `None` on failure.
-fn cursor_u32(c: &mut SliceCursor, off: usize) -> Option<u32> {
+fn cursor_u32(c: &mut Cursor<&[u8]>, off: usize) -> Option<u32> {
     c.seek(SeekFrom::Start(off as u64)).ok()?;
     c.read_u32_le().ok()
 }
 
 /// Seek to `off` and read an f32 LE, returning `None` on failure.
-fn cursor_f32(c: &mut SliceCursor, off: usize) -> Option<f32> {
+fn cursor_f32(c: &mut Cursor<&[u8]>, off: usize) -> Option<f32> {
     c.seek(SeekFrom::Start(off as u64)).ok()?;
     c.read_f32_le().ok()
 }
 
 /// Read a null-terminated C string at `off`.
-fn cursor_cstring(c: &mut SliceCursor, off: usize) -> Option<alloc::string::String> {
-    if off >= c.len() {
+fn cursor_cstring(c: &mut Cursor<&[u8]>, off: usize) -> Option<alloc::string::String> {
+    if off >= c.get_ref().len() {
         return None;
     }
     let s = nostdio::read_null_terminated_string(&c.get_ref()[off..]);
@@ -99,11 +107,11 @@ fn cursor_cstring(c: &mut SliceCursor, off: usize) -> Option<alloc::string::Stri
 
 /// Read a Granny `ref_arr` (i32 count + u64 ptr) at the cursor's current
 /// position after seeking to `off`.  Returns `(count, data_offset)`.
-fn cursor_ref_arr(c: &mut SliceCursor, off: usize) -> Option<(usize, usize)> {
+fn cursor_ref_arr(c: &mut Cursor<&[u8]>, off: usize) -> Option<(usize, usize)> {
     c.seek(SeekFrom::Start(off as u64)).ok()?;
-    let count = c.read_i32_le().ok()? as usize;
-    let ptr = c.read_u64_le().ok()? as usize;
-    if count == 0 || ptr == 0 || ptr >= c.len() {
+    let count = usize::try_from(c.read_i32_le().ok()?).ok()?;
+    let ptr = usize::try_from(c.read_u64_le().ok()?).ok()?;
+    if count == 0 || ptr == 0 || ptr >= c.get_ref().len() {
         return None;
     }
     Some((count, ptr))
@@ -113,9 +121,9 @@ fn cursor_ref_arr(c: &mut SliceCursor, off: usize) -> Option<(usize, usize)> {
 // Internal parsing
 // ============================================================================
 
-/// Parse the file_info structure and extract the first animation.
+/// Parse the `file_info` structure and extract the first animation.
 fn parse_file_info(fi: &[u8]) -> Result<Animation> {
-    let mut c = SliceCursor::new(fi);
+    let mut c = Cursor::new(fi);
 
     let anim_count = cursor_i32(&mut c, file_info::ANIMATION_COUNT).unwrap_or(0);
     if anim_count < 1 {
@@ -139,7 +147,7 @@ fn parse_file_info(fi: &[u8]) -> Result<Animation> {
     if tg_count > 0
         && let Some(tg_arr) = cursor_ptr(&mut c, file_info::TRACK_GROUPS_PTR)
     {
-        for i in 0..tg_count as usize {
+        for i in 0..usize::try_from(tg_count).unwrap_or_default() {
             if let Some(tg_off) = cursor_ptr(&mut c, tg_arr + i * 8) {
                 track_groups.push(parse_track_group(&mut c, tg_off));
             }
@@ -156,7 +164,7 @@ fn parse_file_info(fi: &[u8]) -> Result<Animation> {
 }
 
 /// Parse a single track group at the given offset.
-fn parse_track_group(c: &mut SliceCursor, off: usize) -> TrackGroup {
+fn parse_track_group(c: &mut Cursor<&[u8]>, off: usize) -> TrackGroup {
     let name = cursor_ptr(c, off + track_group::NAME_PTR).and_then(|p| cursor_cstring(c, p));
 
     let xform_count = cursor_i32(c, off + track_group::TRANSFORM_TRACK_COUNT).unwrap_or(0);
@@ -164,7 +172,7 @@ fn parse_track_group(c: &mut SliceCursor, off: usize) -> TrackGroup {
 
     let mut transform_tracks = Vec::new();
     if let Some(base) = xform_ptr {
-        for i in 0..xform_count as usize {
+        for i in 0..usize::try_from(xform_count).unwrap_or_default() {
             let tt_off = base + i * transform_track::SIZE;
             transform_tracks.push(parse_transform_track(c, tt_off));
         }
@@ -175,7 +183,7 @@ fn parse_track_group(c: &mut SliceCursor, off: usize) -> TrackGroup {
     let lod_ptr = cursor_ptr(c, off + track_group::TRANSFORM_LOD_ERRORS_PTR);
     let mut transform_lod_errors = Vec::new();
     if let Some(base) = lod_ptr {
-        for i in 0..lod_count as usize {
+        for i in 0..usize::try_from(lod_count).unwrap_or_default() {
             if let Some(v) = cursor_f32(c, base + i * 4) {
                 transform_lod_errors.push(v);
             }
@@ -195,7 +203,7 @@ fn parse_track_group(c: &mut SliceCursor, off: usize) -> TrackGroup {
 }
 
 /// Parse a single transform track at the given offset.
-fn parse_transform_track(c: &mut SliceCursor, off: usize) -> TransformTrack {
+fn parse_transform_track(c: &mut Cursor<&[u8]>, off: usize) -> TransformTrack {
     let name = cursor_ptr(c, off + transform_track::NAME_PTR).and_then(|p| cursor_cstring(c, p));
     let flags = cursor_i32(c, off + transform_track::FLAGS).unwrap_or(0);
 
@@ -212,12 +220,12 @@ fn parse_transform_track(c: &mut SliceCursor, off: usize) -> TransformTrack {
     }
 }
 
-/// Parse a granny_curve2 (variant: type_ptr + object_ptr) at offset.
-fn parse_curve(c: &mut SliceCursor, off: usize) -> CurveData {
+/// Parse a `granny_curve2` (variant: `type_ptr` + `object_ptr`) at offset.
+fn parse_curve(c: &mut Cursor<&[u8]>, off: usize) -> CurveData {
     let obj = cursor_ptr(c, off + curve2::OBJECT_PTR);
 
     match obj {
-        Some(obj_off) if obj_off + 2 <= c.len() => {
+        Some(obj_off) if obj_off + 2 <= c.get_ref().len() => {
             let format = c.get_ref()[obj_off];
             let degree = c.get_ref()[obj_off + 1];
             let payload_start = obj_off + curve_data_header::SIZE;
@@ -253,7 +261,7 @@ fn parse_curve(c: &mut SliceCursor, off: usize) -> CurveData {
 /// |  10 | D3K16uC16u     | 38 (u16+3f+3f+ref) | u8[] via ref_arr |
 /// |  11 | D3K8uC8u       | 38 (u16+3f+3f+ref) | u8[] via ref_arr |
 /// |  18 | D3I1K8uC8u     | 38 (u16+3f+3f+ref) | u8[] via ref_arr |
-fn parse_curve_payload(c: &mut SliceCursor, format: u8, start: usize) -> CurvePayload {
+fn parse_curve_payload(c: &mut Cursor<&[u8]>, format: u8, start: usize) -> CurvePayload {
     let fi = c.get_ref();
     if start >= fi.len() {
         return CurvePayload::Unknown { raw: Vec::new() };
@@ -391,13 +399,13 @@ fn parse_curve_payload(c: &mut SliceCursor, format: u8, start: usize) -> CurvePa
 // ============================================================================
 
 /// Seek to `off` and read a u16 LE.
-fn seek_read_u16(c: &mut SliceCursor, off: usize) -> Option<u16> {
+fn seek_read_u16(c: &mut Cursor<&[u8]>, off: usize) -> Option<u16> {
     c.seek(SeekFrom::Start(off as u64)).ok()?;
     c.read_u16_le().ok()
 }
 
 /// Read 3 consecutive f32 LE values starting at `off`.
-fn read_f32x3(c: &mut SliceCursor, off: usize) -> [f32; 3] {
+fn read_f32x3(c: &mut Cursor<&[u8]>, off: usize) -> [f32; 3] {
     [
         cursor_f32(c, off).unwrap_or(0.0),
         cursor_f32(c, off + 4).unwrap_or(0.0),
@@ -406,7 +414,7 @@ fn read_f32x3(c: &mut SliceCursor, off: usize) -> [f32; 3] {
 }
 
 /// Read 4 consecutive f32 LE values starting at `off`.
-fn read_f32x4(c: &mut SliceCursor, off: usize) -> [f32; 4] {
+fn read_f32x4(c: &mut Cursor<&[u8]>, off: usize) -> [f32; 4] {
     [
         cursor_f32(c, off).unwrap_or(0.0),
         cursor_f32(c, off + 4).unwrap_or(0.0),
@@ -417,7 +425,7 @@ fn read_f32x4(c: &mut SliceCursor, off: usize) -> [f32; 4] {
 
 /// Read a Granny `ReferenceToArray` (i32 count + u64 ptr) at `off`, then
 /// copy the referenced f32 values.
-fn read_f32_ref_arr(c: &mut SliceCursor, off: usize) -> Vec<f32> {
+fn read_f32_ref_arr(c: &mut Cursor<&[u8]>, off: usize) -> Vec<f32> {
     let Some((count, data_off)) = cursor_ref_arr(c, off) else {
         return Vec::new();
     };
@@ -430,7 +438,7 @@ fn read_f32_ref_arr(c: &mut SliceCursor, off: usize) -> Vec<f32> {
 
 /// Read a Granny `ReferenceToArray` (i32 count + u64 ptr) at `off`, then
 /// copy the referenced raw bytes.
-fn read_u8_ref_arr(c: &mut SliceCursor, off: usize) -> Vec<u8> {
+fn read_u8_ref_arr(c: &mut Cursor<&[u8]>, off: usize) -> Vec<u8> {
     let Some((count, data_off)) = cursor_ref_arr(c, off) else {
         return Vec::new();
     };
@@ -440,7 +448,7 @@ fn read_u8_ref_arr(c: &mut SliceCursor, off: usize) -> Vec<u8> {
 }
 
 /// Read a Granny transform from `fi` at `offset` using cursor reads.
-fn read_transform(c: &mut SliceCursor, offset: usize) -> Transform {
+fn read_transform(c: &mut Cursor<&[u8]>, offset: usize) -> Transform {
     let flags = cursor_u32(c, offset + transform::FLAGS).unwrap_or(0);
     let position = read_f32x3(c, offset + transform::POSITION);
     let orientation = read_f32x4(c, offset + transform::ORIENTATION);
@@ -478,9 +486,8 @@ mod tests {
 
     #[test]
     fn test_hw1_era_parse() {
-        let game_dir = match load_game_dir("HW1_GAME_DIR") {
-            Some(d) => d,
-            None => return,
+        let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
+            return;
         };
 
         let era_paths = find_files_flat(&game_dir, "era");
@@ -493,9 +500,8 @@ mod tests {
         let mut errors = std::vec::Vec::new();
 
         for era_path in &era_paths {
-            let mut archive = match open_era(era_path) {
-                Ok(a) => a,
-                Err(_) => continue,
+            let Ok(mut archive) = open_era(era_path) else {
+                continue;
             };
             let entries = find_entries_in_era(&archive, ".uax");
             for (idx, filename) in &entries {
@@ -530,9 +536,8 @@ mod tests {
 
     #[test]
     fn test_hw2_loose_parse() {
-        let game_dir = match load_game_dir("HW2_GAME_DIR") {
-            Some(d) => d,
-            None => return,
+        let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
+            return;
         };
 
         let uax_files = find_files_by_ext(&game_dir, "uax");
@@ -577,9 +582,8 @@ mod tests {
 
     #[test]
     fn test_hw1_era_roundtrip() {
-        let game_dir = match load_game_dir("HW1_GAME_DIR") {
-            Some(d) => d,
-            None => return,
+        let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
+            return;
         };
 
         let era_paths = find_files_flat(&game_dir, "era");
@@ -592,9 +596,8 @@ mod tests {
         let mut errors = std::vec::Vec::new();
 
         for era_path in &era_paths {
-            let mut archive = match open_era(era_path) {
-                Ok(a) => a,
-                Err(_) => continue,
+            let Ok(mut archive) = open_era(era_path) else {
+                continue;
             };
             let entries = find_entries_in_era(&archive, ".uax");
             for (idx, filename) in &entries {
@@ -629,9 +632,8 @@ mod tests {
 
     #[test]
     fn test_hw2_loose_roundtrip() {
-        let game_dir = match load_game_dir("HW2_GAME_DIR") {
-            Some(d) => d,
-            None => return,
+        let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
+            return;
         };
 
         let uax_files = find_files_by_ext(&game_dir, "uax");
@@ -662,7 +664,7 @@ mod tests {
         );
     }
 
-    /// Parse → Writer::write → re-parse, compare Animation structs.
+    /// Parse → `Writer::write` → re-parse, compare Animation structs.
     fn roundtrip_check(data: &[u8]) -> std::result::Result<(), std::string::String> {
         use crate::Writer;
 

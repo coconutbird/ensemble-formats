@@ -20,6 +20,7 @@ pub struct BufferPool {
 
 impl BufferPool {
     /// Create a new buffer pool
+    #[must_use]
     pub fn new(max_buffers: usize) -> Self {
         Self {
             buffers: RefCell::new(VecDeque::with_capacity(max_buffers)),
@@ -30,6 +31,11 @@ impl BufferPool {
     /// Get a buffer with at least the specified capacity
     ///
     /// The buffer is cleared but may have excess capacity from previous use.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the pool is accessed reentrantly while its internal buffer
+    /// queue is already mutably borrowed.
     pub fn get(&self, min_capacity: usize) -> PooledBuffer<'_> {
         let mut buffers = self.buffers.borrow_mut();
 
@@ -37,8 +43,10 @@ impl BufferPool {
         let buffer = buffers
             .iter()
             .position(|b| b.capacity() >= min_capacity)
-            .map(|i| buffers.remove(i).unwrap())
-            .unwrap_or_else(|| Vec::with_capacity(min_capacity));
+            .map_or_else(
+                || Vec::with_capacity(min_capacity),
+                |i| buffers.remove(i).unwrap(),
+            );
 
         PooledBuffer {
             buffer: Some(buffer),
@@ -89,14 +97,19 @@ pub struct PooledBuffer<'a> {
     pool: &'a BufferPool,
 }
 
-impl<'a> PooledBuffer<'a> {
+impl PooledBuffer<'_> {
     /// Take ownership of the buffer, removing it from pool management
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the buffer's internal ownership invariant is violated.
+    #[must_use]
     pub fn take(mut self) -> Vec<u8> {
         self.buffer.take().unwrap()
     }
 }
 
-impl<'a> core::ops::Deref for PooledBuffer<'a> {
+impl core::ops::Deref for PooledBuffer<'_> {
     type Target = Vec<u8>;
 
     fn deref(&self) -> &Self::Target {
@@ -104,13 +117,13 @@ impl<'a> core::ops::Deref for PooledBuffer<'a> {
     }
 }
 
-impl<'a> core::ops::DerefMut for PooledBuffer<'a> {
+impl core::ops::DerefMut for PooledBuffer<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.buffer.as_mut().unwrap()
     }
 }
 
-impl<'a> Drop for PooledBuffer<'a> {
+impl Drop for PooledBuffer<'_> {
     fn drop(&mut self) {
         if let Some(buffer) = self.buffer.take() {
             self.pool.return_buffer(buffer);

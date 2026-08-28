@@ -1,6 +1,6 @@
-//! Variant types and encoding for BBinaryDataTree values.
+//! Variant types and encoding for `BBinaryDataTree` values.
 //!
-//! BBinaryDataTree uses a variant system to store values efficiently. Each variant value
+//! `BBinaryDataTree` uses a variant system to store values efficiently. Each variant value
 //! is encoded as a 32-bit integer with the following layout:
 //!
 //! ```text
@@ -17,11 +17,11 @@
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use num_traits::ToPrimitive;
 
 use crate::error::{Error, Result};
 
 /// Type mask for extracting the variant type (bits 0-4).
-#[allow(dead_code)]
 pub const TYPE_MASK: u8 = 0x1F;
 
 /// Flag indicating the value is stored as an offset (bit 7).
@@ -31,11 +31,9 @@ pub const OFFSET_FLAG: u8 = 0x80;
 pub const UNSIGNED_FLAG: u8 = 0x40;
 
 /// Mask for vector size bits (bits 5-6).
-#[allow(dead_code)]
 pub const VEC_SIZE_MASK: u8 = 0x60;
 
 /// Shift amount to extract vector size from type byte.
-#[allow(dead_code)]
 pub const VEC_SIZE_SHIFT: u8 = 5;
 
 /// On-disk type code stored in the upper byte of a packed variant value.
@@ -44,7 +42,6 @@ pub const VEC_SIZE_SHIFT: u8 = 5;
 /// flags ([`OFFSET_FLAG`], [`UNSIGNED_FLAG`], vector size).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum VariantType {
     /// No value.
     Null = 0,
@@ -72,7 +69,11 @@ pub enum VariantType {
 
 impl VariantType {
     /// Decode a type code from the lower 5 bits of a byte.
-    #[allow(dead_code)]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidVariantType`] when the masked type code is not
+    /// one of the supported [`VariantType`] values.
     pub fn from_byte(byte: u8) -> Result<Self> {
         match byte & TYPE_MASK {
             0 => Ok(VariantType::Null),
@@ -91,7 +92,7 @@ impl VariantType {
     }
 
     /// Returns `true` if this type is always stored at an offset in the data table.
-    #[allow(dead_code)]
+    #[must_use]
     pub fn always_offset(&self) -> bool {
         matches!(
             self,
@@ -100,7 +101,7 @@ impl VariantType {
     }
 
     /// Returns `true` if this type is always encoded directly in the 24-bit data field.
-    #[allow(dead_code)]
+    #[must_use]
     pub fn always_direct(&self) -> bool {
         matches!(
             self,
@@ -113,7 +114,7 @@ impl VariantType {
     }
 }
 
-/// A dynamically-typed value in the BBinaryDataTree format.
+/// A dynamically-typed value in the `BBinaryDataTree` format.
 ///
 /// Each node's text content and each attribute value is stored as a `Variant`.
 /// The variant type determines how the value is serialized in the packed binary
@@ -152,6 +153,7 @@ impl Variant {
     /// - `Null` → `""`
     /// - `FloatVec` → comma-separated (e.g. `"1.0,2.0,3.0"`)
     /// - All others → their natural `ToString` representation.
+    #[must_use]
     pub fn to_string_value(&self) -> String {
         match self {
             Variant::Null => String::new(),
@@ -162,20 +164,20 @@ impl Variant {
             Variant::Bool(v) => if *v { "true" } else { "false" }.to_string(),
             Variant::Fract24(v) => {
                 let packed = pack_fract24(*v);
-                let is_negative = (packed & 0x800000) != 0;
-                let magnitude = packed & 0x7FFFFF;
+                let is_negative = (packed & 0x0080_0000) != 0;
+                let magnitude = packed & 0x007F_FFFF;
                 let integer_part = magnitude / 10000;
                 let fract_part = magnitude % 10000;
                 if is_negative {
-                    alloc::format!("-{}.{:04}", integer_part, fract_part)
+                    alloc::format!("-{integer_part}.{fract_part:04}")
                 } else {
-                    alloc::format!("{}.{:04}", integer_part, fract_part)
+                    alloc::format!("{integer_part}.{fract_part:04}")
                 }
             }
             Variant::String(s) | Variant::UString(s) => s.clone(),
             Variant::FloatVec(v) => v
                 .iter()
-                .map(|f| f.to_string())
+                .map(alloc::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(","),
         }
@@ -187,13 +189,13 @@ impl Variant {
     /// directly. For `String`/`UString`, attempts `parse::<f32>()` after
     /// stripping a trailing `f`/`F` suffix (C-style float literal).
     /// Returns `None` for bools, vecs, null, and unparseable strings.
+    #[must_use]
     pub fn as_float(&self) -> Option<f32> {
         match self {
-            Variant::Float(v) => Some(*v),
-            Variant::Double(v) => Some(*v as f32),
-            Variant::Int(v) => Some(*v as f32),
-            Variant::UInt(v) => Some(*v as f32),
-            Variant::Fract24(v) => Some(*v),
+            Variant::Float(v) | Variant::Fract24(v) => Some(*v),
+            Variant::Double(v) => v.to_f32(),
+            Variant::Int(v) => v.to_f32(),
+            Variant::UInt(v) => v.to_f32(),
             Variant::String(s) | Variant::UString(s) => {
                 // Strip optional trailing 'f'/'F' (C-style float literal).
                 let trimmed = s
@@ -210,13 +212,14 @@ impl Variant {
     ///
     /// Converts numeric and boolean variants; returns `None` for strings,
     /// vecs, and null.
+    #[must_use]
     pub fn as_int(&self) -> Option<i32> {
         match self {
             Variant::Int(v) => Some(*v),
-            Variant::UInt(v) => Some(*v as i32),
-            Variant::Float(v) => Some(*v as i32),
-            Variant::Double(v) => Some(*v as i32),
-            Variant::Bool(v) => Some(if *v { 1 } else { 0 }),
+            Variant::UInt(v) => v.to_i32(),
+            Variant::Float(v) => v.to_i32(),
+            Variant::Double(v) => v.to_i32(),
+            Variant::Bool(v) => Some(i32::from(*v)),
             _ => None,
         }
     }
@@ -225,6 +228,7 @@ impl Variant {
     ///
     /// Converts `Bool`, `Int`, and `UInt` (non-zero = true); returns `None`
     /// for other types.
+    #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Variant::Bool(v) => Some(*v),
@@ -236,6 +240,7 @@ impl Variant {
 }
 
 /// Pack a 32-bit float into a 24-bit representation.
+#[must_use]
 pub fn pack_float24(value: f32) -> u32 {
     if value == 0.0 {
         return 0;
@@ -243,11 +248,11 @@ pub fn pack_float24(value: f32) -> u32 {
 
     let bits = value.to_bits();
     let sign = (bits >> 31) & 1;
-    let exp = ((bits >> 23) & 0xFF) as i32;
-    let mantissa = bits & 0x7FFFFF;
+    let exp = i32::from(((bits >> 23) & 0xFF).to_le_bytes()[0]);
+    let mantissa = bits & 0x007F_FFFF;
 
     // Bias conversion: IEEE 754 uses 127, we use 31
-    let new_exp = (exp - 127 + 31).clamp(0, 63) as u32;
+    let new_exp = (exp - 127 + 31).clamp(0, 63).cast_unsigned();
 
     // Take top 17 bits of 23-bit mantissa
     let new_mantissa = mantissa >> 6;
@@ -262,6 +267,7 @@ pub fn pack_float24(value: f32) -> u32 {
 ///
 /// When the exponent field is zero the game returns ±0.0 regardless of the
 /// mantissa, so we do the same.
+#[must_use]
 pub fn unpack_float24(packed: u32) -> f32 {
     let sign = (packed >> 23) & 1;
     let exp = (packed >> 17) & 0x3F;
@@ -283,13 +289,17 @@ pub fn unpack_float24(packed: u32) -> f32 {
 }
 
 /// Pack a float as a 24-bit fixed-point fraction (value × 10 000, sign-magnitude).
-#[allow(dead_code)]
+#[must_use]
 pub fn pack_fract24(value: f32) -> u32 {
-    let scaled = (value * 10000.0).round() as i32;
+    let scaled = (value * 10_000.0)
+        .round()
+        .clamp(-8_388_607.0, 8_388_607.0)
+        .to_i32()
+        .unwrap_or(0);
     if scaled >= 0 {
-        (scaled as u32) & 0x7FFFFF
+        scaled.cast_unsigned() & 0x007F_FFFF
     } else {
-        ((-scaled) as u32 & 0x7FFFFF) | 0x800000
+        (scaled.unsigned_abs() & 0x007F_FFFF) | 0x0080_0000
     }
 }
 
@@ -297,38 +307,42 @@ pub fn pack_fract24(value: f32) -> u32 {
 ///
 /// Bit 23 is a sign flag (sign-magnitude), bits 0-22 hold the magnitude.
 /// The value is `magnitude / 10 000`.
+#[must_use]
 pub fn unpack_fract24(packed: u32) -> f32 {
-    let is_negative = (packed & 0x800000) != 0;
-    let magnitude = (packed & 0x7FFFFF) as f32;
-    let value = magnitude / 10000.0;
+    let is_negative = (packed & 0x0080_0000) != 0;
+    let magnitude = (packed & 0x007F_FFFF).to_f32().unwrap_or_default();
+    let value = magnitude / 10_000.0;
     if is_negative { -value } else { value }
 }
 
 /// Pack a 24-bit signed integer (two's complement).
+#[must_use]
 pub fn pack_int24(value: i32) -> u32 {
-    (value as u32) & 0xFFFFFF
+    value.cast_unsigned() & 0x00FF_FFFF
 }
 
 /// Unpack a 24-bit signed integer (two's complement, sign-extended to 32 bits).
+#[must_use]
 pub fn unpack_int24(packed: u32) -> i32 {
-    let val = packed & 0xFFFFFF;
+    let val = packed & 0x00FF_FFFF;
     // Sign-extend from 24-bit to 32-bit
-    if val & 0x800000 != 0 {
-        (val | 0xFF000000) as i32
+    if val & 0x0080_0000 != 0 {
+        (val | 0xFF00_0000).cast_signed()
     } else {
-        val as i32
+        val.cast_signed()
     }
 }
 
 /// Pack a 24-bit unsigned integer.
+#[must_use]
 pub fn pack_uint24(value: u32) -> u32 {
-    value & 0xFFFFFF
+    value & 0x00FF_FFFF
 }
 
 /// Unpack a 24-bit unsigned integer.
-#[allow(dead_code)]
+#[must_use]
 pub fn unpack_uint24(packed: u32) -> u32 {
-    packed & 0xFFFFFF
+    packed & 0x00FF_FFFF
 }
 
 #[cfg(test)]
@@ -343,9 +357,7 @@ mod tests {
             let unpacked = unpack_float24(packed);
             assert!(
                 (value - unpacked).abs() < 0.01,
-                "Float24 roundtrip failed for {}: got {}",
-                value,
-                unpacked
+                "Float24 roundtrip failed for {value}: got {unpacked}"
             );
         }
     }
@@ -353,41 +365,41 @@ mod tests {
     #[test]
     fn test_int24_roundtrip() {
         // Two's complement 24-bit range: -8388608 to 8388607
-        let values = [0i32, 1, -1, 1000, -1000, 8388607, -8388608];
+        let values = [0i32, 1, -1, 1000, -1000, 8_388_607, -8_388_608];
         for value in values {
             let packed = pack_int24(value);
             let unpacked = unpack_int24(packed);
-            assert_eq!(value, unpacked, "Int24 roundtrip failed for {}", value);
+            assert_eq!(value, unpacked, "Int24 roundtrip failed for {value}");
         }
     }
 
     #[test]
     fn test_int24_twos_complement() {
         // -1 should pack as 0xFFFFFF (all 24 bits set)
-        assert_eq!(pack_int24(-1), 0xFFFFFF);
-        assert_eq!(unpack_int24(0xFFFFFF), -1);
+        assert_eq!(pack_int24(-1), 0x00FF_FFFF);
+        assert_eq!(unpack_int24(0x00FF_FFFF), -1);
 
         // -2 should pack as 0xFFFFFE
-        assert_eq!(pack_int24(-2), 0xFFFFFE);
-        assert_eq!(unpack_int24(0xFFFFFE), -2);
+        assert_eq!(pack_int24(-2), 0x00FF_FFFE);
+        assert_eq!(unpack_int24(0x00FF_FFFE), -2);
 
         // 1 should pack as 0x000001
-        assert_eq!(pack_int24(1), 0x000001);
-        assert_eq!(unpack_int24(0x000001), 1);
+        assert_eq!(pack_int24(1), 0x0000_0001);
+        assert_eq!(unpack_int24(0x0000_0001), 1);
     }
 
     #[test]
     fn test_float24_zero_denorm() {
         // exp==0 should return ±0.0 regardless of mantissa (matches game)
-        assert_eq!(unpack_float24(0), 0.0);
+        assert_eq!(unpack_float24(0).to_bits(), 0.0f32.to_bits());
         assert!(unpack_float24(0).is_sign_positive());
 
         // sign=1, exp=0, mantissa=0 → -0.0
-        assert!(unpack_float24(0x800000).is_sign_negative());
-        assert_eq!(unpack_float24(0x800000), -0.0);
+        assert!(unpack_float24(0x0080_0000).is_sign_negative());
+        assert_eq!(unpack_float24(0x0080_0000).to_bits(), (-0.0f32).to_bits());
 
         // sign=0, exp=0, mantissa=nonzero → still 0.0
-        assert_eq!(unpack_float24(0x00001), 0.0);
+        assert_eq!(unpack_float24(0x0000_0001).to_bits(), 0.0f32.to_bits());
     }
 
     #[test]
@@ -397,23 +409,16 @@ mod tests {
             (0, 0.0),
             (1, 0.0001),
             (10000, 1.0),
-            (0x800000 | 10500, -1.05),
+            (0x0080_0000 | 0x2904, -1.05),
         ];
         for &(packed, expected) in cases {
             let v = unpack_fract24(packed);
             assert!(
                 (v - expected).abs() < 1e-5,
-                "unpack_fract24({}) = {}, expected {}",
-                packed,
-                v,
-                expected
+                "unpack_fract24({packed}) = {v}, expected {expected}"
             );
             let repacked = pack_fract24(v);
-            assert_eq!(
-                repacked, packed,
-                "Fract24 roundtrip failed for {}",
-                expected
-            );
+            assert_eq!(repacked, packed, "Fract24 roundtrip failed for {expected}");
         }
     }
 

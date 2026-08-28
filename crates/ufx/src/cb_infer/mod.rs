@@ -23,6 +23,7 @@
 
 pub mod bitflags;
 mod context;
+mod instruction;
 mod operand;
 mod patterns;
 pub mod types;
@@ -35,8 +36,45 @@ use d3dasm::dxbc::shex::{Opcode, Program, RegisterType};
 pub use types::{CbParam, Confidence, HOGAN_PS_SLOT, HOGAN_VS_SLOT, Semantic, SemanticKind};
 
 use context::BlockCtx;
+use instruction::Sm4Instruction;
 use operand::{cb_indices, component_string};
 use patterns::classify_usage;
+
+/// Rendered control-flow information for a shader program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CfgReport {
+    /// Number of basic blocks in the graph.
+    pub block_count: usize,
+    /// Number of directed edges in the graph.
+    pub edge_count: usize,
+    /// Graphviz DOT representation of the graph.
+    pub dot: alloc::string::String,
+}
+
+fn build_cfg(program: &Program) -> Result<cfglib::Cfg<Sm4Instruction>, cfglib::BuildError> {
+    cfglib::CfgBuilder::build(
+        program
+            .instructions
+            .iter()
+            .cloned()
+            .map(Sm4Instruction::new),
+    )
+}
+
+/// Build and render a control-flow graph for a decoded shader program.
+///
+/// # Errors
+///
+/// Returns an error when the shader contains mismatched structured
+/// control-flow markers.
+pub fn cfg_report(program: &Program) -> Result<CfgReport, cfglib::BuildError> {
+    let cfg = build_cfg(program)?;
+    Ok(CfgReport {
+        block_count: cfg.blocks().len(),
+        edge_count: cfg.edges().count(),
+        dot: cfg.to_dot(),
+    })
+}
 
 /// Analyze a shader program and return inferred CB parameter semantics.
 ///
@@ -46,10 +84,10 @@ use patterns::classify_usage;
 /// This builds a control-flow graph from the program and traverses each
 /// basic block, using CFG successor/predecessor edges for data-flow
 /// analysis instead of fixed-size index windows.
+#[must_use]
 pub fn infer_cb_params(program: &Program, ps_slot: u32, vs_slot: u32) -> Vec<CbParam> {
-    let cfg = match cfglib_dxbc::build_cfg(program) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
+    let Ok(cfg) = build_cfg(program) else {
+        return Vec::new();
     };
 
     let mut results = Vec::new();
@@ -59,7 +97,7 @@ pub fn infer_cb_params(program: &Program, ps_slot: u32, vs_slot: u32) -> Vec<CbP
         let block_insns = block.instructions();
 
         for (local_idx, sm4_insn) in block_insns.iter().enumerate() {
-            let insn = &sm4_insn.0;
+            let insn = sm4_insn.instruction();
             let ops = insn.operands();
             if ops.is_empty() {
                 global_insn_idx += 1;
@@ -76,9 +114,8 @@ pub fn infer_cb_params(program: &Program, ps_slot: u32, vs_slot: u32) -> Vec<CbP
                 if op.reg_type != RegisterType::ConstantBuffer {
                     continue;
                 }
-                let (slot, reg) = match cb_indices(op) {
-                    Some(v) => v,
-                    None => continue,
+                let Some((slot, reg)) = cb_indices(op) else {
+                    continue;
                 };
                 if slot != ps_slot && slot != vs_slot {
                     continue;

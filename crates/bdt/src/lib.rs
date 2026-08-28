@@ -1,4 +1,4 @@
-//! BBinaryDataTree (BDT) packed document format.
+//! `BBinaryDataTree` (BDT) packed document format.
 //!
 //! This crate implements the packed binary tree format used by Ensemble Studios games
 //! (Halo Wars, Age of Empires III). The format stores hierarchical node data with

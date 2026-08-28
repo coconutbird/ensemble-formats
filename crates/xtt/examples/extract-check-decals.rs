@@ -1,3 +1,5 @@
+//! Extracts and checks decal textures from an XTT file.
+
 use std::env;
 use std::fs;
 use xtt::Reader;
@@ -10,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let xtt_path = &args[1];
-    println!("Opening XTT: {}", xtt_path);
+    println!("Opening XTT: {xtt_path}");
 
     let data = fs::read(xtt_path)?;
     let xtt = Reader::read(&data)?;

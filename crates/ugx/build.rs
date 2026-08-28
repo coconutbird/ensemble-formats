@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -32,38 +33,49 @@ fn main() {
         let upper = family.to_uppercase();
         if let Some(sets) = data.get(*family) {
             // Perm sets array
-            code.push_str(&format!(
-                "/// Permutation sets for `{upper}`, ordered by frequency.\n"
-            ));
-            code.push_str(&format!(
-                "#[allow(dead_code)]\npub static {upper}_PERM_SETS: &[&[PermEntry]] = &[\n"
-            ));
+            writeln!(
+                code,
+                "/// Permutation sets for `{upper}`, ordered by frequency."
+            )
+            .expect("writing to a String cannot fail");
+            writeln!(code, "pub static {upper}_PERM_SETS: &[&[PermEntry]] = &[")
+                .expect("writing to a String cannot fail");
             for s in sets {
-                code.push_str(&format!("    // count={}\n    &[", s.count));
+                write!(code, "    // count={}\n    &[", s.count)
+                    .expect("writing to a String cannot fail");
                 for (j, p) in s.perms.iter().enumerate() {
                     if j > 0 {
                         code.push_str(", ");
                     }
-                    code.push_str(&format!("(\"{upper}_{}\", 0x{:08X})", p.bitmask, p.hash));
+                    write!(
+                        code,
+                        "(\"{upper}_{}\", 0x{:04X}_{:04X})",
+                        p.bitmask,
+                        p.hash >> 16,
+                        p.hash & 0xFFFF
+                    )
+                    .expect("writing to a String cannot fail");
                 }
                 code.push_str("],\n");
             }
             code.push_str("];\n\n");
 
             // Texture metadata array
-            code.push_str(&format!(
-                "/// Texture slots required by each `{upper}_PERM_SETS` entry.\n"
-            ));
-            code.push_str(&format!(
-                "#[allow(dead_code)]\nstatic {upper}_PERM_TEXTURES: &[&[&str]] = &[\n"
-            ));
+            writeln!(
+                code,
+                "/// Texture slots required by each `{upper}_PERM_SETS` entry."
+            )
+            .expect("writing to a String cannot fail");
+            writeln!(code, "pub static {upper}_PERM_TEXTURES: &[&[&str]] = &[")
+                .expect("writing to a String cannot fail");
             for (i, s) in sets.iter().enumerate() {
-                code.push_str(&format!("    // [{i}] count={}\n    &[", s.count));
+                write!(code, "    // [{i}] count={}\n    &[", s.count)
+                    .expect("writing to a String cannot fail");
                 for (j, t) in s.textures.iter().enumerate() {
                     if j > 0 {
                         code.push_str(", ");
                     }
-                    code.push_str(&format!("\"{t}\""));
+                    write!(code, "\"{t}\"").expect("writing to a String cannot fail");
                 }
                 code.push_str("],\n");
             }

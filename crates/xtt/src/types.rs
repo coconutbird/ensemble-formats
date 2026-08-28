@@ -77,7 +77,7 @@ pub struct ChunkMeta {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ActiveTextureInfo {
-    /// Local texture filename (e.g., "arctic/snowdrift_01").
+    /// Local texture filename (e.g., "`arctic/snowdrift_01`").
     pub filename: String,
     /// U texture coordinate scale.
     pub u_scale: i32,
@@ -151,7 +151,7 @@ pub struct XttHeader {
 }
 
 impl XttHeader {
-    /// Size of XTTHeader in bytes.
+    /// Size of `XTTHeader` in bytes.
     pub const SIZE: usize = 16;
 }
 
@@ -249,7 +249,7 @@ pub struct FoliageQNChunk {
     pub num_sets: u32,
     /// Indices into the foliage sets array.
     pub set_indices: Vec<i32>,
-    /// Polygon count for each set (for DrawIndexedPrimitive).
+    /// Polygon count for each set (for `DrawIndexedPrimitive`).
     pub set_poly_counts: Vec<i32>,
     /// Raw index buffer data for each set.
     pub index_buffers: Vec<Vec<u8>>,
@@ -263,6 +263,7 @@ impl FoliageQNChunk {
     /// and `local_blade_index * 10 + vertex_in_blade` in its lower 16 bits.
     /// `0x0000_FFFF` is the triangle-strip restart value.
     /// Returns `None` if `set` is out of range.
+    #[must_use]
     pub fn decode_indices(&self, set: usize) -> Option<Vec<u32>> {
         let buf = self.index_buffers.get(set)?;
         let count = buf.len() / 4;
@@ -338,7 +339,7 @@ pub struct XttFile {
 impl Default for XttFile {
     fn default() -> Self {
         Self {
-            ecf_file_id: 0x00077826,
+            ecf_file_id: 0x0007_7826,
             ecf_flags: 0,
             chunk_order: Vec::new(),
             header: XttHeader::default(),
@@ -359,34 +360,29 @@ impl XttFile {
     ///
     /// `layer_id` is an entry from [`XttLinker::splat_layer_ids`] which indexes
     /// into [`XttFile::active_textures`].
+    #[must_use]
     pub fn resolve_splat_texture(&self, layer_id: i32) -> Option<&ActiveTextureInfo> {
-        if layer_id < 0 {
-            return None;
-        }
-        self.active_textures.get(layer_id as usize)
+        self.active_textures.get(usize::try_from(layer_id).ok()?)
     }
 
     /// Resolve a decal layer ID from a linker to its [`ActiveDecalInstance`].
     ///
     /// `layer_id` is an entry from [`XttLinker::decal_layer_ids`] which indexes
     /// into [`XttFile::decal_instances`].
+    #[must_use]
     pub fn resolve_decal_instance(&self, layer_id: i32) -> Option<&ActiveDecalInstance> {
-        if layer_id < 0 {
-            return None;
-        }
-        self.decal_instances.get(layer_id as usize)
+        self.decal_instances.get(usize::try_from(layer_id).ok()?)
     }
 
     /// Resolve a decal layer ID all the way to its [`ActiveDecalInfo`] (texture filename).
     ///
     /// Follows the chain: `decal_layer_ids[i]` → `decal_instances[idx]` →
     /// `active_decals[active_decal_index]`.
+    #[must_use]
     pub fn resolve_decal_info(&self, layer_id: i32) -> Option<&ActiveDecalInfo> {
         let instance = self.resolve_decal_instance(layer_id)?;
-        if instance.active_decal_index < 0 {
-            return None;
-        }
-        self.active_decals.get(instance.active_decal_index as usize)
+        self.active_decals
+            .get(usize::try_from(instance.active_decal_index).ok()?)
     }
 }
 
@@ -415,7 +411,7 @@ pub struct RoadQNChunk {
 /// Decoded road data from XTT chunk 0x8888.
 #[derive(Clone, Debug)]
 pub struct RoadData {
-    /// Road texture name (e.g., "roads\\road_01").
+    /// Road texture name (e.g., "roads\\`road_01`").
     pub texture_name: String,
     /// Per-chunk road geometry.
     pub qn_chunks: Vec<RoadQNChunk>,

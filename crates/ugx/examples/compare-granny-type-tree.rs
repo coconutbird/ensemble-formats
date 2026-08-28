@@ -1,16 +1,16 @@
-//! Compare the Granny FileInfo type tree across multiple UGX files.
+//! Compares the Granny `FileInfo` type tree across multiple UGX files.
 //!
-//! Reads each UGX's 0x703 chunk, locates the FileInfo type definition pointer,
+//! Reads each UGX's 0x703 chunk, locates the `FileInfo` type definition pointer,
 //! and extracts the entire type tree blob for comparison.
 //!
-//! Usage: cargo run -p ugx --example compare_granny_type_tree -- <dir_or_file...>
+//! Usage: cargo run -p ugx --example `compare-granny-type-tree` -- <`dir_or_file`...>
 
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("Usage: compare_granny_type_tree <ugx_files_or_dirs...>");
+        eprintln!("Usage: compare-granny-type-tree <ugx_files_or_dirs...>");
         std::process::exit(1);
     }
 
@@ -43,12 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let granny = match ecf.chunk_data_by_id(0x703) {
-            Ok(g) => g,
-            Err(_) => {
-                files_without_granny += 1;
-                continue;
-            }
+        let Ok(granny) = ecf.chunk_data_by_id(0x703) else {
+            files_without_granny += 1;
+            continue;
         };
         files_with_granny += 1;
 
@@ -93,13 +90,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== Summary ===");
-    println!("Files with granny chunk: {}", files_with_granny);
-    println!("Files without granny chunk: {}", files_without_granny);
+    println!("Files with granny chunk: {files_with_granny}");
+    println!("Files without granny chunk: {files_without_granny}");
     println!("Distinct type tree signatures: {}", signatures.len());
     for (hash, files) in &signatures {
         println!("\n  Hash {} — {} files:", &hash[..12], files.len());
         for f in files.iter().take(5) {
-            println!("    {}", f);
+            println!("    {f}");
         }
         if files.len() > 5 {
             println!("    ... and {} more", files.len() - 5);
@@ -115,7 +112,7 @@ fn collect_ugx_files(dir: &str, out: &mut Vec<String>) {
             let p = entry.path();
             if p.is_dir() {
                 collect_ugx_files(p.to_str().unwrap_or(""), out);
-            } else if p.extension().map(|e| e == "ugx").unwrap_or(false)
+            } else if p.extension().is_some_and(|e| e == "ugx")
                 && let Some(s) = p.to_str()
             {
                 out.push(s.to_string());
@@ -130,19 +127,19 @@ fn short_name(path: &str) -> String {
 
 fn simple_hash(data: &[u8]) -> u64 {
     // FNV-1a 64-bit
-    let mut h: u64 = 0xcbf29ce484222325;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in data {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
     }
     h
 }
 
-/// Extract the FileInfo type definition tree from a granny chunk.
+/// Extract the `FileInfo` type definition tree from a granny chunk.
 ///
 /// The type tree is a contiguous array of 44-byte `GrannyDataTypeDefinition`
 /// entries. We scan the chunk for the longest contiguous run of valid entries
-/// (member_type in 0..=21). Multiple terminated arrays may be adjacent
+/// (`member_type` in 0..=21). Multiple terminated arrays may be adjacent
 /// (nested struct definitions follow each other).
 fn extract_type_tree_region(granny: &[u8]) -> Option<(usize, Vec<u8>)> {
     let stride = 44usize;

@@ -1,17 +1,9 @@
 //! glTF export for UGX models.
 //!
-//! Converts UGX geometry to glTF 2.0 format with skeleton support.
-//!
-//! # Matrix convention notes
-//!
-//! UGX/Granny stores matrices in DirectX row-major, row-vector convention:
-//!   `v_transformed = v * M` with translation in row 3.
-//!
-//! glTF uses OpenGL column-major, column-vector convention:
-//!   `v_transformed = M * v` with translation in column 3.
-//!
-//! Key insight: column-major storage of `M_gl` = row-major storage of `M_dx`,
-//! because `M_gl = M_dx^T`. So we just write DX matrix rows flat for glTF.
+//! UGX stores matrices using DirectX row-major, row-vector conventions, while
+//! glTF uses column-major, column-vector conventions. Writing DirectX matrix
+//! rows flat produces the required glTF column-major representation of the
+//! transposed matrix.
 
 mod material;
 mod primitive;
@@ -19,19 +11,17 @@ mod skeleton;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use gltf_json as json;
+use ugx::{Error, Matrix4x4, Result, Section, UgxGeom, UnpackedVertex};
 
-use ugx::{Result, UgxGeom};
-
+use crate::extras::{MeshExtrasJson, SceneExtrasJson, to_raw_value};
 use material::build_materials;
-use primitive::create_primitive;
+use primitive::{PrimitiveInput, PrimitiveOutput, create_primitive};
 use skeleton::{
     build_section_to_mesh_mapping, create_skeleton_nodes, create_skeleton_nodes_from_granny,
 };
 
-use crate::extras::{MeshExtrasJson, SceneExtrasJson, to_raw_value};
-
 /// glTF export options.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct GltfExportOptions {
     /// Embed buffer data as base64 in the .gltf file (default: true).
     pub embed_buffers: bool,
@@ -42,12 +32,19 @@ pub struct GltfExportOptions {
 }
 
 impl GltfExportOptions {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             embed_buffers: true,
             include_materials: true,
             include_skeleton: true,
         }
+    }
+}
+
+impl Default for GltfExportOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -60,406 +57,432 @@ pub struct GltfExport {
     pub buffer: Option<Vec<u8>>,
 }
 
-/// Export UGX geometry to glTF format.
-///
-/// Uses "buffer.bin" as the external buffer filename when `embed_buffers` is false.
-pub fn export_to_gltf(geom: &UgxGeom, options: &GltfExportOptions) -> Result<GltfExport> {
-    export_to_gltf_with_buffer_name(geom, options, "buffer.bin")
+struct SkeletonInfo {
+    use_granny_bones: bool,
+    has_skeleton: bool,
+    bone_count: usize,
+    model_to_bone: Vec<Matrix4x4>,
 }
 
-/// Export UGX geometry to glTF format with a specific external buffer filename.
+impl SkeletonInfo {
+    fn new(geometry: &UgxGeom, options: &GltfExportOptions) -> Self {
+        let use_granny_bones = options.include_skeleton && !geometry.granny_bones.is_empty();
+        let has_skeleton =
+            options.include_skeleton && (!geometry.bones.is_empty() || use_granny_bones);
+        let (bone_count, model_to_bone) = if use_granny_bones {
+            (
+                geometry.granny_bones.len(),
+                geometry
+                    .granny_bones
+                    .iter()
+                    .map(|bone| bone.inverse_world_matrix.clone())
+                    .collect(),
+            )
+        } else {
+            (
+                geometry.bones.len(),
+                geometry
+                    .bones
+                    .iter()
+                    .map(|bone| bone.model_to_bone.clone())
+                    .collect(),
+            )
+        };
+        Self {
+            use_granny_bones,
+            has_skeleton,
+            bone_count,
+            model_to_bone,
+        }
+    }
+}
+
+struct SectionExportInfo {
+    mesh_index: usize,
+    rigid_parent_bone: Option<usize>,
+}
+
+#[derive(Default)]
+struct ExportContent {
+    buffer_data: Vec<u8>,
+    accessors: Vec<json::Accessor>,
+    buffer_views: Vec<json::buffer::View>,
+    meshes: Vec<json::Mesh>,
+    materials: Vec<json::Material>,
+    images: Vec<json::Image>,
+    textures: Vec<json::Texture>,
+    section_info: Vec<SectionExportInfo>,
+}
+
+struct NodeContent {
+    nodes: Vec<json::Node>,
+    skins: Vec<json::Skin>,
+    scene_nodes: Vec<json::Index<json::scene::Node>>,
+}
+
+/// Export UGX geometry to glTF format.
+///
+/// Uses `buffer.bin` as the external buffer filename when buffers are not embedded.
+///
+/// # Errors
+///
+/// Returns an error if geometry data is malformed, generated indices overflow
+/// glTF representation limits, or the JSON document cannot be serialized.
+pub fn export_to_gltf(geometry: &UgxGeom, options: &GltfExportOptions) -> Result<GltfExport> {
+    export_to_gltf_with_buffer_name(geometry, options, "buffer.bin")
+}
+
+/// Export UGX geometry to glTF with a specific external buffer filename.
+///
+/// # Errors
+///
+/// Returns an error if geometry data is malformed, generated indices overflow
+/// glTF representation limits, or the JSON document cannot be serialized.
 pub fn export_to_gltf_with_buffer_name(
-    geom: &UgxGeom,
+    geometry: &UgxGeom,
     options: &GltfExportOptions,
     buffer_name: &str,
 ) -> Result<GltfExport> {
-    let mut root = json::Root::default();
-
-    // Build the binary buffer containing all vertex and index data
-    let mut buffer_data = Vec::new();
-    let mut accessors = Vec::new();
-    let mut buffer_views = Vec::new();
-    let mut meshes = Vec::new();
-    let mut materials_json = Vec::new();
-    let mut images_json: Vec<json::Image> = Vec::new();
-    let mut textures_json: Vec<json::Texture> = Vec::new();
-
-    // Create materials with texture references if requested
+    let skeleton = SkeletonInfo::new(geometry, options);
+    let mut content = ExportContent::default();
     if options.include_materials {
-        let mat_result = build_materials(&geom.materials);
-        materials_json = mat_result.materials;
-        images_json = mat_result.images;
-        textures_json = mat_result.textures;
+        let built = build_materials(&geometry.materials)?;
+        content.materials = built.materials;
+        content.images = built.images;
+        content.textures = built.textures;
     }
+    export_sections(geometry, options, &skeleton, &mut content)?;
+    let node_content = build_nodes(geometry, &skeleton, &mut content)?;
+    finish_export(geometry, options, buffer_name, content, node_content)
+}
 
-    // Check if we have bones and should include skeleton
-    // Prefer granny_bones (from 0x703 chunk) as they have the correct inverse world matrices
-    let use_granny_bones = options.include_skeleton && !geom.granny_bones.is_empty();
-    let has_skeleton = options.include_skeleton && (!geom.bones.is_empty() || use_granny_bones);
-    let bone_count = if use_granny_bones {
-        geom.granny_bones.len()
-    } else {
-        geom.bones.len()
-    };
-
-    // Build section-to-mesh mapping by matching section bone usage against granny_mesh bone_bindings.
-    // This helps determine the correct mesh name for each section.
-    let section_to_mesh = build_section_to_mesh_mapping(geom, &geom.granny_bones);
-
-    // Determine which sections are rigid (global_bones or rigid_only with a valid bone).
-    // Rigid sections are exported WITHOUT skin data; their vertices are transformed
-    // into bone-local space and their mesh nodes are parented to the corresponding
-    // bone node in the glTF hierarchy. This structurally encodes the rigid/skinned
-    // distinction, making it survive Blender edits without metadata flags.
-    struct SectionExportInfo {
-        mesh_idx: usize,
-        /// If Some(bone_idx), this section is rigid and parented to the given bone.
-        rigid_parent_bone: Option<usize>,
-    }
-    let mut section_export_infos: Vec<SectionExportInfo> = Vec::new();
-
-    // Precompute bone world matrices (IWM⁻¹) for transforming rigid vertices.
-    let bone_model_to_bone: Vec<_> = if use_granny_bones {
-        geom.granny_bones
-            .iter()
-            .map(|b| b.inverse_world_matrix.clone())
-            .collect()
-    } else {
-        geom.bones.iter().map(|b| b.model_to_bone.clone()).collect()
-    };
-
-    // Process each section as a separate glTF mesh (one primitive per mesh).
-    for (section_idx, section) in geom.sections.iter().enumerate() {
-        let vertices = geom.unpack_section_vertices(section_idx)?;
-        let indices = geom.get_section_indices(section_idx);
-
+fn export_sections(
+    geometry: &UgxGeom,
+    options: &GltfExportOptions,
+    skeleton: &SkeletonInfo,
+    content: &mut ExportContent,
+) -> Result<()> {
+    let section_to_mesh = build_section_to_mesh_mapping(geometry, &geometry.granny_bones);
+    for (section_index, section) in geometry.sections.iter().enumerate() {
+        let vertices = geometry.unpack_section_vertices(section_index)?;
+        let indices = geometry.get_section_indices(section_index)?;
         if vertices.is_empty() || indices.is_empty() {
             continue;
         }
-
-        // Determine if this section is rigid (should be bone-parented, no skin).
-        let is_rigid = (section.global_bones || section.rigid_only)
-            && section.rigid_bone_index >= 0
-            && (section.rigid_bone_index as usize) < bone_count;
-
-        // For rigid sections, transform vertices into bone-local space.
-        let (export_vertices, export_has_skeleton) = if is_rigid {
-            let bone_idx = section.rigid_bone_index as usize;
-            let m = &bone_model_to_bone[bone_idx].rows;
-            let transformed: Vec<ugx::UnpackedVertex> = vertices
-                .iter()
-                .map(|v| {
-                    let mut tv = v.clone();
-                    // Position: v_local = v_model * model_to_bone
-                    let px = v.position[0];
-                    let py = v.position[1];
-                    let pz = v.position[2];
-                    tv.position = [
-                        px * m[0][0] + py * m[1][0] + pz * m[2][0] + m[3][0],
-                        px * m[0][1] + py * m[1][1] + pz * m[2][1] + m[3][1],
-                        px * m[0][2] + py * m[1][2] + pz * m[2][2] + m[3][2],
-                    ];
-                    // Normal: rotate only (no translation)
-                    let nx = v.normal[0];
-                    let ny = v.normal[1];
-                    let nz = v.normal[2];
-                    tv.normal = [
-                        nx * m[0][0] + ny * m[1][0] + nz * m[2][0],
-                        nx * m[0][1] + ny * m[1][1] + nz * m[2][1],
-                        nx * m[0][2] + ny * m[1][2] + nz * m[2][2],
-                    ];
-                    // Tangent: rotate xyz, preserve w handedness
-                    let tx = v.tangent[0];
-                    let ty = v.tangent[1];
-                    let tz = v.tangent[2];
-                    tv.tangent = [
-                        tx * m[0][0] + ty * m[1][0] + tz * m[2][0],
-                        tx * m[0][1] + ty * m[1][1] + tz * m[2][1],
-                        tx * m[0][2] + ty * m[1][2] + tz * m[2][2],
-                        v.tangent[3],
-                    ];
-                    // Clear skin data — rigid sections don't have it
-                    tv.bone_weights = [0.0; 4];
-                    tv.bone_indices = [0; 4];
-                    tv
-                })
-                .collect();
-            (transformed, false) // no skeleton for this primitive
-        } else {
-            (vertices, has_skeleton)
-        };
-
+        let rigid_parent = rigid_parent_bone(section, skeleton.bone_count);
+        let export_vertices = prepare_vertices(&vertices, rigid_parent, &skeleton.model_to_bone)?;
+        let mesh_index = section_to_mesh.get(section_index).copied().ok_or_else(|| {
+            Error::UnsupportedFormat("Section-to-mesh mapping is incomplete".into())
+        })?;
         let primitive = create_primitive(
-            &export_vertices,
-            &indices,
-            section.material_index,
-            &mut buffer_data,
-            &mut accessors,
-            &mut buffer_views,
-            options.include_materials && !materials_json.is_empty(),
-            export_has_skeleton,
-            bone_count,
-            section.rigid_bone_index,
-            &section.bone_remap,
-        );
-
-        // Use the matching granny_mesh name if available, otherwise generate from section index
-        let mesh_idx = section_to_mesh[section_idx];
-        let mesh_name = if mesh_idx < geom.granny_meshes.len() {
-            Some(geom.granny_meshes[mesh_idx].name.clone())
-        } else {
-            Some(format!("mesh_{}", section_idx))
-        };
-
-        // Store mesh extras for data that can't be recalculated from vertex data.
-        // Section flags (global_bones, rigid_only, rigid_bone_index) are NOT stored —
-        // the import side detects them from the glTF structure (bone-parented mesh
-        // without skin = rigid; mesh with skin = skinned).
-        let mesh_extras = {
-            let mut ext = MeshExtrasJson::default();
-
-            // Store granny mesh index for multi-section-per-mesh merging.
-            if mesh_idx < geom.granny_meshes.len() {
-                ext.ugx_granny_mesh_index = Some(mesh_idx);
-            }
-
-            // Store triangle_indices from bone bindings (when non-empty).
-            // These can't be recalculated from vertex data.
-            if mesh_idx < geom.granny_meshes.len() {
-                let bindings = &geom.granny_meshes[mesh_idx].bone_bindings;
-                let has_any_tri = bindings.iter().any(|b| !b.triangle_indices.is_empty());
-                if has_any_tri {
-                    let tri_map: std::collections::BTreeMap<String, Vec<i32>> = bindings
-                        .iter()
-                        .filter(|b| !b.triangle_indices.is_empty())
-                        .map(|b| (b.bone_name.clone(), b.triangle_indices.clone()))
-                        .collect();
-                    ext.ugx_triangle_indices = Some(tri_map);
-                }
-            }
-
-            // Store LOD distances — these can't be inferred from geometry.
-            ext.ugx_lod_near_distance = section.lod_near_distance;
-            ext.ugx_lod_far_distance = section.lod_far_distance;
-            ext.ugx_lod_fade_distance = section.lod_fade_distance;
-
-            if ext.is_empty() {
-                None
-            } else {
-                to_raw_value(&ext)
-            }
-        };
-
-        let rigid_parent = if is_rigid {
-            Some(section.rigid_bone_index as usize)
-        } else {
-            None
-        };
-
-        section_export_infos.push(SectionExportInfo {
-            mesh_idx: meshes.len(),
+            &PrimitiveInput {
+                vertices: &export_vertices,
+                indices: &indices,
+                material_index: section.material_index,
+                has_materials: options.include_materials && !content.materials.is_empty(),
+                has_skeleton: skeleton.has_skeleton && rigid_parent.is_none(),
+                bone_count: skeleton.bone_count,
+                rigid_bone_index: section.rigid_bone_index,
+                bone_remap: &section.bone_remap,
+            },
+            &mut PrimitiveOutput {
+                buffer_data: &mut content.buffer_data,
+                accessors: &mut content.accessors,
+                buffer_views: &mut content.buffer_views,
+            },
+        )?;
+        content.section_info.push(SectionExportInfo {
+            mesh_index: content.meshes.len(),
             rigid_parent_bone: rigid_parent,
         });
-
-        meshes.push(json::Mesh {
+        content.meshes.push(json::Mesh {
             extensions: None,
-            extras: mesh_extras,
-            name: mesh_name,
+            extras: build_mesh_extras(geometry, section, mesh_index),
+            name: Some(mesh_name(geometry, mesh_index, section_index)),
             primitives: vec![primitive],
             weights: None,
         });
     }
+    Ok(())
+}
 
-    // Create skeleton nodes and skin if we have bones (must happen BEFORE buffer creation)
-    let mut nodes = Vec::new();
-    let mut skins = Vec::new();
-    let skin_index: Option<json::Index<json::Skin>>;
-    let mut root_bone_indices: Vec<u32> = Vec::new();
+fn rigid_parent_bone(section: &Section, bone_count: usize) -> Option<usize> {
+    if !section.global_bones && !section.rigid_only {
+        return None;
+    }
+    usize::try_from(section.rigid_bone_index)
+        .ok()
+        .filter(|&index| index < bone_count)
+}
 
-    if has_skeleton {
-        // Create bone nodes first (they come before mesh nodes)
-        let bone_node_start = 0u32;
-        let (bone_nodes, ibm_accessor_idx) = if use_granny_bones {
-            create_skeleton_nodes_from_granny(
-                &geom.granny_bones,
-                &mut buffer_data,
-                &mut accessors,
-                &mut buffer_views,
-            )
-        } else {
-            create_skeleton_nodes(
-                &geom.bones,
-                &mut buffer_data,
-                &mut accessors,
-                &mut buffer_views,
-            )
-        };
-        nodes.extend(bone_nodes);
+fn prepare_vertices(
+    vertices: &[UnpackedVertex],
+    rigid_parent: Option<usize>,
+    matrices: &[Matrix4x4],
+) -> Result<Vec<UnpackedVertex>> {
+    let Some(bone_index) = rigid_parent else {
+        return Ok(vertices.to_vec());
+    };
+    let matrix = matrices.get(bone_index).ok_or_else(|| {
+        Error::UnsupportedFormat("Rigid section references a missing bone matrix".into())
+    })?;
+    Ok(vertices
+        .iter()
+        .map(|vertex| transform_rigid_vertex(vertex, matrix))
+        .collect())
+}
 
-        // Find root bones (bones with parent_index == -1)
-        root_bone_indices = if use_granny_bones {
-            geom.granny_bones
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.parent_index < 0)
-                .map(|(i, _)| bone_node_start + i as u32)
-                .collect()
-        } else {
-            geom.bones
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.parent_index < 0)
-                .map(|(i, _)| bone_node_start + i as u32)
-                .collect()
-        };
+fn transform_rigid_vertex(vertex: &UnpackedVertex, matrix: &Matrix4x4) -> UnpackedVertex {
+    let mut transformed = vertex.clone();
+    transformed.position = transform_point(vertex.position, matrix);
+    transformed.normal = transform_direction(vertex.normal, matrix);
+    let tangent = transform_direction(
+        [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]],
+        matrix,
+    );
+    transformed.tangent = [tangent[0], tangent[1], tangent[2], vertex.tangent[3]];
+    transformed.bone_weights = [0.0; 4];
+    transformed.bone_indices = [0; 4];
+    transformed
+}
 
-        // Create skin (only needed if there are any skinned sections)
-        let joint_indices: Vec<json::Index<json::Node>> = (0..bone_count as u32)
-            .map(|i| json::Index::new(bone_node_start + i))
+fn transform_point(value: [f32; 3], matrix: &Matrix4x4) -> [f32; 3] {
+    let rows = &matrix.rows;
+    [
+        value[0] * rows[0][0] + value[1] * rows[1][0] + value[2] * rows[2][0] + rows[3][0],
+        value[0] * rows[0][1] + value[1] * rows[1][1] + value[2] * rows[2][1] + rows[3][1],
+        value[0] * rows[0][2] + value[1] * rows[1][2] + value[2] * rows[2][2] + rows[3][2],
+    ]
+}
+
+fn transform_direction(value: [f32; 3], matrix: &Matrix4x4) -> [f32; 3] {
+    let rows = &matrix.rows;
+    [
+        value[0] * rows[0][0] + value[1] * rows[1][0] + value[2] * rows[2][0],
+        value[0] * rows[0][1] + value[1] * rows[1][1] + value[2] * rows[2][1],
+        value[0] * rows[0][2] + value[1] * rows[1][2] + value[2] * rows[2][2],
+    ]
+}
+
+fn mesh_name(geometry: &UgxGeom, mesh_index: usize, section_index: usize) -> String {
+    geometry
+        .granny_meshes
+        .get(mesh_index)
+        .map_or_else(|| format!("mesh_{section_index}"), |mesh| mesh.name.clone())
+}
+
+fn build_mesh_extras(geometry: &UgxGeom, section: &Section, mesh_index: usize) -> json::Extras {
+    let mut extras = MeshExtrasJson {
+        lod_near_distance: section.lod_near_distance,
+        lod_far_distance: section.lod_far_distance,
+        lod_fade_distance: section.lod_fade_distance,
+        ..Default::default()
+    };
+    if let Some(mesh) = geometry.granny_meshes.get(mesh_index) {
+        extras.granny_mesh_index = Some(mesh_index);
+        let triangle_indices: std::collections::BTreeMap<_, _> = mesh
+            .bone_bindings
+            .iter()
+            .filter(|binding| !binding.triangle_indices.is_empty())
+            .map(|binding| (binding.bone_name.clone(), binding.triangle_indices.clone()))
             .collect();
-        let skeleton_root = root_bone_indices.first().copied().map(json::Index::new);
-
-        skins.push(json::Skin {
-            extensions: None,
-            extras: json::Extras::default(),
-            inverse_bind_matrices: Some(json::Index::new(ibm_accessor_idx)),
-            joints: joint_indices,
-            name: Some("Armature".to_string()),
-            skeleton: skeleton_root,
-        });
-        skin_index = Some(json::Index::new(0));
-
-        // Create mesh nodes (after bone nodes).
-        // Rigid sections get NO skin and are parented to their bone node.
-        // Skinned sections get a skin reference and go at the scene root.
-        for (i, mesh) in meshes.iter().enumerate() {
-            let info = section_export_infos.iter().find(|s| s.mesh_idx == i);
-            let is_rigid = info.is_some_and(|s| s.rigid_parent_bone.is_some());
-
-            let node_name = mesh.name.clone().unwrap_or_else(|| format!("mesh_{}", i));
-
-            nodes.push(json::Node {
-                camera: None,
-                children: None,
-                extensions: None,
-                extras: json::Extras::default(),
-                matrix: None,
-                mesh: Some(json::Index::new(i as u32)),
-                name: Some(node_name),
-                rotation: None,
-                scale: None,
-                translation: None,
-                skin: if is_rigid { None } else { skin_index },
-                weights: None,
-            });
-        }
-
-        // Add rigid mesh nodes as children of their parent bone nodes.
-        let mesh_node_start = bone_count as u32;
-        for info in &section_export_infos {
-            if let Some(bone_idx) = info.rigid_parent_bone {
-                let mesh_node_idx = mesh_node_start + info.mesh_idx as u32;
-                let bone_node = &mut nodes[bone_idx];
-                let children = bone_node.children.get_or_insert_with(Vec::new);
-                children.push(json::Index::new(mesh_node_idx));
-            }
-        }
-    } else {
-        // No skeleton - just create mesh nodes
-        for (i, mesh) in meshes.iter().enumerate() {
-            let node_name = mesh.name.clone().unwrap_or_else(|| format!("mesh_{}", i));
-
-            nodes.push(json::Node {
-                camera: None,
-                children: None,
-                extensions: None,
-                extras: json::Extras::default(),
-                matrix: None,
-                mesh: Some(json::Index::new(i as u32)),
-                name: Some(node_name),
-                rotation: None,
-                scale: None,
-                translation: None,
-                skin: None,
-                weights: None,
-            });
+        if !triangle_indices.is_empty() {
+            extras.triangle_indices = Some(triangle_indices);
         }
     }
+    (!extras.is_empty())
+        .then(|| to_raw_value(&extras))
+        .flatten()
+}
 
-    // Build scene: root bones + skinned mesh nodes (rigid mesh nodes are
-    // reached through their parent bone's children list).
-    let mut scene_node_indices = Vec::new();
-    if has_skeleton {
-        for &root_idx in &root_bone_indices {
-            scene_node_indices.push(json::Index::new(root_idx));
-        }
-        // Only add SKINNED mesh nodes to the scene root.
-        let mesh_node_start = bone_count as u32;
-        for info in &section_export_infos {
-            if info.rigid_parent_bone.is_none() {
-                scene_node_indices.push(json::Index::new(mesh_node_start + info.mesh_idx as u32));
-            }
-        }
-    } else {
-        scene_node_indices = (0..nodes.len() as u32).map(json::Index::new).collect();
+fn build_nodes(
+    geometry: &UgxGeom,
+    skeleton: &SkeletonInfo,
+    content: &mut ExportContent,
+) -> Result<NodeContent> {
+    if !skeleton.has_skeleton {
+        return build_unskinned_nodes(content);
     }
+    let (mut nodes, inverse_bind_accessor) = if skeleton.use_granny_bones {
+        create_skeleton_nodes_from_granny(
+            &geometry.granny_bones,
+            &mut content.buffer_data,
+            &mut content.accessors,
+            &mut content.buffer_views,
+        )?
+    } else {
+        create_skeleton_nodes(
+            &geometry.bones,
+            &mut content.buffer_data,
+            &mut content.accessors,
+            &mut content.buffer_views,
+        )?
+    };
+    let root_bones = root_bone_indices(geometry, skeleton)?;
+    let bone_count = checked_u32(skeleton.bone_count, "glTF joint count")?;
+    let joints = (0..bone_count).map(json::Index::new).collect();
+    let skins = vec![json::Skin {
+        extensions: None,
+        extras: json::Extras::default(),
+        inverse_bind_matrices: Some(json::Index::new(inverse_bind_accessor)),
+        joints,
+        name: Some("Armature".to_string()),
+        skeleton: root_bones.first().copied().map(json::Index::new),
+    }];
+    append_skinned_mesh_nodes(content, skeleton, &mut nodes)?;
+    attach_rigid_mesh_nodes(content, skeleton, &mut nodes)?;
+    let mut scene_nodes: Vec<_> = root_bones.into_iter().map(json::Index::new).collect();
+    let mesh_start = checked_u32(skeleton.bone_count, "mesh node start")?;
+    for info in &content.section_info {
+        if info.rigid_parent_bone.is_none() {
+            let mesh_index = checked_u32(info.mesh_index, "mesh node index")?;
+            let node_index = mesh_start
+                .checked_add(mesh_index)
+                .ok_or(Error::SizeOverflow("mesh node index"))?;
+            scene_nodes.push(json::Index::new(node_index));
+        }
+    }
+    Ok(NodeContent {
+        nodes,
+        skins,
+        scene_nodes,
+    })
+}
 
-    let scene_extras = to_raw_value(&SceneExtrasJson {
-        ugx_max_instances: geom.max_instances,
-    });
+fn root_bone_indices(geometry: &UgxGeom, skeleton: &SkeletonInfo) -> Result<Vec<u32>> {
+    let parents: Box<dyn Iterator<Item = i32> + '_> = if skeleton.use_granny_bones {
+        Box::new(geometry.granny_bones.iter().map(|bone| bone.parent_index))
+    } else {
+        Box::new(geometry.bones.iter().map(|bone| bone.parent_index))
+    };
+    parents
+        .enumerate()
+        .filter(|(_, parent)| *parent < 0)
+        .map(|(index, _)| checked_u32(index, "root bone node index"))
+        .collect()
+}
 
+fn append_skinned_mesh_nodes(
+    content: &ExportContent,
+    skeleton: &SkeletonInfo,
+    nodes: &mut Vec<json::Node>,
+) -> Result<()> {
+    for (mesh_index, (mesh, info)) in content.meshes.iter().zip(&content.section_info).enumerate() {
+        let skin = info
+            .rigid_parent_bone
+            .is_none()
+            .then(|| json::Index::new(0));
+        nodes.push(mesh_node(mesh, mesh_index, skin)?);
+    }
+    let expected = skeleton
+        .bone_count
+        .checked_add(content.meshes.len())
+        .ok_or(Error::SizeOverflow("node count"))?;
+    if nodes.len() != expected {
+        return Err(Error::UnsupportedFormat(
+            "Skeleton and mesh node counts are inconsistent".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn attach_rigid_mesh_nodes(
+    content: &ExportContent,
+    skeleton: &SkeletonInfo,
+    nodes: &mut [json::Node],
+) -> Result<()> {
+    let mesh_start = checked_u32(skeleton.bone_count, "mesh node start")?;
+    for info in &content.section_info {
+        let Some(bone_index) = info.rigid_parent_bone else {
+            continue;
+        };
+        let mesh_index = checked_u32(info.mesh_index, "rigid mesh node index")?;
+        let node_index = mesh_start
+            .checked_add(mesh_index)
+            .ok_or(Error::SizeOverflow("rigid mesh node index"))?;
+        let bone_node = nodes.get_mut(bone_index).ok_or_else(|| {
+            Error::UnsupportedFormat("Rigid mesh parent bone is out of bounds".into())
+        })?;
+        bone_node
+            .children
+            .get_or_insert_with(Vec::new)
+            .push(json::Index::new(node_index));
+    }
+    Ok(())
+}
+
+fn build_unskinned_nodes(content: &ExportContent) -> Result<NodeContent> {
+    let nodes = content
+        .meshes
+        .iter()
+        .enumerate()
+        .map(|(index, mesh)| mesh_node(mesh, index, None))
+        .collect::<Result<Vec<_>>>()?;
+    let scene_nodes = (0..nodes.len())
+        .map(|index| checked_u32(index, "scene node index").map(json::Index::new))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(NodeContent {
+        nodes,
+        skins: Vec::new(),
+        scene_nodes,
+    })
+}
+
+fn mesh_node(
+    mesh: &json::Mesh,
+    mesh_index: usize,
+    skin: Option<json::Index<json::Skin>>,
+) -> Result<json::Node> {
+    Ok(json::Node {
+        camera: None,
+        children: None,
+        extensions: None,
+        extras: json::Extras::default(),
+        matrix: None,
+        mesh: Some(json::Index::new(checked_u32(mesh_index, "mesh index")?)),
+        name: Some(
+            mesh.name
+                .clone()
+                .unwrap_or_else(|| format!("mesh_{mesh_index}")),
+        ),
+        rotation: None,
+        scale: None,
+        translation: None,
+        skin,
+        weights: None,
+    })
+}
+
+fn finish_export(
+    geometry: &UgxGeom,
+    options: &GltfExportOptions,
+    buffer_name: &str,
+    content: ExportContent,
+    node_content: NodeContent,
+) -> Result<GltfExport> {
+    let buffer = build_buffer(&content.buffer_data, options.embed_buffers, buffer_name)?;
     let scene = json::Scene {
         extensions: None,
-        extras: scene_extras,
+        extras: to_raw_value(&SceneExtrasJson {
+            ugx_max_instances: geometry.max_instances,
+        }),
         name: None,
-        nodes: scene_node_indices,
+        nodes: node_content.scene_nodes,
     };
-
-    // Create the buffer (AFTER all data has been written, including skeleton data)
-    let buffer_length = buffer_data.len() as u64;
-    let buffer = if options.embed_buffers {
-        let encoded = STANDARD.encode(&buffer_data);
-        json::Buffer {
-            byte_length: json::validation::USize64(buffer_length),
-            uri: Some(format!("data:application/octet-stream;base64,{}", encoded)),
-            extensions: None,
-            extras: json::Extras::default(),
-            name: None,
-        }
-    } else {
-        json::Buffer {
-            byte_length: json::validation::USize64(buffer_length),
-            uri: Some(buffer_name.to_string()),
-            extensions: None,
-            extras: json::Extras::default(),
-            name: None,
-        }
+    let mut root = json::Root {
+        accessors: content.accessors,
+        buffers: vec![buffer],
+        buffer_views: content.buffer_views,
+        meshes: content.meshes,
+        nodes: node_content.nodes,
+        scenes: vec![scene],
+        scene: Some(json::Index::new(0)),
+        skins: node_content.skins,
+        materials: content.materials,
+        images: content.images,
+        textures: content.textures,
+        ..Default::default()
     };
-
-    // Assemble the root
-    root.accessors = accessors;
-    root.buffers = vec![buffer];
-    root.buffer_views = buffer_views;
-    root.meshes = meshes;
-    root.nodes = nodes;
-    root.scenes = vec![scene];
-    root.scene = Some(json::Index::new(0));
-
-    if !skins.is_empty() {
-        root.skins = skins;
-    }
-
-    if options.include_materials && !materials_json.is_empty() {
-        root.materials = materials_json;
-    }
-    if !images_json.is_empty() {
-        root.images = images_json;
-    }
-    if !textures_json.is_empty() {
-        root.textures = textures_json;
-    }
-
-    // Set asset info
     root.asset = json::Asset {
         copyright: None,
         extensions: None,
@@ -468,290 +491,39 @@ pub fn export_to_gltf_with_buffer_name(
         min_version: None,
         version: "2.0".to_string(),
     };
-
-    let json_string = serde_json::to_string_pretty(&root)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
+    let json = serde_json::to_string_pretty(&root)
+        .map_err(|error| Error::UnsupportedFormat(format!("Cannot serialize glTF: {error}")))?;
     Ok(GltfExport {
-        json: json_string,
-        buffer: if options.embed_buffers {
-            None
-        } else {
-            Some(buffer_data)
-        },
+        json,
+        buffer: (!options.embed_buffers).then_some(content.buffer_data),
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use json::validation::Checked::Valid;
-    use ugx::UnpackedVertex;
-
-    /// Helper: build a minimal vertex with position only.
-    fn vertex(pos: [f32; 3]) -> UnpackedVertex {
-        UnpackedVertex {
-            position: pos,
-            normal: [0.0, 1.0, 0.0],
-            ..Default::default()
-        }
-    }
-
-    /// Helper: find a semantic in a primitive's attributes.
-    fn has_semantic(prim: &json::mesh::Primitive, semantic: json::mesh::Semantic) -> bool {
-        prim.attributes.contains_key(&Valid(semantic))
-    }
-
-    /// Helper: get the accessor for a semantic from the primitive returned by create_primitive.
-    fn get_accessor<'a>(
-        prim: &json::mesh::Primitive,
-        accessors: &'a [json::Accessor],
-        semantic: json::mesh::Semantic,
-    ) -> Option<&'a json::Accessor> {
-        prim.attributes
-            .get(&Valid(semantic))
-            .map(|idx| &accessors[idx.value()])
-    }
-
-    /// Helper: read 3 consecutive f32s from a buffer at the given offset.
-    fn read_f32x3(buf: &[u8], offset: usize) -> [f32; 3] {
-        [
-            f32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()),
-            f32::from_le_bytes(buf[offset + 4..offset + 8].try_into().unwrap()),
-            f32::from_le_bytes(buf[offset + 8..offset + 12].try_into().unwrap()),
-        ]
-    }
-
-    /// Helper: read 4 consecutive f32s from a buffer at the given offset.
-    fn read_f32x4(buf: &[u8], offset: usize) -> [f32; 4] {
-        [
-            f32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()),
-            f32::from_le_bytes(buf[offset + 4..offset + 8].try_into().unwrap()),
-            f32::from_le_bytes(buf[offset + 8..offset + 12].try_into().unwrap()),
-            f32::from_le_bytes(buf[offset + 12..offset + 16].try_into().unwrap()),
-        ]
-    }
-
-    /// Helper: get byte offset of an accessor's buffer view.
-    fn accessor_offset(
-        prim: &json::mesh::Primitive,
-        accessors: &[json::Accessor],
-        views: &[json::buffer::View],
-        semantic: json::mesh::Semantic,
-    ) -> usize {
-        let acc = get_accessor(prim, accessors, semantic).unwrap();
-        let view = &views[acc.buffer_view.unwrap().value()];
-        view.byte_offset.unwrap().0 as usize
-    }
-
-    /// Helper: invoke create_primitive with common defaults.
-    fn make_prim(
-        verts: &[UnpackedVertex],
-        has_skin: bool,
-        bone_count: usize,
-        rigid_bone_index: i32,
-    ) -> (
-        json::mesh::Primitive,
-        Vec<u8>,
-        Vec<json::Accessor>,
-        Vec<json::buffer::View>,
-    ) {
-        let indices: Vec<u16> = vec![0; verts.len().max(3)];
-        let mut buf = Vec::new();
-        let mut accessors = Vec::new();
-        let mut views = Vec::new();
-
-        let prim = create_primitive(
-            verts,
-            &indices,
-            -1,
-            &mut buf,
-            &mut accessors,
-            &mut views,
-            false,
-            has_skin,
-            bone_count,
-            rigid_bone_index,
-            &[], // no bone_remap — tests use 1-based global indices
-        );
-        (prim, buf, accessors, views)
-    }
-
-    // ---- UV set count ----
-
-    #[test]
-    fn test_uv_set_count() {
-        // 0 UVs → no TEXCOORD attributes
-        let verts_0 = vec![vertex([0.0, 0.0, 0.0]); 3];
-        let (prim, ..) = make_prim(&verts_0, false, 0, -1);
-        assert!(!has_semantic(&prim, json::mesh::Semantic::TexCoords(0)));
-
-        // 1 UV → only TEXCOORD_0
-        let mut verts_1 = vec![vertex([0.0, 0.0, 0.0]); 3];
-        for v in &mut verts_1 {
-            v.texcoords[0] = [0.5, 0.5];
-            v.num_texcoords = 1;
-        }
-        let (prim, ..) = make_prim(&verts_1, false, 0, -1);
-        assert!(has_semantic(&prim, json::mesh::Semantic::TexCoords(0)));
-        assert!(!has_semantic(&prim, json::mesh::Semantic::TexCoords(1)));
-
-        // 3 UVs → TEXCOORD_0..2, each Vec2/F32
-        let mut verts_3 = vec![vertex([0.0, 0.0, 0.0]); 3];
-        for v in &mut verts_3 {
-            v.texcoords[0] = [0.1, 0.2];
-            v.texcoords[1] = [0.3, 0.4];
-            v.texcoords[2] = [0.5, 0.6];
-            v.num_texcoords = 3;
-        }
-        let (prim, _, accessors, _) = make_prim(&verts_3, false, 0, -1);
-        for i in 0..3 {
-            let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::TexCoords(i)).unwrap();
-            assert_eq!(acc.type_, Valid(json::accessor::Type::Vec2));
-            assert_eq!(acc.count, json::validation::USize64(3));
-        }
-        assert!(!has_semantic(&prim, json::mesh::Semantic::TexCoords(3)));
-    }
-
-    // ---- Tangent presence and normalization ----
-
-    #[test]
-    fn test_tangent_presence() {
-        // Zero tangent → no TANGENT attribute
-        let verts_zero = vec![vertex([0.0, 0.0, 0.0]); 3];
-        let (prim, ..) = make_prim(&verts_zero, false, 0, -1);
-        assert!(!has_semantic(&prim, json::mesh::Semantic::Tangents));
-
-        // Non-zero tangent → TANGENT attribute present as Vec4
-        let mut verts_set = vec![vertex([0.0, 0.0, 0.0]); 3];
-        for v in &mut verts_set {
-            v.tangent = [1.0, 0.0, 0.0, 1.0];
-        }
-        let (prim, _, accessors, _) = make_prim(&verts_set, false, 0, -1);
-        let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Tangents).unwrap();
-        assert_eq!(acc.type_, Valid(json::accessor::Type::Vec4));
-    }
-
-    #[test]
-    fn test_tangent_normalization_and_handedness() {
-        // Sub-unit tangent with positive handedness → normalized to unit length, w=1
-        let mut verts = vec![vertex([0.0, 0.0, 0.0])];
-        verts[0].tangent = [0.5, 0.0, 0.0, 1.0];
-        let (prim, buf, accessors, views) = make_prim(&verts, false, 0, -1);
-
-        let off = accessor_offset(&prim, &accessors, &views, json::mesh::Semantic::Tangents);
-        let [tx, ty, tz, tw] = read_f32x4(&buf, off);
-        let length = (tx * tx + ty * ty + tz * tz).sqrt();
-        assert!(
-            (length - 1.0).abs() < 1e-5,
-            "should be unit length, got {length}"
-        );
-        assert!((tx - 1.0).abs() < 1e-5);
-        assert_eq!(tw, 1.0, "positive handedness preserved");
-
-        // Negative handedness → w=-1 preserved
-        let mut verts_neg = vec![vertex([0.0, 0.0, 0.0])];
-        verts_neg[0].tangent = [0.0, 0.0, 0.5, -1.0];
-        let (prim, buf, accessors, views) = make_prim(&verts_neg, false, 0, -1);
-
-        let off = accessor_offset(&prim, &accessors, &views, json::mesh::Semantic::Tangents);
-        let [_, _, _, tw] = read_f32x4(&buf, off);
-        assert_eq!(tw, -1.0, "negative handedness preserved");
-    }
-
-    // ---- Normal normalization ----
-
-    #[test]
-    fn test_normal_normalization_and_zero_fallback() {
-        // Non-unit normal (2,0,0) → normalized to (1,0,0)
-        let mut verts = vec![vertex([0.0, 0.0, 0.0])];
-        verts[0].normal = [2.0, 0.0, 0.0];
-        let (prim, buf, accessors, views) = make_prim(&verts, false, 0, -1);
-
-        let off = accessor_offset(&prim, &accessors, &views, json::mesh::Semantic::Normals);
-        let [nx, ny, nz] = read_f32x3(&buf, off);
-        let length = (nx * nx + ny * ny + nz * nz).sqrt();
-        assert!(
-            (length - 1.0).abs() < 1e-5,
-            "should be unit length, got {length}"
-        );
-        assert!((nx - 1.0).abs() < 1e-5);
-
-        // Zero normal → falls back to up (0,1,0)
-        let mut verts_zero = vec![vertex([0.0, 0.0, 0.0])];
-        verts_zero[0].normal = [0.0, 0.0, 0.0];
-        let (prim, buf, accessors, views) = make_prim(&verts_zero, false, 0, -1);
-
-        let off = accessor_offset(&prim, &accessors, &views, json::mesh::Semantic::Normals);
-        let [nx, ny, nz] = read_f32x3(&buf, off);
-        assert!((nx).abs() < 1e-5);
-        assert!(
-            (ny - 1.0).abs() < 1e-5,
-            "zero normal should fall back to up"
-        );
-        assert!((nz).abs() < 1e-5);
-    }
-
-    // ---- Joint encoding ----
-
-    #[test]
-    fn test_joint_component_type_by_bone_count() {
-        let mut verts = vec![vertex([0.0, 0.0, 0.0]); 3];
-        for v in &mut verts {
-            v.bone_indices = [1, 2, 0, 0];
-            v.bone_weights = [0.7, 0.3, 0.0, 0.0];
-        }
-
-        // ≤256 bones → U8
-        let (prim, _, accessors, _) = make_prim(&verts, true, 50, -1);
-        let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Joints(0)).unwrap();
-        match &acc.component_type {
-            Valid(json::accessor::GenericComponentType(ct)) => {
-                assert!(
-                    matches!(ct, json::accessor::ComponentType::U8),
-                    "≤256 bones should use U8, got {ct:?}"
-                );
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-
-        // >256 bones → U16
-        let (prim, _, accessors, _) = make_prim(&verts, true, 300, -1);
-        let acc = get_accessor(&prim, &accessors, json::mesh::Semantic::Joints(0)).unwrap();
-        match &acc.component_type {
-            Valid(json::accessor::GenericComponentType(ct)) => {
-                assert!(
-                    matches!(ct, json::accessor::ComponentType::U16),
-                    ">256 bones should use U16, got {ct:?}"
-                );
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_joints_0based_passthrough() {
-        // UGX uses 0-based bone indices; glTF also uses 0-based — no conversion needed
-        let mut verts = vec![vertex([0.0, 0.0, 0.0])];
-        verts[0].bone_indices = [3, 1, 0, 0]; // 0-based: bone 3, bone 1, pad, pad
-        verts[0].bone_weights = [0.8, 0.2, 0.0, 0.0];
-        let (prim, buf, accessors, views) = make_prim(&verts, true, 10, -1);
-
-        let off = accessor_offset(&prim, &accessors, &views, json::mesh::Semantic::Joints(0));
-        assert_eq!(
-            [buf[off], buf[off + 1], buf[off + 2], buf[off + 3]],
-            [3, 1, 0, 0]
-        );
-    }
-
-    #[test]
-    fn test_rigid_vertex_gets_rigid_bone() {
-        // Zero-weight vertex = rigid, should get section's rigid_bone_index
-        let mut verts = vec![vertex([0.0, 0.0, 0.0])];
-        verts[0].bone_weights = [0.0, 0.0, 0.0, 0.0];
-        let (prim, buf, accessors, views) = make_prim(&verts, true, 10, 5);
-
-        let off = accessor_offset(&prim, &accessors, &views, json::mesh::Semantic::Joints(0));
-        assert_eq!(buf[off], 5, "rigid vertex should use section rigid bone");
-    }
+fn build_buffer(data: &[u8], embedded: bool, buffer_name: &str) -> Result<json::Buffer> {
+    let uri = if embedded {
+        Some(format!(
+            "data:application/octet-stream;base64,{}",
+            STANDARD.encode(data)
+        ))
+    } else {
+        Some(buffer_name.to_string())
+    };
+    Ok(json::Buffer {
+        byte_length: json::validation::USize64(checked_u64(data.len(), "glTF buffer length")?),
+        uri,
+        extensions: None,
+        extras: json::Extras::default(),
+        name: None,
+    })
 }
+
+fn checked_u32(value: usize, context: &'static str) -> Result<u32> {
+    u32::try_from(value).map_err(|_| Error::SizeOverflow(context))
+}
+
+fn checked_u64(value: usize, context: &'static str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| Error::SizeOverflow(context))
+}
+
+#[cfg(test)]
+mod tests;

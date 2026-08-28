@@ -1,4 +1,4 @@
-//! Error types for BBinaryDataTree operations.
+//! Error types for `BBinaryDataTree` operations.
 
 use alloc::string::String;
 use thiserror::Error;
@@ -20,4 +20,8 @@ pub enum Error {
     /// Data truncated unexpectedly.
     #[error("Unexpected end of data")]
     UnexpectedEof,
+
+    /// A collection or offset is too large for the on-disk format.
+    #[error("{0} is too large for the BDT format")]
+    SizeOverflow(&'static str),
 }

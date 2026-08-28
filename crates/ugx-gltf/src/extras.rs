@@ -4,56 +4,98 @@
 //! Using `#[derive(Serialize, Deserialize)]` replaces ~200 lines of manual
 //! `serde_json::Map::insert` / `obj.get(...)` calls in export and import.
 
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 /// Top-level material extras stored in glTF.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct MaterialExtrasJson {
     /// Material version from `@Ver` attribute (4 = HW1, 5 = HW2 legacy).
-    #[serde(default = "default_mat_version")]
-    pub ugx_material_version: u32,
+    #[serde(rename = "ugx_material_version", default = "default_mat_version")]
+    pub material_version: u32,
 
     // --- Legacy fields (present when material is Legacy) ---
-    /// Material flags *without* TWO_SIDED (bit 2), which lives in glTF
+    /// Material flags *without* `TWO_SIDED` (bit 2), which lives in glTF
     /// `doubleSided`.  Only present when non-zero remaining bits exist.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_flags: Option<u32>,
+    #[serde(rename = "ugx_flags", default, skip_serializing_if = "Option::is_none")]
+    pub flags: Option<u32>,
     /// Raw blend type byte — only stored when ≥ 4 (no glTF equivalent).
     /// Values 0–3 are reconstructed from `alphaMode` on import.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_blend_type: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_spec_power: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_spec_color: Option<[f32; 3]>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_env_reflectivity: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_env_sharpness: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_env_fresnel: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_env_fresnel_power: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_accessory_index: Option<u32>,
-    /// Raw opacity — only stored when OPACITY_VALID is *not* set (dead
+    #[serde(
+        rename = "ugx_blend_type",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub blend_type: Option<u8>,
+    #[serde(
+        rename = "ugx_spec_power",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub spec_power: Option<f32>,
+    #[serde(
+        rename = "ugx_spec_color",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub spec_color: Option<[f32; 3]>,
+    #[serde(
+        rename = "ugx_env_reflectivity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub env_reflectivity: Option<f32>,
+    #[serde(
+        rename = "ugx_env_sharpness",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub env_sharpness: Option<f32>,
+    #[serde(
+        rename = "ugx_env_fresnel",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub env_fresnel: Option<f32>,
+    #[serde(
+        rename = "ugx_env_fresnel_power",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub env_fresnel_power: Option<f32>,
+    #[serde(
+        rename = "ugx_accessory_index",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub accessory_index: Option<u32>,
+    /// Raw opacity — only stored when `OPACITY_VALID` is *not* set (dead
     /// data the engine ignores, needed for byte-exact round-trip).
-    /// When OPACITY_VALID is set, opacity lives in `baseColorFactor[3]`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_opacity: Option<f32>,
+    /// When `OPACITY_VALID` is set, opacity lives in `baseColorFactor[3]`.
+    #[serde(
+        rename = "ugx_opacity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub opacity: Option<f32>,
 
     /// UVW velocity per map type (only present if any non-zero).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_uvw_velocity: Option<Vec<[f32; 3]>>,
+    #[serde(
+        rename = "ugx_uvw_velocity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub uvw_velocity: Option<Vec<[f32; 3]>>,
 
     /// Texture maps keyed by map type name, each with name/channel/flags.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_maps: Option<std::collections::BTreeMap<String, Vec<MapEntryJson>>>,
+    #[serde(rename = "ugx_maps", default, skip_serializing_if = "Option::is_none")]
+    pub maps: Option<std::collections::BTreeMap<String, Vec<MapEntryJson>>>,
 
     // --- Hogan fields (present when material is Hogan) ---
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_hogan: Option<HoganExtrasJson>,
+    #[serde(rename = "ugx_hogan", default, skip_serializing_if = "Option::is_none")]
+    pub hogan: Option<HoganExtrasJson>,
 }
 
 /// A single texture map entry in extras.
@@ -122,7 +164,9 @@ pub(crate) struct HoganExtrasJson {
 /// Each 16-byte chunk becomes one `[f32; 4]` entry.
 /// Trailing bytes that don't fill a complete float4 are ignored.
 pub(crate) fn cb_bytes_to_params(data: &[u8]) -> Vec<[f32; 4]> {
-    data.chunks_exact(16)
+    data.as_chunks::<16>()
+        .0
+        .iter()
         .map(|chunk| {
             [
                 f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
@@ -257,7 +301,9 @@ fn positional_map_to_bytes(map: &BTreeMap<String, serde_json::Value>) -> Vec<u8>
 
 /// Decode raw CB bytes into a flat float slice.
 fn cb_bytes_to_floats(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(4)
+    data.as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
@@ -275,14 +321,14 @@ fn floats_to_cb_bytes(floats: &[f32]) -> Vec<u8> {
 fn json_value_to_floats(value: &serde_json::Value, expected: u8) -> Vec<f32> {
     match value {
         serde_json::Value::Number(n) => {
-            vec![n.as_f64().unwrap_or(0.0) as f32]
+            vec![n.as_f64().and_then(|number| number.to_f32()).unwrap_or(0.0)]
         }
         serde_json::Value::Array(arr) => arr
             .iter()
-            .take(expected as usize)
-            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+            .take(usize::from(expected))
+            .map(|v| v.as_f64().and_then(|number| number.to_f32()).unwrap_or(0.0))
             .collect(),
-        _ => vec![0.0; expected as usize],
+        _ => vec![0.0; usize::from(expected)],
     }
 }
 
@@ -297,35 +343,55 @@ pub(crate) struct ShaderPermJson {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct MeshExtrasJson {
     /// Triangle indices per bone name (from Granny bone bindings).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_triangle_indices: Option<std::collections::BTreeMap<String, Vec<i32>>>,
+    #[serde(
+        rename = "ugx_triangle_indices",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub triangle_indices: Option<std::collections::BTreeMap<String, Vec<i32>>>,
 
     /// Granny mesh index for multi-section-per-mesh merging.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ugx_granny_mesh_index: Option<usize>,
+    #[serde(
+        rename = "ugx_granny_mesh_index",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub granny_mesh_index: Option<usize>,
 
     /// LOD near transition distance (HW2 section +0x2C).
     /// Omitted when `0.0` (default for single-LOD or closest LOD).
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub ugx_lod_near_distance: f32,
+    #[serde(
+        rename = "ugx_lod_near_distance",
+        default,
+        skip_serializing_if = "is_zero"
+    )]
+    pub lod_near_distance: f32,
     /// LOD far transition distance (HW2 section +0x30).
     /// Omitted when `f32::MAX` (default = always visible).
-    #[serde(default = "default_lod_far", skip_serializing_if = "is_f32_max")]
-    pub ugx_lod_far_distance: f32,
+    #[serde(
+        rename = "ugx_lod_far_distance",
+        default = "default_lod_far",
+        skip_serializing_if = "is_f32_max"
+    )]
+    pub lod_far_distance: f32,
     /// LOD vertical fade distance (HW2 section +0x34).
     /// Omitted when `0.0` (default = no atmospheric fade).
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub ugx_lod_fade_distance: f32,
+    #[serde(
+        rename = "ugx_lod_fade_distance",
+        default,
+        skip_serializing_if = "is_zero"
+    )]
+    pub lod_fade_distance: f32,
 }
 
 impl MeshExtrasJson {
     /// Returns `true` when no extras data is present.
     pub fn is_empty(&self) -> bool {
-        self.ugx_triangle_indices.is_none()
-            && self.ugx_granny_mesh_index.is_none()
-            && is_zero(&self.ugx_lod_near_distance)
-            && is_f32_max(&self.ugx_lod_far_distance)
-            && is_zero(&self.ugx_lod_fade_distance)
+        self.triangle_indices.is_none()
+            && self.granny_mesh_index.is_none()
+            && is_zero(self.lod_near_distance)
+            && is_f32_max(self.lod_far_distance)
+            && is_zero(self.lod_fade_distance)
     }
 }
 
@@ -356,10 +422,10 @@ fn default_lod_far() -> f32 {
     f32::MAX
 }
 
-fn is_zero(v: &f32) -> bool {
-    *v == 0.0
+fn is_zero(value: impl Borrow<f32>) -> bool {
+    value.borrow().abs() <= f32::EPSILON
 }
 
-fn is_f32_max(v: &f32) -> bool {
-    *v == f32::MAX
+fn is_f32_max(value: impl Borrow<f32>) -> bool {
+    value.borrow().to_bits() == f32::MAX.to_bits()
 }

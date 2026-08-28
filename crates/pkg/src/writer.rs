@@ -45,6 +45,7 @@ impl Default for Writer {
 
 impl Writer {
     /// Create a new PKG writer (version 2, 4096-byte alignment).
+    #[must_use]
     pub fn new() -> Self {
         Self {
             files: Vec::new(),
@@ -54,6 +55,7 @@ impl Writer {
     }
 
     /// Create a version-1 writer (no alignment footer).
+    #[must_use]
     pub fn new_v1() -> Self {
         Self {
             files: Vec::new(),
@@ -100,16 +102,23 @@ impl Writer {
     }
 
     /// Number of files added so far.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.files.len()
     }
 
     /// Whether the writer has no files.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
 
     /// Serialise the archive into a `Vec<u8>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a filename or archive size exceeds the format's
+    /// limits.
     pub fn finalize(&self) -> Result<Vec<u8>> {
         self.finalize_with_progress(&mut NoProgress)
     }
@@ -118,6 +127,11 @@ impl Writer {
     ///
     /// The [`Progress`] implementation receives `(bytes_written, total_bytes)`
     /// and should return `true` to continue or `false` to cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a filename or archive size exceeds the format's
+    /// limits, or [`Error::Cancelled`] if progress reporting cancels the write.
     pub fn finalize_with_progress(&self, progress: &mut impl Progress) -> Result<Vec<u8>> {
         // Validate filenames.
         for f in &self.files {
@@ -154,7 +168,8 @@ impl Writer {
             cursor += f.data.len() as u64;
         }
 
-        let total_size = cursor as usize;
+        let total_size =
+            usize::try_from(cursor).map_err(|_| Error::SizeOverflow("archive size"))?;
 
         // --- Write output ---
         let mut out = vec![0u8; total_size];
@@ -204,7 +219,8 @@ impl Writer {
         let total_data_bytes: u64 = self.files.iter().map(|f| f.data.len() as u64).sum();
         let mut bytes_written: u64 = 0;
         for (i, f) in self.files.iter().enumerate() {
-            let start = file_offsets[i] as usize;
+            let start =
+                usize::try_from(file_offsets[i]).map_err(|_| Error::SizeOverflow("file offset"))?;
             out[start..start + f.data.len()].copy_from_slice(&f.data);
             bytes_written += f.data.len() as u64;
             if !progress.report(bytes_written, total_data_bytes) {
@@ -220,6 +236,11 @@ impl Writer {
     /// Unlike [`finalize`](Self::finalize), this does not allocate a single
     /// contiguous buffer — it writes header, entries, padding, and data
     /// sequentially.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive exceeds format limits or the sink
+    /// cannot accept all bytes.
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<()> {
         self.write_to_with_progress(w, &mut NoProgress)
     }
@@ -228,6 +249,11 @@ impl Writer {
     ///
     /// The [`Progress`] implementation receives `(bytes_written, total_bytes)`
     /// and should return `true` to continue or `false` to cancel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the archive exceeds format limits, the sink cannot
+    /// accept all bytes, or progress reporting cancels the write.
     pub fn write_to_with_progress<W: Write>(
         &self,
         w: &mut W,
@@ -281,7 +307,9 @@ impl Writer {
         }
 
         // --- Padding ---
-        let padding = (data_offset as usize) - header_size;
+        let data_offset =
+            usize::try_from(data_offset).map_err(|_| Error::SizeOverflow("data offset"))?;
+        let padding = data_offset - header_size;
         if padding > 0 {
             let zeros = vec![0u8; padding];
             w.write_all(&zeros)?;
@@ -302,6 +330,7 @@ impl Writer {
     }
 
     /// Convenience: compute the FNV-1a 64-bit hash for a normalised filename.
+    #[must_use]
     pub fn hash_filename(filename: &str) -> u64 {
         let mut normalised = String::with_capacity(filename.len());
         for b in filename.bytes() {

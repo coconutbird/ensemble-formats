@@ -7,6 +7,9 @@ repository.workspace = true
 authors.workspace = true
 description = "Serde Deserializer for bdt::Node trees — derive-based XMB parsing with deny_unknown_fields support"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 std = []

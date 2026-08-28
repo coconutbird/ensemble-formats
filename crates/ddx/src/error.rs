@@ -53,6 +53,14 @@ pub enum Error {
     /// Unsupported texture format for decoding.
     #[error("Unsupported texture format for decoding: {0:?}")]
     UnsupportedFormat(crate::format::DataFormat),
+
+    /// A cursor read or write failed.
+    #[error("I/O error: {0}")]
+    Io(#[from] nostdio::IoError),
+
+    /// A calculated size cannot be represented by the DDX or DDS format.
+    #[error("{0} is too large for the texture format")]
+    SizeOverflow(&'static str),
 }
 
 /// Result type for DDX operations.

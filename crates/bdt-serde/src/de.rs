@@ -23,19 +23,20 @@ use crate::warn::Diagnostics;
 // Top-level Deserializer
 // ---------------------------------------------------------------------------
 
-/// A serde [`Deserializer`] backed by a [`bdt::Node`] reference.
+/// A serde [`serde::de::Deserializer`] backed by a [`bdt::Node`] reference.
 pub struct NodeDeserializer<'a> {
     node: &'a Node,
     diag: Option<&'a Diagnostics>,
 }
 
 impl<'a> NodeDeserializer<'a> {
+    #[must_use]
     pub fn new(node: &'a Node, diag: Option<&'a Diagnostics>) -> Self {
         Self { node, diag }
     }
 }
 
-impl<'a, 'de> de::Deserializer<'de> for NodeDeserializer<'a> {
+impl<'de> de::Deserializer<'de> for NodeDeserializer<'_> {
     type Error = Error;
 
     fn deserialize_struct<V>(
@@ -92,7 +93,7 @@ impl<'a, 'de> de::Deserializer<'de> for NodeDeserializer<'a> {
             .text
             .as_float()
             .ok_or_else(|| Error::new("expected f64"))?;
-        visitor.visit_f64(v as f64)
+        visitor.visit_f64(f64::from(v))
     }
 
     fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -116,7 +117,8 @@ impl<'a, 'de> de::Deserializer<'de> for NodeDeserializer<'a> {
             .text
             .as_int()
             .ok_or_else(|| Error::new("expected u32"))?;
-        visitor.visit_u32(v as u32)
+        let value = u32::try_from(v).map_err(|_| Error::new("expected non-negative u32"))?;
+        visitor.visit_u32(value)
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -233,7 +235,7 @@ impl<'a> NodeMapAccess<'a> {
     }
 }
 
-impl<'a, 'de> de::MapAccess<'de> for NodeMapAccess<'a> {
+impl<'de> de::MapAccess<'de> for NodeMapAccess<'_> {
     type Error = Error;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(
@@ -287,7 +289,7 @@ struct DiagValueDeserializer<'a> {
     diag: Option<&'a Diagnostics>,
 }
 
-impl<'a, 'de> de::Deserializer<'de> for DiagValueDeserializer<'a> {
+impl<'de> de::Deserializer<'de> for DiagValueDeserializer<'_> {
     type Error = Error;
 
     fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -413,7 +415,7 @@ enum ChildrenOrVariantDeserializer<'a> {
     Children(ChildrenDeserializer<'a>),
 }
 
-impl<'a, 'de> de::Deserializer<'de> for ChildrenOrVariantDeserializer<'a> {
+impl<'de> de::Deserializer<'de> for ChildrenOrVariantDeserializer<'_> {
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -523,7 +525,7 @@ struct ChildSeqAccess<'a> {
     diag: Option<&'a Diagnostics>,
 }
 
-impl<'a, 'de> de::SeqAccess<'de> for ChildSeqAccess<'a> {
+impl<'de> de::SeqAccess<'de> for ChildSeqAccess<'_> {
     type Error = Error;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(
@@ -547,7 +549,7 @@ impl<'a, 'de> de::SeqAccess<'de> for ChildSeqAccess<'a> {
 /// - everything else → delegates to the **first** child as a `NodeDeserializer`
 struct ChildrenDeserializer<'a>(&'a Vec<&'a Node>, Option<&'a Diagnostics>);
 
-impl<'a, 'de> de::Deserializer<'de> for ChildrenDeserializer<'a> {
+impl<'de> de::Deserializer<'de> for ChildrenDeserializer<'_> {
     type Error = Error;
 
     // Default: treat as a single element (first child).
@@ -631,7 +633,7 @@ struct RefSeqAccess<'a> {
     diag: Option<&'a Diagnostics>,
 }
 
-impl<'a, 'de> de::SeqAccess<'de> for RefSeqAccess<'a> {
+impl<'de> de::SeqAccess<'de> for RefSeqAccess<'_> {
     type Error = Error;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(
@@ -655,21 +657,19 @@ impl<'a, 'de> de::SeqAccess<'de> for RefSeqAccess<'a> {
 /// Deserializes a [`bdt::variant::Variant`] value into serde primitives.
 struct VariantDeserializer<'a>(&'a Variant);
 
-impl<'a, 'de> de::Deserializer<'de> for VariantDeserializer<'a> {
+impl<'de> de::Deserializer<'de> for VariantDeserializer<'_> {
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         match self.0 {
             Variant::Null => visitor.visit_unit(),
-            Variant::Float(v) => visitor.visit_f32(*v),
+            Variant::Float(v) | Variant::Fract24(v) => visitor.visit_f32(*v),
             Variant::Double(v) => visitor.visit_f64(*v),
             Variant::Int(v) => visitor.visit_i32(*v),
             Variant::UInt(v) => visitor.visit_u32(*v),
             Variant::Bool(v) => visitor.visit_bool(*v),
-            Variant::String(s) => visitor.visit_string(s.clone()),
-            Variant::UString(s) => visitor.visit_string(s.clone()),
+            Variant::String(s) | Variant::UString(s) => visitor.visit_string(s.clone()),
             Variant::FloatVec(_) => visitor.visit_string(self.0.to_string_value()),
-            Variant::Fract24(v) => visitor.visit_f32(*v),
         }
     }
 
@@ -701,7 +701,7 @@ impl<'a, 'de> de::Deserializer<'de> for VariantDeserializer<'a> {
             .0
             .as_float()
             .ok_or_else(|| Error::new("expected f64"))?;
-        visitor.visit_f64(v as f64)
+        visitor.visit_f64(f64::from(v))
     }
 
     fn deserialize_i32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -711,7 +711,8 @@ impl<'a, 'de> de::Deserializer<'de> for VariantDeserializer<'a> {
 
     fn deserialize_u32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         let v = self.0.as_int().ok_or_else(|| Error::new("expected u32"))?;
-        visitor.visit_u32(v as u32)
+        let value = u32::try_from(v).map_err(|_| Error::new("expected non-negative u32"))?;
+        visitor.visit_u32(value)
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {

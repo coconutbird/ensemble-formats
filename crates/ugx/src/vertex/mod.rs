@@ -1,6 +1,6 @@
 //! Vertex format types and packing/unpacking logic.
 //!
-//! This module groups the vertex element type definitions and the UnivertPacker
+//! This module groups the vertex element type definitions and the `UnivertPacker`
 //! which together describe how vertex attributes are packed in UGX vertex buffers.
 
 pub mod element;

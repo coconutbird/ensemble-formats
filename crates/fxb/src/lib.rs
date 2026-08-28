@@ -49,11 +49,11 @@ use alloc::vec::Vec;
 use core::fmt;
 use d3dasm::Shader;
 use d3dasm::dxbc;
-use nostdio::{ReadLe, Seek, SeekFrom, SliceCursor};
+use nostdio::{Cursor, ReadLe, Seek, SeekFrom, Write, WriteLe};
 
 const FXB0_MAGIC: &[u8; 4] = b"fxb0";
 
-/// Minimum header size (magic + version + unknown + name_len).
+/// Minimum header size (magic + version + unknown + `name_len`).
 const FXB0_HEADER_SIZE: usize = 16;
 
 /// Errors that can occur when parsing an FXB file.
@@ -71,6 +71,10 @@ pub enum Error {
         offset: usize,
         size: usize,
     },
+    /// A value cannot be represented by the on-disk format.
+    SizeOverflow(&'static str),
+    /// A cursor read or write failed.
+    Cursor,
 }
 
 impl fmt::Display for Error {
@@ -93,14 +97,22 @@ impl fmt::Display for Error {
                 f,
                 "entry {entry}: DXBC blob at 0x{offset:X} size {size} exceeds file bounds"
             ),
+            Self::SizeOverflow(field) => write!(f, "{field} is too large for the FXB format"),
+            Self::Cursor => f.write_str("cursor read or write failed"),
         }
+    }
+}
+
+impl From<nostdio::IoError> for Error {
+    fn from(_: nostdio::IoError) -> Self {
+        Self::Cursor
     }
 }
 
 /// A single shader entry inside an FXB container.
 #[derive(Debug)]
 pub struct FxbEntry<'a> {
-    /// Shader stage name (e.g. "VertexShader", "PixelShader").
+    /// Shader stage name (e.g. "`VertexShader`", "`PixelShader`").
     pub name: String,
     /// Raw name field bytes as stored in the file (for round-trip fidelity).
     /// For entry 0 this is `header.name_len` bytes; for subsequent entries
@@ -134,47 +146,60 @@ pub struct FxbFile<'a> {
     pub entries: Vec<FxbEntry<'a>>,
 }
 
-impl<'a> FxbFile<'a> {
+impl FxbFile<'_> {
     /// Serialize this FXB file back to bytes.
     ///
     /// The output is byte-identical to the original input when the
     /// [`FxbFile`] was produced by [`parse`].
-    pub fn to_bytes(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SizeOverflow`] if an entry size cannot be represented
+    /// by the 32-bit on-disk field, or [`Error::Cursor`] if writing fails.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let mut out = Vec::new();
 
         // Header.
-        out.extend_from_slice(FXB0_MAGIC);
-        out.extend_from_slice(&self.version.to_le_bytes());
-        out.extend_from_slice(&self.unknown_08.to_le_bytes());
-        out.extend_from_slice(&self.name_len.to_le_bytes());
+        out.write_all(FXB0_MAGIC)?;
+        out.write_u32_le(self.version)?;
+        out.write_u32_le(self.unknown_08)?;
+        out.write_u32_le(self.name_len)?;
 
         for (idx, entry) in self.entries.iter().enumerate() {
             if idx > 0 {
                 // Subsequent entries: write the local_name_len prefix.
-                out.extend_from_slice(&entry.local_name_len.to_le_bytes());
+                out.write_u32_le(entry.local_name_len)?;
             }
 
             // Name field (raw bytes for round-trip fidelity).
-            out.extend_from_slice(entry.raw_name);
+            out.write_all(entry.raw_name)?;
 
             // DXBC size + blob.
-            out.extend_from_slice(&(entry.dxbc_size as u32).to_le_bytes());
-            out.extend_from_slice(entry.dxbc_data);
+            let dxbc_size = u32::try_from(entry.dxbc_size)
+                .map_err(|_| Error::SizeOverflow("DXBC blob size"))?;
+            out.write_u32_le(dxbc_size)?;
+            out.write_all(entry.dxbc_data)?;
 
             // Annotation.
-            out.extend_from_slice(entry.annotation);
+            out.write_all(entry.annotation)?;
         }
 
-        out
+        Ok(out)
     }
 }
 
 /// Check whether `data` starts with the FXB0 magic bytes.
+#[must_use]
 pub fn is_fxb(data: &[u8]) -> bool {
     data.len() >= 4 && &data[0..4] == FXB0_MAGIC
 }
 
 /// Parse `data` as an FXB0 file.
+///
+/// # Errors
+///
+/// Returns an error if the header is invalid or truncated, a declared DXBC
+/// blob lies outside `data`, or an on-disk size cannot fit the current target.
 pub fn parse(data: &[u8]) -> Result<FxbFile<'_>, Error> {
     if data.len() < FXB0_HEADER_SIZE {
         return Err(Error::TooShort { len: data.len() });
@@ -185,7 +210,7 @@ pub fn parse(data: &[u8]) -> Result<FxbFile<'_>, Error> {
         return Err(Error::BadMagic { found });
     }
 
-    let mut c = SliceCursor::new(data);
+    let mut c = Cursor::new(data);
     let e = |_| Error::Truncated;
 
     c.seek(SeekFrom::Start(4)).map_err(e)?;
@@ -196,117 +221,11 @@ pub fn parse(data: &[u8]) -> Result<FxbFile<'_>, Error> {
     // Collect all DXBC blob positions by scanning for the magic.
     let dxbc_positions = find_dxbc_offsets(data);
 
-    let nlen = name_len as usize;
+    let nlen = usize::try_from(name_len).map_err(|_| Error::SizeOverflow("name length"))?;
     let mut entries = Vec::with_capacity(dxbc_positions.len());
 
-    for (idx, &dxbc_off) in dxbc_positions.iter().enumerate() {
-        // Read the DXBC total size from the DXBC header (offset +24 in DXBC).
-        if dxbc_off + 28 > data.len() {
-            return Err(Error::BlobOutOfBounds {
-                entry: idx,
-                offset: dxbc_off,
-                size: 0,
-            });
-        }
-        let dxbc_size =
-            u32::from_le_bytes(data[dxbc_off + 24..dxbc_off + 28].try_into().unwrap()) as usize;
-        if dxbc_off + dxbc_size > data.len() {
-            return Err(Error::BlobOutOfBounds {
-                entry: idx,
-                offset: dxbc_off,
-                size: dxbc_size,
-            });
-        }
-
-        // Entry 0: name is padded to header `name_len`, no preceding length field.
-        // Subsequent entries: a local u32 `local_name_len` precedes the name,
-        // giving the actual byte length of the name string.
-        let (name, raw_name, local_name_len) = if idx == 0 {
-            // Entry 0: name field is right after the 16-byte header.
-            let name_start = dxbc_off - nlen - 4; // nlen name + 4 dxbc_size
-            let raw = &data[name_start..name_start + nlen];
-            let s: String = core::str::from_utf8(raw).unwrap_or("?").trim().into();
-            (s, raw, name_len)
-        } else {
-            // Subsequent entries: work backwards from DXBC to find the
-            // local_name_len. The layout is: [local_name_len:u32] [name:local_name_len] [dxbc_size:u32] [DXBC...]
-            // We know dxbc_size is at dxbc_off - 4. Before that is the name.
-            // We need to find the local_name_len u32 that precedes the name.
-            // Try reading candidate lengths and verify consistency.
-            let dxbc_size_off = dxbc_off - 4;
-            let mut found_len = nlen; // fallback
-            // The local name can be longer than the header name_len (e.g.
-            // "GeometryShader" = 14 chars with header name_len = 12), so
-            // probe a generous range.
-            let max_probe = 64.min(dxbc_size_off.saturating_sub(4));
-            for candidate in 1..=max_probe {
-                if dxbc_size_off < candidate + 4 {
-                    break;
-                }
-                let len_off = dxbc_size_off - candidate - 4;
-                let val =
-                    u32::from_le_bytes(data[len_off..len_off + 4].try_into().unwrap()) as usize;
-                if val == candidate {
-                    found_len = candidate;
-                    break;
-                }
-            }
-            let local_nl = found_len;
-            let name_start = dxbc_size_off - local_nl;
-            let raw = &data[name_start..name_start + local_nl];
-            let s: String = core::str::from_utf8(raw).unwrap_or("?").trim().into();
-            (s, raw, local_nl as u32)
-        };
-
-        // DXBC blob bytes.
-        let dxbc_data = &data[dxbc_off..dxbc_off + dxbc_size];
-
-        // Annotation: bytes from end of DXBC blob to start of next entry header.
-        let blob_end = dxbc_off + dxbc_size;
-        let ann_end = if let Some(&next_off) = dxbc_positions.get(idx + 1) {
-            // Next entry header: [local_name_len:4] [name:L] [dxbc_size:4] [DXBC...]
-            // We need to find where that header starts. Use the same probing.
-            let next_dxbc_size_off = next_off - 4;
-            let mut next_local = nlen;
-            let max_probe2 = 64.min(next_dxbc_size_off.saturating_sub(4));
-            for candidate in 1..=max_probe2 {
-                if next_dxbc_size_off < candidate + 4 {
-                    break;
-                }
-                let len_off = next_dxbc_size_off - candidate - 4;
-                let val =
-                    u32::from_le_bytes(data[len_off..len_off + 4].try_into().unwrap()) as usize;
-                if val == candidate {
-                    next_local = candidate;
-                    break;
-                }
-            }
-            let header_start = next_off - 4 - next_local - 4;
-            header_start.max(blob_end)
-        } else {
-            data.len()
-        };
-        let annotation = &data[blob_end..ann_end];
-
-        // Parse the DXBC blob.
-        let shader = {
-            let containers = dxbc::scan_dxbc(dxbc_data);
-            containers.into_iter().next().map(|mut container| {
-                container.offset_in_file += dxbc_off;
-                Shader::from_container(container)
-            })
-        };
-
-        entries.push(FxbEntry {
-            name,
-            raw_name,
-            local_name_len,
-            dxbc_offset: dxbc_off,
-            dxbc_size,
-            dxbc_data,
-            annotation,
-            shader,
-        });
+    for index in 0..dxbc_positions.len() {
+        entries.push(parse_entry(data, &dxbc_positions, index, nlen, name_len)?);
     }
 
     Ok(FxbFile {
@@ -317,25 +236,171 @@ pub fn parse(data: &[u8]) -> Result<FxbFile<'_>, Error> {
     })
 }
 
+fn parse_entry<'a>(
+    data: &'a [u8],
+    dxbc_positions: &[usize],
+    index: usize,
+    default_name_len: usize,
+    header_name_len: u32,
+) -> Result<FxbEntry<'a>, Error> {
+    let dxbc_offset = dxbc_positions[index];
+    let dxbc_size = checked_dxbc_size(data, dxbc_offset, index)?;
+    let blob_end = dxbc_offset
+        .checked_add(dxbc_size)
+        .ok_or(Error::SizeOverflow("DXBC blob end"))?;
+    let dxbc_data = data
+        .get(dxbc_offset..blob_end)
+        .ok_or(Error::BlobOutOfBounds {
+            entry: index,
+            offset: dxbc_offset,
+            size: dxbc_size,
+        })?;
+
+    let (name, raw_name, local_name_len) =
+        read_entry_name(data, dxbc_offset, index, default_name_len, header_name_len)?;
+    let annotation_end = if let Some(&next_offset) = dxbc_positions.get(index + 1) {
+        entry_header_start(data, next_offset, default_name_len)?.max(blob_end)
+    } else {
+        data.len()
+    };
+    let annotation = data.get(blob_end..annotation_end).ok_or(Error::Truncated)?;
+
+    let shader = dxbc::scan_dxbc(dxbc_data)
+        .into_iter()
+        .next()
+        .map(|mut container| {
+            container.offset_in_file += dxbc_offset;
+            Shader::from_container(container)
+        });
+
+    Ok(FxbEntry {
+        name,
+        raw_name,
+        local_name_len,
+        dxbc_offset,
+        dxbc_size,
+        dxbc_data,
+        annotation,
+        shader,
+    })
+}
+
+fn checked_dxbc_size(data: &[u8], dxbc_offset: usize, entry: usize) -> Result<usize, Error> {
+    let size_offset = dxbc_offset
+        .checked_add(24)
+        .ok_or(Error::SizeOverflow("DXBC size offset"))?;
+    let size =
+        usize::try_from(read_u32_at(data, size_offset)?).map_err(|_| Error::BlobOutOfBounds {
+            entry,
+            offset: dxbc_offset,
+            size: usize::MAX,
+        })?;
+    let blob_end = dxbc_offset
+        .checked_add(size)
+        .ok_or(Error::SizeOverflow("DXBC blob end"))?;
+    if blob_end > data.len() {
+        return Err(Error::BlobOutOfBounds {
+            entry,
+            offset: dxbc_offset,
+            size,
+        });
+    }
+    Ok(size)
+}
+
+fn read_entry_name(
+    data: &[u8],
+    dxbc_offset: usize,
+    index: usize,
+    default_name_len: usize,
+    header_name_len: u32,
+) -> Result<(String, &[u8], u32), Error> {
+    let name_len = if index == 0 {
+        default_name_len
+    } else {
+        find_local_name_len(data, dxbc_offset, default_name_len)?
+    };
+    let dxbc_size_offset = dxbc_offset.checked_sub(4).ok_or(Error::Truncated)?;
+    let name_start = dxbc_size_offset
+        .checked_sub(name_len)
+        .ok_or(Error::Truncated)?;
+    let raw_name = data
+        .get(name_start..dxbc_size_offset)
+        .ok_or(Error::Truncated)?;
+    let name = core::str::from_utf8(raw_name).unwrap_or("?").trim().into();
+    let local_name_len = if index == 0 {
+        header_name_len
+    } else {
+        u32::try_from(name_len).map_err(|_| Error::SizeOverflow("entry name length"))?
+    };
+    Ok((name, raw_name, local_name_len))
+}
+
+fn find_local_name_len(
+    data: &[u8],
+    dxbc_offset: usize,
+    default_name_len: usize,
+) -> Result<usize, Error> {
+    let dxbc_size_offset = dxbc_offset.checked_sub(4).ok_or(Error::Truncated)?;
+    let max_probe = 64.min(dxbc_size_offset.saturating_sub(4));
+    for candidate in 1..=max_probe {
+        let Some(length_offset) = dxbc_size_offset
+            .checked_sub(candidate)
+            .and_then(|offset| offset.checked_sub(4))
+        else {
+            break;
+        };
+        let value = usize::try_from(read_u32_at(data, length_offset)?)
+            .map_err(|_| Error::SizeOverflow("entry name length"))?;
+        if value == candidate {
+            return Ok(candidate);
+        }
+    }
+    Ok(default_name_len)
+}
+
+fn entry_header_start(
+    data: &[u8],
+    dxbc_offset: usize,
+    default_name_len: usize,
+) -> Result<usize, Error> {
+    let name_len = find_local_name_len(data, dxbc_offset, default_name_len)?;
+    dxbc_offset
+        .checked_sub(4)
+        .and_then(|offset| offset.checked_sub(name_len))
+        .and_then(|offset| offset.checked_sub(4))
+        .ok_or(Error::Truncated)
+}
+
+fn read_u32_at(data: &[u8], offset: usize) -> Result<u32, Error> {
+    let mut cursor = Cursor::new(data.get(offset..).ok_or(Error::Truncated)?);
+    cursor.read_u32_le().map_err(Error::from)
+}
+
 /// Scan `data` for all occurrences of the DXBC magic and return their byte offsets.
 fn find_dxbc_offsets(data: &[u8]) -> Vec<usize> {
     let magic = b"DXBC";
     let mut offsets = Vec::new();
     let mut pos = 0;
-    while pos + 4 <= data.len() {
-        if &data[pos..pos + 4] == magic {
+    while let Some(window) = data.get(pos..).and_then(|remaining| remaining.get(..4)) {
+        if window == magic {
             offsets.push(pos);
             // Skip past this DXBC blob using its declared size if possible.
-            if pos + 28 <= data.len() {
-                let size =
-                    u32::from_le_bytes(data[pos + 24..pos + 28].try_into().unwrap()) as usize;
-                if size > 4 {
-                    pos += size;
-                    continue;
-                }
+            if let Some(size_offset) = pos.checked_add(24)
+                && let Ok(size) = read_u32_at(data, size_offset).and_then(|value| {
+                    usize::try_from(value).map_err(|_| Error::SizeOverflow("DXBC blob size"))
+                })
+                && size > 4
+                && let Some(next) = pos.checked_add(size)
+            {
+                pos = next;
+                continue;
             }
         }
-        pos += 1;
+        let Some(next) = pos.checked_add(1) else {
+            break;
+        };
+        pos = next;
     }
     offsets
 }
@@ -358,9 +423,8 @@ mod tests {
 
     #[test]
     fn test_hw1_era_roundtrip() {
-        let game_dir = match load_game_dir("HW1_GAME_DIR") {
-            Some(d) => d,
-            None => return,
+        let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
+            return;
         };
 
         let era_paths = find_files_flat(&game_dir, "era");
@@ -373,9 +437,8 @@ mod tests {
         let mut errors = std::vec::Vec::new();
 
         for era_path in &era_paths {
-            let mut archive = match open_era(era_path) {
-                Ok(a) => a,
-                Err(_) => continue,
+            let Ok(mut archive) = open_era(era_path) else {
+                continue;
             };
             let entries = find_entries_in_era(&archive, ".bin");
             for (idx, filename) in &entries {
@@ -396,7 +459,7 @@ mod tests {
                 }
                 match parse(&data) {
                     Ok(fxb) => {
-                        let written = fxb.to_bytes();
+                        let written = fxb.to_bytes().expect("parsed FXB should serialize");
                         if data != written {
                             errors.push(std::format!(
                                 "{filename}: byte mismatch (orig={}, written={})",
