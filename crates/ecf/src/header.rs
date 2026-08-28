@@ -36,7 +36,7 @@
 
 use zerocopy::{FromBytes, Immutable, KnownLayout, Ref};
 
-use crate::{CompressionMethod, Error, HEADER_MAGIC, HEADER_MAGIC_INVERTED, Result};
+use crate::{CompressionMethod, Error, HEADER_MAGIC, Result};
 
 /// Raw on-disk ECF file header (32 bytes, big-endian).
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
@@ -99,11 +99,18 @@ impl EcfHeader {
     /// Returns [`Error::UnexpectedEof`] if `data` is shorter than the header,
     /// or [`Error::InvalidMagic`] if its signature is not recognized.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_magic_validation(data, true)
+    }
+
+    pub(crate) fn from_bytes_with_magic_validation(
+        data: &[u8],
+        validate_magic: bool,
+    ) -> Result<Self> {
         let (raw, _): (Ref<_, EcfHeaderRaw>, _) =
             Ref::from_prefix(data).map_err(|_| Error::UnexpectedEof)?;
 
         let magic = u32::from_be_bytes(raw.magic);
-        if magic != HEADER_MAGIC && magic != HEADER_MAGIC_INVERTED {
+        if validate_magic && magic != HEADER_MAGIC {
             return Err(Error::InvalidMagic {
                 expected: HEADER_MAGIC,
                 found: magic,

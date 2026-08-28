@@ -187,9 +187,9 @@ pub struct XttLinker {
     pub alpha_pass_needed: i32,
     /// Whether chunk is fully opaque.
     pub is_fully_opaque: i32,
-    /// Number of splat layers (aligned to multiple of 4).
+    /// Number of splat layers.
     pub num_splat_layers: i32,
-    /// Number of decal layers (aligned to multiple of 4).
+    /// Number of decal layers.
     pub num_decal_layers: i32,
     /// Parsed splat layer active texture indices.
     pub splat_layer_ids: Vec<i32>,
@@ -318,7 +318,9 @@ pub struct XttFile {
     pub chunk_order: Vec<ChunkMeta>,
     /// Main header.
     pub header: XttHeader,
-    /// Header chunk raw data (includes texture info beyond base header).
+    /// Unparsed bytes after the typed texture, decal, and instance tables.
+    ///
+    /// The writer rebuilds those typed tables and appends this tail verbatim.
     pub header_extra: Vec<u8>,
     /// Parsed active texture definitions.
     pub active_textures: Vec<ActiveTextureInfo>,

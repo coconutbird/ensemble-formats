@@ -22,7 +22,7 @@ mod types;
 pub use types::*;
 
 mod reader;
-pub use reader::Reader;
+pub use reader::{ReadOptions, Reader};
 
 mod writer;
 pub use writer::Writer;
@@ -38,6 +38,9 @@ pub use decode::{
 
 /// XTT file version.
 pub const XTT_VERSION: i32 = 0x0004;
+
+/// ECF file identifier used by retail XTT files.
+pub const XTT_FILE_ID: u32 = 0x0007_7826;
 
 /// XTT header chunk ID.
 pub const CHUNK_XTT_HEADER: u64 = 0x1111;

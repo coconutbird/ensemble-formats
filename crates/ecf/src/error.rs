@@ -10,6 +10,10 @@ pub enum Error {
     #[error("invalid ECF magic: expected 0x{expected:08X}, found 0x{found:08X}")]
     InvalidMagic { expected: u32, found: u32 },
 
+    /// The encoded ECF header is smaller than the fixed header.
+    #[error("invalid ECF header size: expected at least {minimum}, found {actual}")]
+    InvalidHeaderSize { minimum: usize, actual: usize },
+
     /// Header adler32 checksum mismatch.
     #[error("ECF header checksum mismatch: expected 0x{expected:08X}, computed 0x{computed:08X}")]
     HeaderChecksumMismatch { expected: u32, computed: u32 },
@@ -43,6 +47,10 @@ pub enum Error {
     /// A collection or offset is too large for the on-disk format.
     #[error("{0} is too large for the ECF format")]
     SizeOverflow(&'static str),
+
+    /// A chunk requests an alignment that cannot be represented.
+    #[error("invalid ECF chunk alignment log2: {0}")]
+    InvalidAlignment(u8),
 }
 
 /// Result type for ECF operations.

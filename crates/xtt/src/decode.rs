@@ -1,7 +1,7 @@
 //! XTT texture decoding module.
 //!
 //! Decodes compressed albedo atlas from XTT files to RGBA pixels.
-//! The albedo data is DXT1 (BC1) compressed with optional Xbox 360 tiling.
+//! The DE albedo data is a linear BC1 mip chain.
 //! Also provides alpha texture unpacking for splat blending.
 
 use alloc::format;
@@ -66,28 +66,14 @@ impl XttFile {
     ///
     /// The albedo data is stored as:
     /// - 16-byte header (BigEndian): outMemSize, width, height, numMips
-    /// - DXT1 (BC1) compressed data, potentially endian-swapped and tile-swapped
-    ///
-    /// For DE/PC version, the data appears to be stored without Xbox 360 tiling,
-    /// but may still need endian-swapping of the DXT1 blocks.
+    /// - A linear BC1 mip chain in PC byte order
     ///
     /// # Errors
     ///
     /// Returns an error if the header or dimensions are invalid, the compressed
     /// payload is truncated, or the BC1 decoder rejects the payload.
     pub fn decode_albedo(&self) -> Result<AlbedoAtlas> {
-        if self.albedo_data.len() < AlbedoHeader::SIZE {
-            return Err(Error::InvalidChunkData("Albedo data too short".into()));
-        }
-
-        let header = AlbedoHeader::from_bytes(&self.albedo_data)?;
-
-        if header.width <= 0 || header.height <= 0 {
-            return Err(Error::InvalidChunkData(format!(
-                "Invalid albedo dimensions: {}x{}",
-                header.width, header.height
-            )));
-        }
+        let header = validate_albedo_data(&self.albedo_data)?;
 
         let width = nonnegative_usize(header.width, "albedo width")?;
         let height = nonnegative_usize(header.height, "albedo height")?;
@@ -105,22 +91,12 @@ impl XttFile {
             .and_then(|blocks| blocks.checked_mul(8))
             .ok_or(Error::SizeOverflow("albedo texture"))?;
         let data_start = AlbedoHeader::SIZE;
-        let available_data = self.albedo_data.len() - data_start;
-
-        if available_data < expected_dxt1_size {
-            return Err(Error::InvalidChunkData(format!(
-                "Not enough albedo data: expected {expected_dxt1_size} bytes, have {available_data}"
-            )));
-        }
-
         // Extract mip0 DXT1 data
         let data_end = data_start
             .checked_add(expected_dxt1_size)
             .ok_or(Error::SizeOverflow("albedo payload"))?;
         let dxt1_data = &self.albedo_data[data_start..data_end];
 
-        // For DE/PC, try decoding directly first (no endian swap)
-        // If that fails or produces garbage, we'll try with endian swap
         let pixels = decode_dxt1(dxt1_data, width, height)?;
 
         Ok(AlbedoAtlas {
@@ -145,6 +121,57 @@ impl XttFile {
         }
         decode_road_data(&self.road_data).map(Some)
     }
+}
+
+pub(crate) fn validate_albedo_data(data: &[u8]) -> Result<AlbedoHeader> {
+    let header = AlbedoHeader::from_bytes(data)?;
+    let width = positive_usize(header.width, "albedo width")?;
+    let height = positive_usize(header.height, "albedo height")?;
+    let mip_count = positive_usize(header.num_mips, "albedo mip count")?;
+    let encoded_size = positive_usize(header.out_mem_size, "albedo output size")?;
+    let expected_size = bc1_mip_chain_size(width, height, mip_count)?;
+    if encoded_size != expected_size {
+        return Err(Error::InvalidChunkData(format!(
+            "Albedo output size is {encoded_size}, but {mip_count} BC1 mips require {expected_size}"
+        )));
+    }
+    let expected_chunk_size = AlbedoHeader::SIZE
+        .checked_add(encoded_size)
+        .ok_or(Error::SizeOverflow("albedo chunk"))?;
+    if data.len() != expected_chunk_size {
+        return Err(Error::InvalidChunkData(format!(
+            "Albedo chunk size is {}, expected {expected_chunk_size}",
+            data.len()
+        )));
+    }
+    Ok(header)
+}
+
+fn positive_usize(value: i32, field: &'static str) -> Result<usize> {
+    let converted = usize::try_from(value)
+        .map_err(|_| Error::InvalidChunkData(format!("Invalid {field}: {value}")))?;
+    if converted == 0 {
+        Err(Error::InvalidChunkData(format!("{field} must be positive")))
+    } else {
+        Ok(converted)
+    }
+}
+
+fn bc1_mip_chain_size(mut width: usize, mut height: usize, mip_count: usize) -> Result<usize> {
+    let mut total = 0usize;
+    for _ in 0..mip_count {
+        let level_size = width
+            .div_ceil(4)
+            .checked_mul(height.div_ceil(4))
+            .and_then(|blocks| blocks.checked_mul(8))
+            .ok_or(Error::SizeOverflow("albedo mip"))?;
+        total = total
+            .checked_add(level_size)
+            .ok_or(Error::SizeOverflow("albedo mip chain"))?;
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+    }
+    Ok(total)
 }
 
 /// Decode DXT1 (BC1) compressed data to RGBA pixels.
@@ -238,7 +265,7 @@ impl XttLinker {
         let mut alpha_maps = Vec::with_capacity(num_layers - 1);
 
         for layer_idx in 1..num_layers {
-            let alpha_map = decode_layer_alpha(&self.splat_alpha_data, layer_idx);
+            let alpha_map = decode_layer_alpha(&self.splat_alpha_data, layer_idx)?;
             alpha_maps.push(alpha_map);
         }
 
@@ -285,7 +312,7 @@ impl XttLinker {
         let mut alpha_maps = Vec::with_capacity(num_layers);
 
         for layer_idx in 0..num_layers {
-            let alpha_map = decode_layer_alpha(&self.decal_alpha_data, layer_idx);
+            let alpha_map = decode_layer_alpha(&self.decal_alpha_data, layer_idx)?;
             alpha_maps.push(alpha_map);
         }
 
@@ -411,11 +438,10 @@ fn xbox360_tiled_offset(x: u32, y: u32, width: u32) -> Option<usize> {
 ///    Xbox 360 big-endian to PC little-endian.
 /// 3. Both buffers are passed to `processLinkerData` (0x14066D890), which stores
 ///    them using X-major chunk indexing: `gridZ + numXChunks * gridX`.
-fn decode_layer_alpha(data: &[u8], layer_idx: usize) -> Vec<u8> {
-    // layer_idx is a 0-based index into the alpha texture channels.
-    // For splat overlays: caller passes (layer_idx - 1) so first overlay = 0.
-    // For decals: caller passes layer_idx directly (already 0-based).
-    // Slice/channel calculation: idx 0 → slice 0, channel 0; idx 4 → slice 1, channel 0
+fn decode_layer_alpha(data: &[u8], layer_idx: usize) -> Result<Vec<u8>> {
+    // layer_idx is the logical layer number. Splat layer 0 is the implicit
+    // base, so channel 0 remains reserved and the first explicit overlay uses
+    // channel 1. Decal layers start at logical layer/channel 0.
     let slice_idx = layer_idx / 4;
     let channel_idx = layer_idx % 4;
 
@@ -424,27 +450,29 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize) -> Vec<u8> {
     for y in 0..ALPHA_TEXTURE_SIZE {
         for x in 0..ALPHA_TEXTURE_SIZE {
             // Use GLOBAL y coordinate - slices are stacked vertically in tiled data
-            let Some(global_y) = slice_idx
+            let global_y = slice_idx
                 .checked_mul(ALPHA_TEXTURE_SIZE)
                 .and_then(|offset| offset.checked_add(y))
                 .and_then(|coordinate| u32::try_from(coordinate).ok())
-            else {
-                continue;
-            };
-            let Ok(pixel_x) = u32::try_from(x) else {
-                continue;
-            };
+                .ok_or(Error::SizeOverflow("alpha texture Y coordinate"))?;
+            let pixel_x =
+                u32::try_from(x).map_err(|_| Error::SizeOverflow("alpha texture X coordinate"))?;
 
             // Get tiled offset for this (x, global_y) position
-            let Some(tiled_index) = xbox360_tiled_offset(pixel_x, global_y, 64) else {
-                continue;
-            };
-            let Some(byte_offset) = tiled_index.checked_mul(2) else {
-                continue;
-            };
-            let Some(pixel_bytes) = data.get(byte_offset..byte_offset.saturating_add(2)) else {
-                continue;
-            };
+            let tiled_index = xbox360_tiled_offset(pixel_x, global_y, 64)
+                .ok_or(Error::SizeOverflow("tiled alpha index"))?;
+            let byte_offset = tiled_index
+                .checked_mul(2)
+                .ok_or(Error::SizeOverflow("tiled alpha byte offset"))?;
+            let byte_end = byte_offset
+                .checked_add(2)
+                .ok_or(Error::SizeOverflow("tiled alpha pixel range"))?;
+            let pixel_bytes = data.get(byte_offset..byte_end).ok_or_else(|| {
+                Error::InvalidChunkData(format!(
+                    "Tiled alpha pixel range {byte_offset}..{byte_end} exceeds {} bytes",
+                    data.len()
+                ))
+            })?;
 
             // Read as little-endian (PC/DE format, matching game's x86 uint16 read)
             let [low_byte, high_byte] = [pixel_bytes[0], pixel_bytes[1]];
@@ -459,7 +487,11 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize) -> Vec<u8> {
                 1 => high_byte >> 4,   // "A" field → Xbox G
                 2 => high_byte & 0x0F, // "R" field → Xbox B
                 3 => low_byte >> 4,    // "G" field → Xbox A
-                _ => unreachable!(),
+                _ => {
+                    return Err(Error::InvalidChunkData(
+                        "Invalid alpha channel index".into(),
+                    ));
+                }
             };
 
             // Expand 4-bit (0-15) to 8-bit (0-255)
@@ -468,7 +500,7 @@ fn decode_layer_alpha(data: &[u8], layer_idx: usize) -> Vec<u8> {
         }
     }
 
-    alpha_map
+    Ok(alpha_map)
 }
 
 // ============================================================================
@@ -511,11 +543,19 @@ pub fn decode_road_data(data: &[u8]) -> Result<RoadData> {
     for _ in 0..num_qn_chunks {
         let qn_index = cursor.read_i32_be()?;
         let num_tris = nonnegative_usize(cursor.read_i32_be()?, "road triangle count")?;
-        let _memory_size = cursor.read_i32_be()?;
+        let memory_size = nonnegative_usize(cursor.read_i32_be()?, "road vertex memory size")?;
 
         let num_verts = num_tris
             .checked_mul(3)
             .ok_or(Error::SizeOverflow("road vertex count"))?;
+        let expected_memory_size = num_verts
+            .checked_mul(12)
+            .ok_or(Error::SizeOverflow("road vertex data"))?;
+        if memory_size != expected_memory_size {
+            return Err(Error::InvalidChunkData(format!(
+                "Road QN declares {memory_size} vertex bytes, expected {expected_memory_size} for {num_tris} triangles"
+            )));
+        }
         let mut vertices = Vec::with_capacity(num_verts);
 
         for _ in 0..num_verts {
@@ -534,6 +574,16 @@ pub fn decode_road_data(data: &[u8]) -> Result<RoadData> {
         }
 
         qn_chunks.push(RoadQNChunk { qn_index, vertices });
+    }
+
+    let consumed =
+        usize::try_from(cursor.position()).map_err(|_| Error::SizeOverflow("road chunk offset"))?;
+    let payload_size = data.len() - 32;
+    if consumed != payload_size {
+        return Err(Error::InvalidChunkData(format!(
+            "Road chunk has {} trailing bytes",
+            payload_size.saturating_sub(consumed)
+        )));
     }
 
     Ok(RoadData {

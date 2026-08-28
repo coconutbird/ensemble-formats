@@ -18,6 +18,50 @@ use alloc::vec::Vec;
 
 use crate::{EcfChunkHeader, EcfHeader, Error, Result, adler32, decompress, resource_flags};
 
+/// Validation controls for parsing an ECF container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadOptions {
+    /// Validate the game ECF magic (`0xDABA7737`).
+    pub validate_magic: bool,
+    /// Validate the header and chunk Adler-32 checksums.
+    pub validate_checksums: bool,
+}
+
+impl ReadOptions {
+    /// Strict validation matching the game loader.
+    #[must_use]
+    pub const fn strict() -> Self {
+        Self {
+            validate_magic: true,
+            validate_checksums: true,
+        }
+    }
+
+    /// Validate the magic and structure but skip checksums.
+    #[must_use]
+    pub const fn unchecked_checksums() -> Self {
+        Self {
+            validate_checksums: false,
+            ..Self::strict()
+        }
+    }
+
+    /// Accept a bad ECF magic while retaining checksum validation.
+    #[must_use]
+    pub const fn accepting_bad_magic() -> Self {
+        Self {
+            validate_magic: false,
+            ..Self::strict()
+        }
+    }
+}
+
+impl Default for ReadOptions {
+    fn default() -> Self {
+        Self::strict()
+    }
+}
+
 /// Zero-copy ECF reader backed by a byte slice.
 pub struct Reader<'a> {
     data: &'a [u8],
@@ -33,7 +77,7 @@ impl<'a> Reader<'a> {
     /// Returns an error if a header is truncated or invalid, a chunk lies
     /// outside `data`, or a header or chunk checksum does not match.
     pub fn new(data: &'a [u8]) -> Result<Self> {
-        Self::parse(data, true)
+        Self::new_with_options(data, ReadOptions::strict())
     }
 
     /// Parse an ECF container from a byte slice, skipping checksum validation.
@@ -43,59 +87,93 @@ impl<'a> Reader<'a> {
     /// Returns an error if a header is truncated or invalid or a chunk lies
     /// outside `data`.
     pub fn new_unchecked(data: &'a [u8]) -> Result<Self> {
-        Self::parse(data, false)
+        Self::new_with_options(data, ReadOptions::unchecked_checksums())
     }
 
-    fn parse(data: &'a [u8], validate_checksums: bool) -> Result<Self> {
-        let header = EcfHeader::from_bytes(data)?;
+    /// Parse an ECF container with explicit validation controls.
+    ///
+    /// Structural bounds checks are always enabled. Disabling magic validation
+    /// is intended for recovery and inspection; it does not make the data
+    /// game-compatible.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an enabled validation fails or any header or chunk
+    /// range is malformed or truncated.
+    pub fn new_with_options(data: &'a [u8], options: ReadOptions) -> Result<Self> {
+        let header = EcfHeader::from_bytes_with_magic_validation(data, options.validate_magic)?;
+        let header_size =
+            usize::try_from(header.header_size).map_err(|_| Error::SizeOverflow("header size"))?;
+        if header_size < EcfHeader::SIZE {
+            return Err(Error::InvalidHeaderSize {
+                minimum: EcfHeader::SIZE,
+                actual: header_size,
+            });
+        }
+        if header_size > data.len() {
+            return Err(Error::UnexpectedEof);
+        }
 
         // Validate header adler32 (bytes 12..header_size, matching HW2 ECF::validateHeader)
-        if validate_checksums {
-            let hdr_end = (header.header_size as usize).min(data.len());
-            if hdr_end > 12 {
-                let computed = adler32(&data[12..hdr_end]);
-                if computed != header.adler32 {
-                    return Err(Error::HeaderChecksumMismatch {
-                        expected: header.adler32,
-                        computed,
-                    });
-                }
+        if options.validate_checksums {
+            let computed = adler32(&data[12..header_size]);
+            if computed != header.adler32 {
+                return Err(Error::HeaderChecksumMismatch {
+                    expected: header.adler32,
+                    computed,
+                });
             }
         }
 
         // Chunk headers start right after the (possibly extended) ECF header
-        let mut offset = header.header_size as usize;
-        let chunk_stride = EcfChunkHeader::SIZE + header.chunk_extra_data_size as usize;
+        let mut offset = header_size;
+        let chunk_stride = EcfChunkHeader::SIZE
+            .checked_add(usize::from(header.chunk_extra_data_size))
+            .ok_or(Error::SizeOverflow("chunk header stride"))?;
 
-        let mut chunks = Vec::with_capacity(header.num_chunks as usize);
+        let mut chunks = Vec::with_capacity(usize::from(header.num_chunks));
         for i in 0..header.num_chunks {
-            if offset + EcfChunkHeader::SIZE > data.len() {
+            let fixed_header_end = offset
+                .checked_add(EcfChunkHeader::SIZE)
+                .ok_or(Error::SizeOverflow("chunk header range"))?;
+            let chunk_header_end = offset
+                .checked_add(chunk_stride)
+                .ok_or(Error::SizeOverflow("chunk header range"))?;
+            if fixed_header_end > data.len() || chunk_header_end > data.len() {
                 return Err(Error::UnexpectedEof);
             }
 
             let chunk = EcfChunkHeader::from_bytes(&data[offset..])?;
 
-            // Validate per-chunk adler32 (matching HW2 ECF::validateChunks)
-            if validate_checksums && chunk.size > 0 {
-                let cstart = chunk.offset as usize;
-                let cend = cstart + chunk.size as usize;
+            if chunk.size > 0 {
+                let cstart = usize::try_from(chunk.offset)
+                    .map_err(|_| Error::SizeOverflow("chunk offset"))?;
+                let cend = cstart
+                    .checked_add(
+                        usize::try_from(chunk.size)
+                            .map_err(|_| Error::SizeOverflow("chunk size"))?,
+                    )
+                    .ok_or(Error::SizeOverflow("chunk range"))?;
 
                 if cend > data.len() {
                     return Err(Error::UnexpectedEof);
                 }
 
-                let computed = adler32(&data[cstart..cend]);
-                if computed != chunk.adler32 {
-                    return Err(Error::ChunkChecksumMismatch {
-                        index: i as usize,
-                        expected: chunk.adler32,
-                        computed,
-                    });
+                // Validate per-chunk adler32 (matching HW2 ECF::validateChunks).
+                if options.validate_checksums {
+                    let computed = adler32(&data[cstart..cend]);
+                    if computed != chunk.adler32 {
+                        return Err(Error::ChunkChecksumMismatch {
+                            index: usize::from(i),
+                            expected: chunk.adler32,
+                            computed,
+                        });
+                    }
                 }
             }
 
             chunks.push(chunk);
-            offset += chunk_stride;
+            offset = chunk_header_end;
         }
 
         Ok(Self {
@@ -134,8 +212,13 @@ impl<'a> Reader<'a> {
             .chunks
             .get(index)
             .ok_or(Error::ChunkNotFound(index as u64))?;
-        let start = chunk.offset as usize;
-        let end = start + chunk.size as usize;
+        let start =
+            usize::try_from(chunk.offset).map_err(|_| Error::SizeOverflow("chunk offset"))?;
+        let end = start
+            .checked_add(
+                usize::try_from(chunk.size).map_err(|_| Error::SizeOverflow("chunk size"))?,
+            )
+            .ok_or(Error::SizeOverflow("chunk range"))?;
         if end > self.data.len() {
             return Err(Error::UnexpectedEof);
         }

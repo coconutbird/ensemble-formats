@@ -1,8 +1,11 @@
 //! XTD data types.
 
+use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 use nostdio::{Cursor, Read, ReadBe};
+
+use crate::{Error, Result};
 
 /// Tessellation data for terrain patches.
 ///
@@ -95,7 +98,7 @@ pub struct XtdHeader {
     pub version: i32,
     /// Number of vertices along X axis.
     pub num_x_verts: i32,
-    /// Number of terrain chunks.
+    /// Number of terrain chunks along each axis.
     pub num_x_chunks: i32,
     /// Tile scale factor.
     pub tile_scale: f32,
@@ -170,7 +173,7 @@ pub struct XtdFile {
     pub header: XtdHeader,
     /// Visual chunks (one per terrain tile).
     pub visual_chunks: Vec<XtdVisualChunk>,
-    /// Atlas texture data (compressed DXT format).
+    /// Packed terrain position and normal atlas data.
     pub atlas_data: Vec<u8>,
     /// Tessellation data.
     pub tess_data: Vec<u8>,
@@ -202,23 +205,48 @@ impl Default for XtdFile {
 impl XtdFile {
     /// Decode tessellation data from the raw `tess_data` chunk.
     ///
-    /// Returns None if there is no tessellation data.
-    #[must_use]
-    pub fn decode_tessellation(&self) -> Option<TessellationData> {
+    /// Returns `Ok(None)` if there is no tessellation chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the patch dimensions are non-positive, overflow, or
+    /// do not exactly account for the encoded levels and bounding boxes.
+    pub fn decode_tessellation(&self) -> Result<Option<TessellationData>> {
         let data = &self.tess_data;
+        if data.is_empty() {
+            return Ok(None);
+        }
         let mut cursor = Cursor::new(data.as_slice());
-        let horizontal_count = cursor.read_i32_be().ok()?;
-        let vertical_count = cursor.read_i32_be().ok()?;
-        let x_patch_count = usize::try_from(horizontal_count).ok()?;
-        let z_patch_count = usize::try_from(vertical_count).ok()?;
-        let total_patches = x_patch_count.checked_mul(z_patch_count)?;
+        let horizontal_count = cursor.read_i32_be()?;
+        let vertical_count = cursor.read_i32_be()?;
+        let x_patch_count = usize::try_from(horizontal_count).map_err(|_| {
+            Error::InvalidChunkData(format!("Invalid X patch count: {horizontal_count}"))
+        })?;
+        let z_patch_count = usize::try_from(vertical_count).map_err(|_| {
+            Error::InvalidChunkData(format!("Invalid Z patch count: {vertical_count}"))
+        })?;
+        let total_patches = x_patch_count
+            .checked_mul(z_patch_count)
+            .ok_or(Error::SizeOverflow("tessellation patch count"))?;
         if total_patches == 0 {
-            return None;
+            return Err(Error::InvalidChunkData(
+                "Tessellation patch counts must be positive".into(),
+            ));
+        }
+        let expected_size = total_patches
+            .checked_mul(PatchBoundingBox::SIZE + 1)
+            .and_then(|size| size.checked_add(8))
+            .ok_or(Error::SizeOverflow("tessellation chunk"))?;
+        if data.len() != expected_size {
+            return Err(Error::InvalidChunkData(format!(
+                "Invalid tessellation size: expected {expected_size}, got {}",
+                data.len()
+            )));
         }
 
         // Read per-patch tessellation levels (1 byte each)
         let mut patch_tess_levels = vec![0; total_patches];
-        cursor.read_exact(&mut patch_tess_levels).ok()?;
+        cursor.read_exact(&mut patch_tess_levels)?;
 
         // Calculate max tessellation level
         let max_tess_level = patch_tess_levels.iter().copied().max().unwrap_or_default();
@@ -228,27 +256,27 @@ impl XtdFile {
         for _ in 0..total_patches {
             let bbox = PatchBoundingBox {
                 min: [
-                    cursor.read_f32_be().ok()?,
-                    cursor.read_f32_be().ok()?,
-                    cursor.read_f32_be().ok()?,
-                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be()?,
+                    cursor.read_f32_be()?,
+                    cursor.read_f32_be()?,
+                    cursor.read_f32_be()?,
                 ],
                 max: [
-                    cursor.read_f32_be().ok()?,
-                    cursor.read_f32_be().ok()?,
-                    cursor.read_f32_be().ok()?,
-                    cursor.read_f32_be().ok()?,
+                    cursor.read_f32_be()?,
+                    cursor.read_f32_be()?,
+                    cursor.read_f32_be()?,
+                    cursor.read_f32_be()?,
                 ],
             };
             patch_bounding_boxes.push(bbox);
         }
 
-        Some(TessellationData {
+        Ok(Some(TessellationData {
             num_x_patches: horizontal_count,
             num_z_patches: vertical_count,
             max_tess_level,
             patch_tess_levels,
             patch_bounding_boxes,
-        })
+        }))
     }
 }

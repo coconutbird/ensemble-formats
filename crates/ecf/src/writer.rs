@@ -15,8 +15,7 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    EcfChunkHeader, EcfHeader, Error, HEADER_MAGIC, Result, adler32, align_up, compress,
-    resource_flags,
+    EcfChunkHeader, EcfHeader, Error, HEADER_MAGIC, Result, adler32, compress, resource_flags,
 };
 
 /// Default alignment for chunks (16-byte, log2 = 4).
@@ -53,6 +52,47 @@ impl Writer {
             chunks: Vec::new(),
             default_alignment_log2: alignment_log2,
         }
+    }
+
+    /// Set the ECF header flags written to the container.
+    pub fn set_header_flags(&mut self, flags: u16) {
+        self.header.flags = flags;
+    }
+
+    /// Add a logical chunk while preserving its ECF metadata.
+    ///
+    /// When [`resource_flags::IS_DEFLATE_STREAM`] is set, `data` is treated as
+    /// the decompressed logical payload and is wrapped in a game-compatible
+    /// `BDeflateStream` before being stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if compression fails or the stored size cannot be
+    /// represented by the ECF format.
+    pub fn add_chunk_with_metadata(
+        &mut self,
+        id: u64,
+        data: Vec<u8>,
+        alignment_log2: u8,
+        flags: u8,
+        resource_flags: u16,
+    ) -> Result<()> {
+        let stored = if (resource_flags & resource_flags::IS_DEFLATE_STREAM) != 0 {
+            compress(&data, true)?
+        } else {
+            data
+        };
+        let chunk = EcfChunkHeader {
+            id,
+            offset: 0,
+            size: u32::try_from(stored.len()).map_err(|_| Error::SizeOverflow("chunk size"))?,
+            adler32: adler32(&stored),
+            flags,
+            alignment_log2,
+            resource_flags,
+        };
+        self.chunks.push((chunk, stored));
+        Ok(())
     }
 
     /// Add an uncompressed chunk.
@@ -142,15 +182,24 @@ impl Writer {
         self.header.num_chunks =
             u16::try_from(self.chunks.len()).map_err(|_| Error::SizeOverflow("chunk count"))?;
 
-        let headers_size = EcfHeader::SIZE + (EcfChunkHeader::SIZE * self.chunks.len());
+        let headers_size = EcfChunkHeader::SIZE
+            .checked_mul(self.chunks.len())
+            .and_then(|size| size.checked_add(EcfHeader::SIZE))
+            .ok_or(Error::SizeOverflow("chunk header table"))?;
 
-        let initial_alignment = self.chunks.first().map_or(16, |(c, _)| c.alignment());
-        let mut data_offset = align_up(headers_size, initial_alignment);
+        let initial_alignment = self
+            .chunks
+            .first()
+            .map_or(Ok(16), |(chunk, _)| alignment(chunk.alignment_log2))?;
+        let mut data_offset = checked_align_up(headers_size, initial_alignment)?;
 
         for (chunk, data) in &mut self.chunks {
             chunk.offset =
                 u32::try_from(data_offset).map_err(|_| Error::SizeOverflow("chunk offset"))?;
-            data_offset = align_up(data_offset + data.len(), chunk.alignment());
+            let chunk_end = data_offset
+                .checked_add(data.len())
+                .ok_or(Error::SizeOverflow("chunk range"))?;
+            data_offset = checked_align_up(chunk_end, alignment(chunk.alignment_log2)?)?;
         }
 
         self.header.file_size =
@@ -182,4 +231,17 @@ impl Writer {
 
         Ok(out)
     }
+}
+
+fn alignment(log2: u8) -> Result<usize> {
+    1usize
+        .checked_shl(u32::from(log2))
+        .ok_or(Error::InvalidAlignment(log2))
+}
+
+fn checked_align_up(value: usize, alignment: usize) -> Result<usize> {
+    value
+        .checked_add(alignment - 1)
+        .map(|aligned| aligned & !(alignment - 1))
+        .ok_or(Error::SizeOverflow("aligned offset"))
 }

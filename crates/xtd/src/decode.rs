@@ -9,7 +9,6 @@
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use nostdio::{Cursor, ReadBe, ReadLe};
@@ -19,70 +18,6 @@ use crate::{Error, Result, XtdFile};
 
 mod auxiliary_textures;
 pub use auxiliary_textures::LightingData;
-
-/// Calculate Morton code (Z-order curve) for 2D coordinates.
-///
-/// This interleaves the bits of x and y to create the swizzled index.
-/// Used by the Xbox 360 R8 texture decoder.
-#[inline]
-fn morton_index(x: usize, y: usize) -> usize {
-    let mut result = 0;
-    for i in 0..16 {
-        result |= ((x >> i) & 1) << (2 * i);
-        result |= ((y >> i) & 1) << (2 * i + 1);
-    }
-    result
-}
-
-/// Xbox 360 tile size for R8 (8-bit) format textures.
-/// R8 uses 8x8 tiles (64 bytes per tile).
-const R8_TILE_SIZE: usize = 8;
-
-/// Un-tile Xbox 360 R8 texture data.
-///
-/// Xbox 360 R8 textures use 8x8 tiles with Morton (Z-order) swizzling within tiles.
-/// This converts tiled data back to linear row-major order.
-fn untile_r8_texture(tiled: &[u8], width: usize, height: usize) -> Vec<u8> {
-    let mut linear = vec![0u8; width * height];
-
-    let tiles_x = width.div_ceil(R8_TILE_SIZE);
-    let tiles_y = height.div_ceil(R8_TILE_SIZE);
-
-    for tile_y in 0..tiles_y {
-        for tile_x in 0..tiles_x {
-            // Calculate base offset for this tile in the tiled data
-            let tile_index = tile_y * tiles_x + tile_x;
-            let tile_base = tile_index * R8_TILE_SIZE * R8_TILE_SIZE;
-
-            // Un-tile each pixel within the tile
-            for local_y in 0..R8_TILE_SIZE {
-                for local_x in 0..R8_TILE_SIZE {
-                    // Calculate global position
-                    let global_x = tile_x * R8_TILE_SIZE + local_x;
-                    let global_y = tile_y * R8_TILE_SIZE + local_y;
-
-                    // Skip if outside texture bounds
-                    if global_x >= width || global_y >= height {
-                        continue;
-                    }
-
-                    // Calculate the swizzled index within the tile using Morton code
-                    let swizzled_idx = morton_index(local_x, local_y);
-                    let tiled_idx = tile_base + swizzled_idx;
-
-                    // Calculate linear destination
-                    let linear_idx = global_y * width + global_x;
-
-                    if tiled_idx < tiled.len() && linear_idx < linear.len() {
-                        linear[linear_idx] = tiled[tiled_idx];
-                    }
-                }
-            }
-        }
-    }
-
-    linear
-}
 
 /// Atlas chunk header containing position encoding parameters.
 ///
@@ -245,7 +180,7 @@ pub struct RawTerrainData {
     pub packed_positions: Vec<u32>,
     /// Packed normal data (one u32 per vertex).
     pub packed_normals: Vec<u32>,
-    /// Number of vertices per axis (e.g., 1025 for 1024x1024 terrain).
+    /// Number of vertices per axis (for example, 1024 for a 1024x1024 terrain).
     pub num_verts_per_axis: u32,
     /// Atlas mid point for position decoding.
     pub mid: [f32; 3],
@@ -792,29 +727,28 @@ pub struct TessellatedMesh {
 
 /// Decoded ambient occlusion data.
 ///
-/// Based on IDA reverse engineering: AO is stored at half resolution
-/// (512×1024 for a 1024×1024 terrain) and sampled with bilinear filtering
-/// in the vertex shader via `gVertSampler_ao_Texture`.
+/// The game expands the compact source blocks to a full-resolution BC3 texture
+/// and samples its alpha channel via `gVertSampler_ao_Texture`.
 #[derive(Debug, Clone)]
 pub struct AmbientOcclusionData {
     /// AO values per texel (0-255, where 255 = fully lit, 0 = fully occluded).
     pub values: Vec<u8>,
-    /// Texture width (half the terrain vertex count in X).
+    /// Texture width (the terrain vertex count).
     pub width: usize,
-    /// Texture height (same as terrain vertex count in Z).
+    /// Texture height (the terrain vertex count).
     pub height: usize,
 }
 
 /// Decoded alpha (transparency) data.
 ///
-/// Uses the same compression/format as AO data.
+/// Uses the same compact BC3-alpha representation as AO data.
 /// Sampled via `gVertSampler_alpha_Texture` in the vertex shader.
 #[derive(Debug, Clone)]
 pub struct AlphaData {
     /// Alpha values per texel (0-255, where 255 = fully opaque, 0 = fully transparent).
     pub values: Vec<u8>,
-    /// Texture width (half the terrain vertex count in X).
+    /// Texture width (the terrain vertex count).
     pub width: usize,
-    /// Texture height (same as terrain vertex count in Z).
+    /// Texture height (the terrain vertex count).
     pub height: usize,
 }

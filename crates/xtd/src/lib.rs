@@ -23,7 +23,7 @@ mod types;
 pub use types::*;
 
 mod reader;
-pub use reader::Reader;
+pub use reader::{ReadOptions, Reader};
 
 mod writer;
 pub use writer::Writer;
@@ -40,6 +40,9 @@ pub use decode::{
 
 /// XTD file version.
 pub const XTD_VERSION: i32 = 0x000C;
+
+/// ECF file identifier used by retail XTD files.
+pub const XTD_FILE_ID: u32 = 0x0007_7826;
 
 /// XTD header chunk ID.
 pub const CHUNK_XTD_HEADER: u64 = 0x1111;
@@ -226,7 +229,8 @@ mod tests {
         // conversion. Source patch (1, 0) becomes viewer patch (0, 1).
         let tessellation = file
             .decode_tessellation()
-            .expect("Failed to decode tessellation");
+            .expect("Failed to decode tessellation")
+            .expect("Missing tessellation chunk");
         let bbox = tessellation
             .get_patch_bbox(1, 0)
             .expect("Missing source patch bounding box");
@@ -267,7 +271,8 @@ mod tests {
 
         let tess = file
             .decode_tessellation()
-            .expect("Failed to decode tessellation");
+            .expect("Failed to decode tessellation")
+            .expect("Missing tessellation chunk");
 
         println!("\nTessellation Data:");
         println!("  NumXPatches: {}", tess.num_x_patches);
@@ -317,7 +322,8 @@ mod tests {
         let vertices = file.decode_vertices().expect("Failed to decode vertices");
         let tess = file
             .decode_tessellation()
-            .expect("Failed to decode tessellation");
+            .expect("Failed to decode tessellation")
+            .expect("Missing tessellation chunk");
 
         println!("Original mesh:");
         println!("  Vertices: {}", vertices.positions.len());
@@ -382,8 +388,8 @@ mod tests {
     fn make_test_xtd() -> XtdFile {
         let header = XtdHeader {
             version: XTD_VERSION,
-            num_x_verts: 65,
-            num_x_chunks: 4,
+            num_x_verts: 128,
+            num_x_chunks: 2,
             tile_scale: 2.0,
             world_min: [-128.0, -10.0, -128.0],
             world_max: [128.0, 50.0, 128.0],
@@ -406,27 +412,46 @@ mod tests {
                 max: [0.0, 30.0, -64.0],
                 can_cast_shadows: false,
             },
+            XtdVisualChunk {
+                grid_x: 0,
+                grid_z: 1,
+                max_v_stride: 65,
+                min: [-128.0, -10.0, -64.0],
+                max: [-64.0, 50.0, 0.0],
+                can_cast_shadows: true,
+            },
+            XtdVisualChunk {
+                grid_x: 1,
+                grid_z: 1,
+                max_v_stride: 65,
+                min: [-64.0, -5.0, -64.0],
+                max: [0.0, 30.0, 0.0],
+                can_cast_shadows: false,
+            },
         ];
 
-        // Fake atlas data (32-byte header + some packed vertices)
-        let atlas_data = alloc::vec![0xAA; 64];
-        // Fake tessellation data: 2 i32 BE (numX=2, numZ=2) + 4 tess levels + 4*32 bboxes
+        // 32-byte header plus two packed u32 values for every 128x128 vertex.
+        let atlas_data = alloc::vec![0xAA; 32 + 128 * 128 * 8];
+        // 8x8 patches: two counts, one level and one bbox per patch.
         let mut tess_data = Vec::new();
-        tess_data.extend_from_slice(&2i32.to_be_bytes());
-        tess_data.extend_from_slice(&2i32.to_be_bytes());
-        tess_data.extend_from_slice(&[3, 5, 7, 2]); // patch tess levels
-        // 4 bounding boxes, 32 bytes each
-        for i in 0..4u8 {
+        tess_data.extend_from_slice(&8i32.to_be_bytes());
+        tess_data.extend_from_slice(&8i32.to_be_bytes());
+        tess_data.extend_from_slice(&[3; 64]);
+        for i in 0..64u8 {
             for _ in 0..8 {
                 tess_data.extend_from_slice(&f32::from(i).to_be_bytes());
             }
         }
-        let lighting_data = alloc::vec![0xBB; 128];
-        let ao_data = alloc::vec![0xCC; 256];
-        let alpha_data = alloc::vec![0xDD; 256];
+        let mut lighting_data = Vec::new();
+        lighting_data.extend_from_slice(&8192i32.to_be_bytes());
+        lighting_data.extend_from_slice(&alloc::vec![0xBB; 8192]);
+        let ao_data = alloc::vec![0xCC; 8192];
+        let alpha_data = alloc::vec![0xDD; 8192];
 
         let chunk_order = alloc::vec![
             test_chunk_meta(CHUNK_XTD_HEADER),
+            test_chunk_meta(CHUNK_TERRAIN),
+            test_chunk_meta(CHUNK_TERRAIN),
             test_chunk_meta(CHUNK_TERRAIN),
             test_chunk_meta(CHUNK_TERRAIN),
             test_chunk_meta(CHUNK_ATLAS),
@@ -578,10 +603,12 @@ mod tests {
 
         let tess_orig = original
             .decode_tessellation()
-            .expect("original tess decode failed");
+            .expect("original tess decode failed")
+            .expect("original tess chunk missing");
         let tess_read = read
             .decode_tessellation()
-            .expect("roundtrip tess decode failed");
+            .expect("roundtrip tess decode failed")
+            .expect("roundtrip tess chunk missing");
 
         assert_eq!(tess_read.num_x_patches, tess_orig.num_x_patches);
         assert_eq!(tess_read.num_z_patches, tess_orig.num_z_patches);
@@ -620,6 +647,50 @@ mod tests {
         assert!(read.lighting_data.is_empty());
         // Header and visual chunks should still survive
         assert_eq!(read.header.version, XTD_VERSION);
-        assert_eq!(read.visual_chunks.len(), 2);
+        assert_eq!(read.visual_chunks.len(), 4);
+    }
+
+    #[test]
+    fn writer_rejects_bad_signatures_and_unknown_chunks() {
+        let mut file = make_test_xtd();
+        file.ecf_file_id = 0xDEAD_BEEF;
+        assert!(matches!(
+            Writer::write(&file),
+            Err(Error::InvalidFileId { .. })
+        ));
+
+        let mut file = make_test_xtd();
+        file.chunk_order.push(test_chunk_meta(0xDEAD));
+        assert!(matches!(
+            Writer::write(&file),
+            Err(Error::UnsupportedChunk(0xDEAD))
+        ));
+    }
+
+    #[test]
+    fn writer_rejects_inconsistent_game_layout() {
+        let mut file = make_test_xtd();
+        file.header.num_x_verts = 127;
+        assert!(Writer::write(&file).is_err());
+
+        let mut file = make_test_xtd();
+        file.alpha_data.pop();
+        assert!(Writer::write(&file).is_err());
+    }
+
+    #[test]
+    fn roundtrip_preserves_ecf_metadata() {
+        let mut file = make_test_xtd();
+        file.ecf_flags = 0x1234;
+        file.chunk_order[0].flags = 0x10;
+        file.chunk_order[0].resource_flags = ecf::resource_flags::CONTIGUOUS;
+        let bytes = Writer::write(&file).unwrap();
+        let container = ecf::Reader::new(&bytes).unwrap();
+        assert_eq!(container.header().flags, 0x1234);
+        assert_eq!(container.chunks()[0].flags, 0x10);
+        assert_eq!(
+            container.chunks()[0].resource_flags,
+            ecf::resource_flags::CONTIGUOUS
+        );
     }
 }

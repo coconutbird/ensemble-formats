@@ -69,7 +69,7 @@ pub mod deflate_stream;
 pub use deflate_stream::{compress, decompress};
 
 mod reader;
-pub use reader::Reader;
+pub use reader::{ReadOptions, Reader};
 
 mod writer;
 pub use writer::Writer;
@@ -84,8 +84,9 @@ pub const HEADER_MAGIC: u32 = 0xDABA_7737;
 
 /// Byte-swapped header magic (`0x3777BADA`).
 ///
-/// Encountering this value at offset 0 indicates the file was written in
-/// little-endian byte order (not standard, but handled for robustness).
+/// This is not accepted by the game-compatible reader. It is exposed so
+/// recovery tools can recognize the common corruption when using permissive
+/// ECF read options.
 pub const HEADER_MAGIC_INVERTED: u32 = 0x3777_BADA;
 
 /// Per-chunk resource flags stored in [`EcfChunkHeader::resource_flags`].
@@ -190,6 +191,86 @@ mod tests {
         let reader = Reader::new(&bytes).expect("Failed to read");
         assert_eq!(reader.chunks().len(), 1);
         assert_eq!(reader.chunk_data(0).unwrap(), data);
+    }
+
+    #[test]
+    fn explicit_options_can_accept_bad_magic() {
+        let mut writer = Writer::new(0x1234_5678);
+        writer.add_chunk(0x1111, vec![1, 2, 3]);
+        let mut bytes = writer.finalize().unwrap();
+        bytes[..4].copy_from_slice(&0xDEAD_BEEFu32.to_be_bytes());
+
+        assert!(matches!(
+            Reader::new(&bytes),
+            Err(Error::InvalidMagic { .. })
+        ));
+        let reader = Reader::new_with_options(&bytes, ReadOptions::accepting_bad_magic()).unwrap();
+        assert_eq!(reader.header().magic, 0xDEAD_BEEF);
+    }
+
+    #[test]
+    fn strict_reader_rejects_byte_swapped_magic() {
+        let mut writer = Writer::new(0x1234_5678);
+        writer.add_chunk(0x1111, vec![1]);
+        let mut bytes = writer.finalize().unwrap();
+        bytes[..4].copy_from_slice(&HEADER_MAGIC_INVERTED.to_be_bytes());
+        assert!(matches!(
+            Reader::new(&bytes),
+            Err(Error::InvalidMagic { .. })
+        ));
+    }
+
+    #[test]
+    fn reader_rejects_header_smaller_than_fixed_header() {
+        let mut writer = Writer::new(0x1234_5678);
+        writer.add_chunk(0x1111, vec![1]);
+        let mut bytes = writer.finalize().unwrap();
+        bytes[4..8].copy_from_slice(&16u32.to_be_bytes());
+        assert!(matches!(
+            Reader::new_unchecked(&bytes),
+            Err(Error::InvalidHeaderSize {
+                minimum: EcfHeader::SIZE,
+                actual: 16
+            })
+        ));
+    }
+
+    #[test]
+    fn checksum_bypass_still_rejects_out_of_range_chunks() {
+        let mut writer = Writer::new(0x1234_5678);
+        writer.add_chunk(0x1111, vec![1]);
+        let mut bytes = writer.finalize().unwrap();
+        bytes[40..44].copy_from_slice(&u32::MAX.to_be_bytes());
+
+        assert!(matches!(
+            Reader::new_unchecked(&bytes),
+            Err(Error::UnexpectedEof)
+        ));
+    }
+
+    #[test]
+    fn metadata_writer_preserves_flags_and_compression() {
+        let payload = vec![0x5A; 4096];
+        let mut writer = Writer::new(0x1234_5678);
+        writer.set_header_flags(0x1234);
+        writer
+            .add_chunk_with_metadata(
+                0x1111,
+                payload.clone(),
+                5,
+                0,
+                resource_flags::CONTIGUOUS | resource_flags::IS_DEFLATE_STREAM,
+            )
+            .unwrap();
+        let bytes = writer.finalize().unwrap();
+        let reader = Reader::new(&bytes).unwrap();
+        assert_eq!(reader.header().flags, 0x1234);
+        assert_eq!(reader.chunks()[0].alignment_log2, 5);
+        assert_eq!(
+            reader.chunks()[0].resource_flags,
+            resource_flags::CONTIGUOUS | resource_flags::IS_DEFLATE_STREAM
+        );
+        assert_eq!(reader.chunk_data(0).unwrap(), payload);
     }
 
     #[test]

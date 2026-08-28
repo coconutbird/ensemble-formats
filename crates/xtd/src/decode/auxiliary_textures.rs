@@ -1,86 +1,117 @@
 //! Decoding for auxiliary AO, alpha, and lighting textures.
 
+use alloc::format;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use nostdio::{Cursor, ReadBe};
 
-use super::{AlphaData, AmbientOcclusionData, nonnegative_usize, untile_r8_texture};
+use super::{AlphaData, AmbientOcclusionData, nonnegative_usize};
 use crate::{Error, Result, XtdFile};
 
-fn half_resolution_dimensions(file: &XtdFile) -> Result<(usize, usize, usize)> {
+fn texture_dimensions(file: &XtdFile) -> Result<(usize, usize)> {
     let width = nonnegative_usize(file.header.num_x_verts, "terrain vertex count")?;
     if width == 0 {
         return Err(Error::InvalidChunkData(
             "Terrain vertex count must be positive".to_string(),
         ));
     }
-    let height = width / 2;
-    let texel_count = width
-        .checked_mul(height)
-        .ok_or(Error::SizeOverflow("half-resolution terrain texture"))?;
-    Ok((width, height, texel_count))
+    width
+        .checked_mul(width)
+        .ok_or(Error::SizeOverflow("terrain texture"))?;
+    Ok((width, width))
 }
 
-fn decompress_r8_blocks(data: &[u8]) -> Vec<u8> {
-    let mut decompressed = Vec::with_capacity(data.len() / 8 * 8);
-    let (blocks, _) = data.as_chunks::<8>();
-    for block in blocks {
-        let (words, _) = block.as_slice().as_chunks::<2>();
-        for word in words {
-            let [high, low] = *word;
-            decompressed.extend_from_slice(&[low, high]);
+fn compact_bc3_size(width: usize, height: usize) -> Result<usize> {
+    width
+        .div_ceil(4)
+        .checked_mul(height.div_ceil(4))
+        .and_then(|blocks| blocks.checked_mul(8))
+        .ok_or(Error::SizeOverflow("compact BC3 texture"))
+}
+
+/// Reproduce `XTD_ExpandCompactBC3Blocks` from the game executable.
+fn expand_compact_bc3(data: &[u8], expected_size: usize) -> Result<Vec<u8>> {
+    if data.len() != expected_size {
+        return Err(Error::InvalidChunkData(format!(
+            "Invalid compact BC3 payload size: expected {expected_size}, got {}",
+            data.len()
+        )));
+    }
+    let expanded_size = expected_size
+        .checked_mul(2)
+        .ok_or(Error::SizeOverflow("expanded BC3 texture"))?;
+    let mut expanded = Vec::with_capacity(expanded_size);
+    for block in data.as_chunks::<8>().0 {
+        for word in block.as_slice().as_chunks::<2>().0 {
+            expanded.extend_from_slice(&[word[1], word[0]]);
         }
+        expanded.extend_from_slice(&[0xFF; 8]);
     }
-    decompressed
+    Ok(expanded)
 }
 
-fn resize_texture(mut data: Vec<u8>, expected_size: usize, fill: u8) -> Vec<u8> {
-    if data.len() < expected_size {
-        data.resize(expected_size, fill);
-    } else {
-        data.truncate(expected_size);
+fn decode_compact_bc3_alpha(data: &[u8], width: usize, height: usize) -> Result<Vec<u8>> {
+    let expanded = expand_compact_bc3(data, compact_bc3_size(width, height)?)?;
+    let pixel_count = width
+        .checked_mul(height)
+        .ok_or(Error::SizeOverflow("decoded BC3 pixels"))?;
+    let mut pixels = vec![0u32; pixel_count];
+    texture2ddecoder::decode_bc3(&expanded, width, height, &mut pixels)
+        .map_err(|error| Error::InvalidChunkData(format!("BC3 decode error: {error}")))?;
+    Ok(pixels
+        .into_iter()
+        .map(|pixel| pixel.to_le_bytes()[3])
+        .collect())
+}
+
+fn decode_bc1_rgba(data: &[u8], width: usize, height: usize) -> Result<Vec<u8>> {
+    let expected_size = width
+        .div_ceil(4)
+        .checked_mul(height.div_ceil(4))
+        .and_then(|blocks| blocks.checked_mul(8))
+        .ok_or(Error::SizeOverflow("BC1 texture"))?;
+    if data.len() != expected_size {
+        return Err(Error::InvalidChunkData(format!(
+            "Invalid BC1 payload size: expected {expected_size}, got {}",
+            data.len()
+        )));
     }
-    data
+    let pixel_count = width
+        .checked_mul(height)
+        .ok_or(Error::SizeOverflow("decoded BC1 pixels"))?;
+    let rgba_size = pixel_count
+        .checked_mul(4)
+        .ok_or(Error::SizeOverflow("decoded BC1 bytes"))?;
+    let mut pixels = vec![0u32; pixel_count];
+    texture2ddecoder::decode_bc1(data, width, height, &mut pixels)
+        .map_err(|error| Error::InvalidChunkData(format!("BC1 decode error: {error}")))?;
+    let mut rgba = Vec::with_capacity(rgba_size);
+    for pixel in pixels {
+        let [blue, green, red, alpha] = pixel.to_le_bytes();
+        rgba.extend_from_slice(&[red, green, blue, alpha]);
+    }
+    Ok(rgba)
 }
 
 impl XtdFile {
-    /// Decode ambient occlusion data from the AO chunk.
+    /// Decode the full-resolution ambient-occlusion texture.
     ///
-    /// Based on IDA reverse engineering of the game's decompression (`sub_1407E3440)`:
-    /// - Input: 524,288 bytes (8 bytes per block × 65,536 blocks)
-    /// - For each 8-byte input block:
-    ///   - Read 4× 16-bit big-endian values
-    ///   - Byte-swap each to little-endian
-    ///   - Write 8 bytes of swapped data + 8 bytes of 0xFF padding (16 bytes total)
-    /// - Game allocates (8 * `chunk_size`) >> 2 = 2× input size for output buffer
-    ///
-    /// The actual AO data is the first 8 bytes of each 16-byte decompressed block.
-    /// Total actual data: 65,536 blocks × 8 bytes = 524,288 bytes = 512×1024 R8 texture
-    ///
-    /// The game samples this half-resolution texture with bilinear filtering and
-    /// applies it in the vertex shader via `gVertSampler_ao_Texture`.
-    ///
-    /// Returns AO values at half resolution (512×1024 for a 1024×1024 terrain).
+    /// The source stores only the BC3 alpha half of every block. This method
+    /// exactly reproduces the game's word swaps and opaque-white color half,
+    /// decodes the resulting `BC3_UNORM` texture, and returns its alpha channel.
     ///
     /// # Errors
     ///
-    /// Returns an error if the AO chunk is missing or the terrain dimensions
-    /// are invalid or too large.
+    /// Returns an error if the AO chunk is missing, has the wrong encoded size,
+    /// or the terrain dimensions overflow.
     pub fn decode_ao(&self) -> Result<AmbientOcclusionData> {
         if self.ao_data.is_empty() {
             return Err(Error::InvalidChunkData("AO chunk is empty".to_string()));
         }
-
-        let (width, height, expected_size) = half_resolution_dimensions(self)?;
-        let tiled_data = resize_texture(decompress_r8_blocks(&self.ao_data), expected_size, 255);
-
-        // Xbox 360 R8 textures are stored in tiled format
-        // For R8 format, tiles are typically 64 bytes arranged as 8x8 pixels
-        // The data needs to be un-tiled to linear row-major order
-        let values = untile_r8_texture(&tiled_data, width, height);
-
+        let (width, height) = texture_dimensions(self)?;
+        let values = decode_compact_bc3_alpha(&self.ao_data, width, height)?;
         Ok(AmbientOcclusionData {
             values,
             width,
@@ -88,46 +119,22 @@ impl XtdFile {
         })
     }
 
-    /// Decode alpha (transparency) data from the Alpha chunk.
+    /// Decode the full-resolution terrain transparency texture.
     ///
-    /// Uses the same decompression as AO data.
-    /// Returns alpha values at half resolution.
+    /// This uses the same compact BC3-alpha representation as AO. No sentinel
+    /// or placeholder patterns are special-cased because the game always runs
+    /// the block expansion.
     ///
     /// # Errors
     ///
-    /// Returns an error if the alpha chunk is missing or the terrain dimensions
-    /// are invalid or too large.
+    /// Returns an error if the alpha chunk is missing, has the wrong encoded
+    /// size, or the terrain dimensions overflow.
     pub fn decode_alpha(&self) -> Result<AlphaData> {
         if self.alpha_data.is_empty() {
             return Err(Error::InvalidChunkData("Alpha chunk is empty".to_string()));
         }
-
-        let (width, height, expected_size) = half_resolution_dimensions(self)?;
-
-        // Check for "placeholder" alpha pattern: [255, 255, 0, 0, 0, 0, 0, 0] repeating
-        // This indicates no terrain holes - return all-opaque texture
-        // Blood Gulch and other maps without terrain holes use this pattern
-        let is_placeholder = self.alpha_data.len() >= 8 && {
-            let pattern = &[255u8, 255, 0, 0, 0, 0, 0, 0];
-            self.alpha_data
-                .chunks(8)
-                .take(100)
-                .all(|chunk| chunk == pattern)
-        };
-
-        if is_placeholder {
-            return Ok(AlphaData {
-                values: vec![255u8; expected_size],
-                width,
-                height,
-            });
-        }
-
-        let tiled_data = resize_texture(decompress_r8_blocks(&self.alpha_data), expected_size, 255);
-
-        // Xbox 360 R8 textures are stored in tiled format (same as AO)
-        let values = untile_r8_texture(&tiled_data, width, height);
-
+        let (width, height) = texture_dimensions(self)?;
+        let values = decode_compact_bc3_alpha(&self.alpha_data, width, height)?;
         Ok(AlphaData {
             values,
             width,
@@ -135,21 +142,16 @@ impl XtdFile {
         })
     }
 
-    /// Decode lighting data from the Lighting chunk (0xBBBB).
+    /// Decode the size-prefixed full-resolution BC1 lighting texture to RGBA.
     ///
-    /// The lighting chunk stores a size-prefixed raw L8 (R8) texture at
-    /// **full resolution** (`num_x_verts × num_x_verts`).
-    ///
-    /// Unlike AO/Alpha, the binary does **not** run `decompressToPhysical` on
-    /// this data — it is passed directly to `BTerrainVisual::initLightingData`
-    /// which creates a `D3DFMT_L8` texture.
-    ///
-    /// The first 4 bytes are a big-endian i32 size, followed by the raw texels.
+    /// IDA shows `BTerrainVisual::initLightingData` creates engine format 22,
+    /// which maps to `DXGI_FORMAT_BC1_UNORM` (71), at
+    /// `num_x_verts × num_x_verts`.
     ///
     /// # Errors
     ///
-    /// Returns an error if the lighting chunk or its size prefix is invalid, or
-    /// the terrain width is not positive.
+    /// Returns an error if the chunk is absent, its size prefix or payload is
+    /// inconsistent, or BC1 decoding fails.
     pub fn decode_lighting(&self) -> Result<LightingData> {
         if self.lighting_data.is_empty() {
             return Err(Error::InvalidChunkData(
@@ -158,48 +160,86 @@ impl XtdFile {
         }
 
         let mut cursor = Cursor::new(self.lighting_data.as_slice());
-        let size = nonnegative_usize(cursor.read_i32_be()?, "lighting payload size")?;
+        let encoded_size = nonnegative_usize(cursor.read_i32_be()?, "lighting payload size")?;
         let payload_end = 4usize
-            .checked_add(size)
+            .checked_add(encoded_size)
             .ok_or(Error::SizeOverflow("lighting payload"))?;
-        let texels = if size > 0
-            && let Some(payload) = self.lighting_data.get(4..payload_end)
-        {
-            payload.to_vec()
-        } else {
-            // Fall back to everything after the size prefix
-            self.lighting_data
-                .get(4..)
-                .ok_or(Error::UnexpectedEof)?
-                .to_vec()
-        };
-
-        // Width is always num_x_verts; height is derived from actual data length.
-        // Some maps store lighting at half height (num_x_verts × num_x_verts/2),
-        // others at full resolution (num_x_verts × num_x_verts).
-        let width = nonnegative_usize(self.header.num_x_verts, "terrain vertex count")?;
-        if width == 0 {
-            return Err(Error::InvalidChunkData(
-                "Terrain vertex count must be positive".to_string(),
-            ));
+        if payload_end != self.lighting_data.len() {
+            return Err(Error::InvalidChunkData(format!(
+                "Lighting size prefix describes {encoded_size} bytes, but chunk contains {}",
+                self.lighting_data.len().saturating_sub(4)
+            )));
         }
-        let height = texels.len() / width;
+        let payload = self
+            .lighting_data
+            .get(4..payload_end)
+            .ok_or(Error::UnexpectedEof)?;
+        let (width, height) = texture_dimensions(self)?;
+        let pixels = decode_bc1_rgba(payload, width, height)?;
 
         Ok(LightingData {
-            values: texels,
+            pixels,
             width,
             height,
         })
     }
 }
 
-/// Decoded lighting data (L8/R8 texture).
+/// Decoded full-resolution BC1 lighting texture.
 #[derive(Debug, Clone)]
 pub struct LightingData {
-    /// Raw L8 luminance values.
-    pub values: Vec<u8>,
-    /// Texture width (== `num_x_verts`).
+    /// RGBA8 pixels in row-major order.
+    pub pixels: Vec<u8>,
+    /// Texture width (the terrain vertex count).
     pub width: usize,
-    /// Texture height (derived from data length; may be `num_x_verts` or `num_x_verts / 2`).
+    /// Texture height (the terrain vertex count).
     pub height: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{XTD_VERSION, XtdHeader};
+
+    fn file_with_width(width: i32) -> XtdFile {
+        XtdFile {
+            header: XtdHeader {
+                version: XTD_VERSION,
+                num_x_verts: width,
+                ..XtdHeader::default()
+            },
+            ..XtdFile::default()
+        }
+    }
+
+    #[test]
+    fn compact_bc3_expansion_matches_game_transform() {
+        let source = [0, 1, 2, 3, 4, 5, 6, 7];
+        let expanded = expand_compact_bc3(&source, 8).unwrap();
+        assert_eq!(
+            expanded,
+            [
+                1, 0, 3, 2, 5, 4, 7, 6, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+            ]
+        );
+    }
+
+    #[test]
+    fn compact_bc3_decodes_at_full_resolution() {
+        let mut file = file_with_width(4);
+        file.ao_data = vec![0; 8];
+        let decoded = file.decode_ao().unwrap();
+        assert_eq!((decoded.width, decoded.height), (4, 4));
+        assert_eq!(decoded.values, vec![0; 16]);
+    }
+
+    #[test]
+    fn lighting_is_full_resolution_bc1_rgba() {
+        let mut file = file_with_width(4);
+        file.lighting_data.extend_from_slice(&8i32.to_be_bytes());
+        file.lighting_data.extend_from_slice(&[0; 8]);
+        let decoded = file.decode_lighting().unwrap();
+        assert_eq!((decoded.width, decoded.height), (4, 4));
+        assert_eq!(decoded.pixels.len(), 4 * 4 * 4);
+    }
 }

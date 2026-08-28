@@ -11,9 +11,12 @@ use zerocopy::Ref;
 use crate::{
     ActiveDecalInfo, ActiveDecalInstance, ActiveTextureInfo, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
     CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, ChunkMeta, Error,
-    FoliageQNChunk, FoliageSetInfo, Result, XTT_VERSION, XttFile, XttHeader, XttHeaderRaw,
-    XttLinker, XttLinkerHeaderRaw,
+    FoliageQNChunk, FoliageSetInfo, Result, XTT_FILE_ID, XTT_VERSION, XttFile, XttHeader,
+    XttHeaderRaw, XttLinker, XttLinkerHeaderRaw,
 };
+
+mod options;
+pub use options::ReadOptions;
 
 /// Size of filename strings in XTT files.
 const XTT_FILENAME_SIZE: usize = 256;
@@ -93,6 +96,16 @@ impl Reader {
     pub fn read(data: &[u8]) -> Result<XttFile> {
         XttFile::from_bytes(data)
     }
+
+    /// Read an XTT file with explicit validation controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an enabled validation fails or any recognized XTT
+    /// structure is malformed or truncated.
+    pub fn read_with_options(data: &[u8], options: ReadOptions) -> Result<XttFile> {
+        XttFile::from_bytes_with_options(data, options)
+    }
 }
 
 impl XttFile {
@@ -103,13 +116,50 @@ impl XttFile {
     /// Returns an error if the ECF container or any recognized XTT chunk is
     /// invalid or truncated.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        let ecf = EcfReader::new(data)?;
+        Self::from_bytes_with_options(data, ReadOptions::strict())
+    }
+
+    /// Parse an XTT file while skipping ECF checksum validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if signatures, required chunks, or recognized XTT
+    /// structures are invalid.
+    pub fn from_bytes_unchecked(data: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_options(data, ReadOptions::unchecked_checksums())
+    }
+
+    /// Parse an XTT file with explicit validation controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an enabled validation fails or any recognized XTT
+    /// structure is malformed or truncated.
+    pub fn from_bytes_with_options(data: &[u8], options: ReadOptions) -> Result<Self> {
+        let ecf = EcfReader::new_with_options(
+            data,
+            ecf::ReadOptions {
+                validate_magic: options.validate_signatures,
+                validate_checksums: options.validate_checksums,
+            },
+        )?;
+
+        if options.validate_signatures && ecf.header().id != XTT_FILE_ID {
+            return Err(Error::InvalidFileId {
+                expected: XTT_FILE_ID,
+                actual: ecf.header().id,
+            });
+        }
 
         let mut file = XttFile {
             ecf_file_id: ecf.header().id,
             ecf_flags: ecf.header().flags,
             ..Default::default()
         };
+        let mut header_count = 0usize;
+        let mut albedo_count = 0usize;
+        let mut road_count = 0usize;
+        let mut foliage_header_count = 0usize;
 
         for i in 0..ecf.chunks().len() {
             let chunk_header = ecf.chunks()[i].clone();
@@ -125,30 +175,54 @@ impl XttFile {
 
             match chunk_header.id {
                 CHUNK_XTT_HEADER => {
-                    file.header = read_header(&chunk_data)?;
-                    if chunk_data.len() > XttHeader::SIZE {
-                        file.header_extra = chunk_data[XttHeader::SIZE..].to_vec();
-                    }
-                    parse_header_extra(&mut file)?;
+                    header_count += 1;
+                    file.header = read_header(&chunk_data, options.validate_signatures)?;
+                    file.active_textures.clear();
+                    file.active_decals.clear();
+                    file.decal_instances.clear();
+                    let extra = chunk_data
+                        .get(XttHeader::SIZE..)
+                        .ok_or(Error::UnexpectedEof)?;
+                    let consumed = parse_header_extra(&mut file, extra)?;
+                    file.header_extra = extra.get(consumed..).ok_or(Error::UnexpectedEof)?.to_vec();
                 }
                 CHUNK_ATLAS_LINK => {
-                    file.linkers.push(read_linker(&chunk_data)?);
+                    file.linkers.push(read_linker(
+                        &chunk_data,
+                        options.validate_engine_requirements,
+                    )?);
                 }
                 CHUNK_ATLAS_ALBEDO => {
+                    albedo_count += 1;
                     file.albedo_data = chunk_data;
                 }
                 CHUNK_ROAD => {
+                    road_count += 1;
                     file.road_data = chunk_data;
                 }
                 CHUNK_FOLIAGE_HEADER => {
-                    file.foliage.sets = read_foliage_header(&chunk_data)?;
+                    foliage_header_count += 1;
+                    file.foliage.sets =
+                        read_foliage_header(&chunk_data, options.validate_engine_requirements)?;
                 }
                 CHUNK_FOLIAGE_QN => {
-                    file.foliage
-                        .qn_chunks
-                        .push(read_foliage_qn_chunk(&chunk_data)?);
+                    file.foliage.qn_chunks.push(read_foliage_qn_chunk(
+                        &chunk_data,
+                        options.validate_engine_requirements,
+                    )?);
                 }
                 _ => {}
+            }
+        }
+
+        if options.validate_engine_requirements {
+            if header_count == 0 {
+                return Err(Error::MissingChunk(CHUNK_XTT_HEADER));
+            }
+            if header_count != 1 || albedo_count > 1 || road_count > 1 || foliage_header_count > 1 {
+                return Err(Error::InvalidChunkData(
+                    "Duplicate singleton XTT chunk".into(),
+                ));
             }
         }
 
@@ -156,7 +230,7 @@ impl XttFile {
     }
 }
 
-fn read_header(data: &[u8]) -> Result<XttHeader> {
+fn read_header(data: &[u8], validate_version: bool) -> Result<XttHeader> {
     let (raw, _): (Ref<_, XttHeaderRaw>, _) =
         Ref::from_prefix(data).map_err(|_| Error::InvalidHeaderSize {
             expected: XttHeader::SIZE,
@@ -164,7 +238,7 @@ fn read_header(data: &[u8]) -> Result<XttHeader> {
         })?;
 
     let version = i32::from_be_bytes(raw.version);
-    if version != XTT_VERSION {
+    if validate_version && version != XTT_VERSION {
         return Err(Error::InvalidVersion {
             expected: XTT_VERSION,
             actual: version,
@@ -179,7 +253,7 @@ fn read_header(data: &[u8]) -> Result<XttHeader> {
     })
 }
 
-fn read_linker(data: &[u8]) -> Result<XttLinker> {
+fn read_linker(data: &[u8], require_exact_size: bool) -> Result<XttLinker> {
     let (raw, _): (Ref<_, XttLinkerHeaderRaw>, _) = Ref::from_prefix(data).map_err(|_| {
         Error::InvalidChunkData(format!(
             "Linker chunk too small: {} < {}",
@@ -231,6 +305,14 @@ fn read_linker(data: &[u8]) -> Result<XttLinker> {
 
         let mem_size = linker_alpha_size(decal_layer_count)?;
         decal_alpha_data = checked_slice(data, off, mem_size)?.to_vec();
+        advance_offset(&mut off, mem_size)?;
+    }
+
+    if require_exact_size && off != data.len() {
+        return Err(Error::InvalidChunkData(format!(
+            "Linker chunk has {} trailing bytes",
+            data.len().saturating_sub(off)
+        )));
     }
 
     Ok(XttLinker {
@@ -251,12 +333,7 @@ fn read_linker(data: &[u8]) -> Result<XttLinker> {
 }
 
 /// Parse `header_extra` data to extract active textures, decals, and decal instances.
-fn parse_header_extra(file: &mut XttFile) -> Result<()> {
-    if file.header_extra.is_empty() {
-        return Ok(());
-    }
-
-    let data = &file.header_extra;
+fn parse_header_extra(file: &mut XttFile, data: &[u8]) -> Result<usize> {
     let mut off = 0;
 
     // Parse active textures
@@ -305,7 +382,7 @@ fn parse_header_extra(file: &mut XttFile) -> Result<()> {
         });
     }
 
-    Ok(())
+    Ok(off)
 }
 
 /// Read a single active texture from the data at the given offset.
@@ -334,9 +411,13 @@ fn read_active_texture(data: &[u8], off: usize) -> Result<(ActiveTextureInfo, us
 }
 
 /// Parse the foliage header chunk.
-fn read_foliage_header(data: &[u8]) -> Result<Vec<FoliageSetInfo>> {
+fn read_foliage_header(data: &[u8], require_exact_size: bool) -> Result<Vec<FoliageSetInfo>> {
     if data.len() < 4 {
-        return Ok(Vec::new());
+        return if require_exact_size {
+            Err(Error::InvalidChunkData("Foliage header too small".into()))
+        } else {
+            Ok(Vec::new())
+        };
     }
 
     let num_sets = usize::try_from(read_u32_be(data, 0)?)
@@ -350,11 +431,18 @@ fn read_foliage_header(data: &[u8]) -> Result<Vec<FoliageSetInfo>> {
         sets.push(FoliageSetInfo { filename });
     }
 
+    if require_exact_size && off != data.len() {
+        return Err(Error::InvalidChunkData(format!(
+            "Foliage header has {} trailing bytes",
+            data.len().saturating_sub(off)
+        )));
+    }
+
     Ok(sets)
 }
 
 /// Parse a foliage QN (quad-node) chunk.
-fn read_foliage_qn_chunk(data: &[u8]) -> Result<FoliageQNChunk> {
+fn read_foliage_qn_chunk(data: &[u8], require_exact_size: bool) -> Result<FoliageQNChunk> {
     if data.len() < 8 {
         return Err(Error::InvalidChunkData("Foliage QN chunk too small".into()));
     }
@@ -379,7 +467,8 @@ fn read_foliage_qn_chunk(data: &[u8]) -> Result<FoliageQNChunk> {
         advance_offset(&mut off, 4)?;
     }
 
-    let _total_physical_memory = read_i32_be(data, off)?;
+    let total_physical_memory =
+        nonnegative_count(read_i32_be(data, off)?, "foliage physical memory size")?;
     advance_offset(&mut off, 4)?;
 
     let mut index_buffer_sizes = Vec::with_capacity(set_count);
@@ -389,10 +478,28 @@ fn read_foliage_qn_chunk(data: &[u8]) -> Result<FoliageQNChunk> {
         advance_offset(&mut off, 4)?;
     }
 
+    let summed_size = index_buffer_sizes.iter().try_fold(0usize, |total, size| {
+        total
+            .checked_add(*size)
+            .ok_or(Error::SizeOverflow("foliage index buffers"))
+    })?;
+    if require_exact_size && total_physical_memory != summed_size {
+        return Err(Error::InvalidChunkData(format!(
+            "Foliage QN declares {total_physical_memory} physical bytes, but buffer sizes total {summed_size}"
+        )));
+    }
+
     let mut index_buffers = Vec::with_capacity(set_count);
     for size in index_buffer_sizes {
         index_buffers.push(checked_slice(data, off, size)?.to_vec());
         advance_offset(&mut off, size)?;
+    }
+
+    if require_exact_size && off != data.len() {
+        return Err(Error::InvalidChunkData(format!(
+            "Foliage QN chunk has {} trailing bytes",
+            data.len().saturating_sub(off)
+        )));
     }
 
     Ok(FoliageQNChunk {
@@ -402,4 +509,60 @@ fn read_foliage_qn_chunk(data: &[u8]) -> Result<FoliageQNChunk> {
         set_poly_counts,
         index_buffers,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use super::*;
+
+    fn test_container(file_id: u32, version: i32) -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend_from_slice(&version.to_be_bytes());
+        header.extend_from_slice(&0i32.to_be_bytes());
+        header.extend_from_slice(&0i32.to_be_bytes());
+        header.extend_from_slice(&0i32.to_be_bytes());
+        header.push(0);
+        let mut writer = ecf::Writer::new(file_id);
+        writer.add_chunk(CHUNK_XTT_HEADER, header);
+        writer.finalize().unwrap()
+    }
+
+    #[test]
+    fn strict_reader_rejects_bad_signatures() {
+        assert!(matches!(
+            Reader::read(&test_container(0xDEAD_BEEF, XTT_VERSION)),
+            Err(Error::InvalidFileId { .. })
+        ));
+        assert!(matches!(
+            Reader::read(&test_container(XTT_FILE_ID, 99)),
+            Err(Error::InvalidVersion { .. })
+        ));
+    }
+
+    #[test]
+    fn permissive_reader_accepts_bad_signatures() {
+        let options = ReadOptions::accepting_bad_signatures();
+        let bad_id =
+            Reader::read_with_options(&test_container(0xDEAD_BEEF, XTT_VERSION), options).unwrap();
+        assert_eq!(bad_id.ecf_file_id, 0xDEAD_BEEF);
+        let bad_version =
+            Reader::read_with_options(&test_container(XTT_FILE_ID, 99), options).unwrap();
+        assert_eq!(bad_version.header.version, 99);
+
+        let mut bad_magic = test_container(XTT_FILE_ID, XTT_VERSION);
+        bad_magic[..4].copy_from_slice(&0xDEAD_BEEFu32.to_be_bytes());
+        Reader::read_with_options(&bad_magic, options).unwrap();
+    }
+
+    #[test]
+    fn checksum_validation_is_independent() {
+        let mut data = test_container(XTT_FILE_ID, XTT_VERSION);
+        let chunk_offset =
+            usize::try_from(u32::from_be_bytes(data[40..44].try_into().unwrap())).unwrap();
+        data[chunk_offset + 16] ^= 1;
+        assert!(Reader::read(&data).is_err());
+        Reader::read_with_options(&data, ReadOptions::unchecked_checksums()).unwrap();
+    }
 }
