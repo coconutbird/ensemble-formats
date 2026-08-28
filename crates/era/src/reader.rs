@@ -58,6 +58,9 @@ pub struct Reader<R> {
     public_key: Option<[u8; 20]>,
 }
 
+/// An encrypted ERA reader backed by contiguous in-memory bytes.
+pub type EncryptedBytesReader<D> = Reader<crate::crypto::decrypt::Reader<Cursor<D>>>;
+
 impl<R: Read + Seek> Reader<R> {
     /// Parse an ERA archive from any [`Read`] + [`Seek`] source.
     ///
@@ -462,6 +465,86 @@ impl<'a> Reader<Cursor<&'a [u8]>> {
     /// truncated, or cannot be decompressed.
     pub fn from_bytes(data: &'a [u8]) -> Result<Self> {
         Self::new(Cursor::new(data))
+    }
+}
+
+impl<D: AsRef<[u8]>> Reader<crate::crypto::decrypt::Reader<Cursor<D>>> {
+    /// Parse an encrypted ERA archive backed by contiguous bytes.
+    ///
+    /// This constructor enables [`Self::read_entry_direct`], which decrypts
+    /// complete entry ranges in bulk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if decryption or archive parsing fails.
+    pub fn from_encrypted_bytes(data: D, keys: crate::TeaKeys) -> Result<Self> {
+        Self::new(crate::crypto::decrypt::Reader::new(Cursor::new(data), keys))
+    }
+
+    /// Read and decompress an entry directly from an in-memory encrypted source.
+    ///
+    /// Unlike [`Self::read_entry`], this copies the entry's contiguous encrypted
+    /// range once and decrypts all blocks in bulk. Large entries use the Rayon
+    /// implementation when that feature is enabled. This avoids one seek and
+    /// read operation per 64-byte cipher block and does not mutate reader state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index` is invalid, an offset or range cannot be
+    /// represented, the encrypted range is truncated, or decryption or
+    /// decompression fails.
+    pub fn read_entry_direct(&self, index: usize) -> Result<Vec<u8>> {
+        const PARALLEL_THRESHOLD: usize = 256 * 1024;
+
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(Error::ChunkIndexOutOfBounds {
+                index,
+                count: self.entries.len(),
+            })?;
+        let start =
+            usize::try_from(entry.chunk.offset).map_err(|_| Error::SizeOverflow("entry offset"))?;
+        let size =
+            usize::try_from(entry.chunk.size).map_err(|_| Error::SizeOverflow("entry size"))?;
+        let end = start
+            .checked_add(size)
+            .ok_or(Error::SizeOverflow("entry range"))?;
+        let block_start = start / crate::TEA_BLOCK_SIZE * crate::TEA_BLOCK_SIZE;
+        let block_end = end
+            .checked_add(crate::TEA_BLOCK_SIZE - 1)
+            .ok_or(Error::SizeOverflow("aligned entry range"))?
+            / crate::TEA_BLOCK_SIZE
+            * crate::TEA_BLOCK_SIZE;
+        let encrypted_source = self.inner.get_ref().get_ref().as_ref();
+        let encrypted = encrypted_source
+            .get(block_start..block_end)
+            .ok_or(Error::UnexpectedEof)?;
+        let mut decrypted = encrypted.to_vec();
+        let block_offset =
+            u64::try_from(block_start).map_err(|_| Error::SizeOverflow("entry offset"))?;
+        let keys = self.inner.keys();
+
+        #[cfg(feature = "rayon")]
+        if decrypted.len() >= PARALLEL_THRESHOLD {
+            crate::crypto::tea::tea_decrypt_data_parallel(&keys, &mut decrypted, block_offset)?;
+        } else {
+            crate::crypto::tea::tea_decrypt_data(&keys, &mut decrypted, block_offset)?;
+        }
+        #[cfg(not(feature = "rayon"))]
+        {
+            let _ = PARALLEL_THRESHOLD;
+            crate::crypto::tea::tea_decrypt_data(&keys, &mut decrypted, block_offset)?;
+        }
+
+        let payload_start = start - block_start;
+        let payload_end = payload_start
+            .checked_add(size)
+            .ok_or(Error::SizeOverflow("entry range"))?;
+        let payload = decrypted
+            .get(payload_start..payload_end)
+            .ok_or(Error::UnexpectedEof)?;
+        entry.decompress(payload)
     }
 }
 

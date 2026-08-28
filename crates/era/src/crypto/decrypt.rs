@@ -75,6 +75,18 @@ impl<R: Read + Seek> Reader<R> {
     pub fn into_inner(self) -> R {
         self.inner
     }
+
+    /// Borrow the underlying encrypted source.
+    #[must_use]
+    pub const fn get_ref(&self) -> &R {
+        &self.inner
+    }
+
+    /// Return the keys used to decrypt the source.
+    #[must_use]
+    pub const fn keys(&self) -> TeaKeys {
+        self.keys
+    }
 }
 
 impl<R: Read + Seek> Read for Reader<R> {

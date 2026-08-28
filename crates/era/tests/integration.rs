@@ -124,6 +124,36 @@ fn parallel_encryption_roundtrip() {
 }
 
 #[test]
+fn direct_encrypted_entry_reads_match_streaming_reader() {
+    let keys = TeaKeys::from_password("direct-entry-test-keys");
+    let mut state = 0x1234_5678_u32;
+    let large_payload = (0..600_123)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            state.to_le_bytes()[2]
+        })
+        .collect::<Vec<_>>();
+    let small_payload = b"unaligned direct entry".to_vec();
+
+    let mut writer = Writer::new();
+    writer.add_file("data\\small.bin", small_payload.clone());
+    writer.add_file("data\\large.bin", large_payload.clone());
+    let encrypted = writer
+        .write_to_encrypted(std::io::Cursor::new(Vec::new()), keys)
+        .expect("encrypted archive")
+        .into_inner();
+    let mut reader = Reader::from_encrypted_bytes(encrypted, keys).expect("encrypted reader");
+
+    for (index, expected) in [(1, small_payload), (2, large_payload)] {
+        assert_eq!(
+            reader.read_entry_direct(index).expect("direct read"),
+            expected
+        );
+        assert_eq!(reader.read_entry(index).expect("streaming read"), expected);
+    }
+}
+
+#[test]
 fn precompressed_file() {
     let mut writer = Writer::new();
     writer.add_file("regular.txt", b"Regular file".to_vec());
