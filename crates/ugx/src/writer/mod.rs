@@ -15,6 +15,7 @@ mod cached_data;
 mod granny;
 mod material;
 pub(crate) mod string_table;
+mod validation;
 
 use alloc::vec::Vec;
 
@@ -22,7 +23,7 @@ use nostdio::WriteLe;
 
 use crate::constants::{
     ECF_AABB_TREE_CHUNK_ID, ECF_CACHED_DATA_CHUNK_ID, ECF_GRANNY_CHUNK_ID, ECF_IB_CHUNK_ID,
-    ECF_MATERIAL_CHUNK_ID, ECF_VB_CHUNK_ID,
+    ECF_MATERIAL_CHUNK_ID, ECF_VB_CHUNK_ID, UGX_FILE_ID,
 };
 use crate::error::Result;
 use crate::types::{UgxGeom, UgxVersion};
@@ -35,8 +36,8 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// Returns an error if the geometry exceeds UGX field limits or any chunk
-    /// cannot be serialized.
+    /// Returns an error if the geometry is not representable in the selected
+    /// game's layout, exceeds UGX field limits, or a chunk cannot be serialized.
     pub fn write(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
         write_ugx(geom, version)
     }
@@ -47,8 +48,8 @@ impl UgxGeom {
     ///
     /// # Errors
     ///
-    /// Returns an error if the geometry exceeds UGX field limits or any chunk
-    /// cannot be serialized.
+    /// Returns an error if the geometry violates HW1 layout requirements,
+    /// exceeds UGX field limits, or a chunk cannot be serialized.
     pub fn to_bytes_hw1(&self) -> Result<Vec<u8>> {
         write_ugx(self, UgxVersion::Hw1)
     }
@@ -57,8 +58,8 @@ impl UgxGeom {
     ///
     /// # Errors
     ///
-    /// Returns an error if the geometry exceeds UGX field limits or any chunk
-    /// cannot be serialized.
+    /// Returns an error if the geometry violates HW2 layout requirements,
+    /// exceeds UGX field limits, or a chunk cannot be serialized.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         write_ugx(self, UgxVersion::Hw2)
     }
@@ -72,20 +73,21 @@ impl UgxGeom {
 /// VB and IB chunks use CONTIGUOUS resource flag and 32-byte alignment (align=5)
 /// to match the original layout expected by the engine.
 fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
+    validation::validate_for_write(geom, version)?;
     let cached_data = cached_data::build_cached_data(geom, version)?;
+    crate::checked_u32(cached_data.len(), "cached-data chunk size")?;
     let ib_data = build_index_buffer(geom)?;
 
-    // ECF file ID 0xAAC93746 is required for UGX files - the game validates this in BGrannyModel::load
-    let mut ecf = ecf::Writer::new(0xAAC9_3746);
+    // The game validates this file ID in BGrannyModel::load.
+    let mut ecf = ecf::Writer::new(UGX_FILE_ID);
 
     // Chunk order: granny → cached → VB → IB → materials [→ AABB]
     // This matches the original engine output ordering.
 
     // 0x703 — granny bones (first, no special flags)
-    if !geom.granny_bones.is_empty() {
-        let granny_data = granny::build_granny_data(geom)?;
-        ecf.add_chunk(ECF_GRANNY_CHUNK_ID, granny_data);
-    }
+    let granny_data = granny::build_granny_data(geom)?;
+    crate::checked_u32(granny_data.len(), "Granny chunk size")?;
+    ecf.add_chunk(ECF_GRANNY_CHUNK_ID, granny_data);
 
     // 0x700 — cached data (header, sections, bones, accessories)
     ecf.add_chunk(ECF_CACHED_DATA_CHUNK_ID, cached_data);
@@ -107,16 +109,16 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
     );
 
     // 0x704 — materials
-    if !geom.materials.is_empty() {
-        let mat_data = material::build_material_data(geom)?;
-        ecf.add_chunk_with_alignment(ECF_MATERIAL_CHUNK_ID, mat_data, 2);
-    }
+    let mat_data = material::build_material_data(geom)?;
+    crate::checked_u32(mat_data.len(), "material chunk size")?;
+    ecf.add_chunk_with_alignment(ECF_MATERIAL_CHUNK_ID, mat_data, 2);
 
     // 0x705 — AABB tree (only for versions that include it)
     if version.has_aabb_tree()
         && let Some(ref tree) = geom.aabb_tree
     {
         let tree_data = aabb_tree::build_aabb_tree_data(tree)?;
+        crate::checked_u32(tree_data.len(), "AABB-tree chunk size")?;
         ecf.add_chunk(ECF_AABB_TREE_CHUNK_ID, tree_data);
     }
 
@@ -133,7 +135,12 @@ fn write_ugx(geom: &UgxGeom, version: UgxVersion) -> Result<Vec<u8>> {
 /// indices at runtime. The `rebuild_instanced_index_buffer()` method in
 /// `rebuild.rs` is responsible for producing this baked layout.
 fn build_index_buffer(geom: &UgxGeom) -> Result<Vec<u8>> {
-    let mut buf = Vec::with_capacity(geom.index_buffer.len() * 2);
+    let byte_count = geom
+        .index_buffer
+        .len()
+        .checked_mul(core::mem::size_of::<u16>())
+        .ok_or(crate::Error::SizeOverflow("index-buffer byte count"))?;
+    let mut buf = Vec::with_capacity(byte_count);
     for &idx in &geom.index_buffer {
         buf.write_u16_le(idx)?;
     }

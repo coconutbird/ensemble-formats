@@ -24,4 +24,12 @@ pub enum Error {
     /// A collection or offset is too large for the on-disk format.
     #[error("{0} is too large for the BDT format")]
     SizeOverflow(&'static str),
+
+    /// A compact float vector has an unsupported component count.
+    #[error("compact float vectors require 2 to 4 components, got {0}")]
+    InvalidFloatVectorLength(usize),
+
+    /// A variant cannot be represented by the compact BDT encoding.
+    #[error("the {0} variant is not supported by the compact BDT writer")]
+    UnsupportedCompactVariant(&'static str),
 }

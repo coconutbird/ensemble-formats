@@ -86,12 +86,8 @@ pub(super) fn build_cached_data(geom: &UgxGeom, version: UgxVersion) -> Result<V
     //    matching the engine's BPackedArray::pack layout).
     write_accessory_indices(&mut cursor, &geom.accessories, &acc_fixups)?;
 
-    // 9. Valid accessories (version-dependent encoding).
-    let (valid_acc_offset, num_valid_acc, valid_acc_fixups) =
-        write_valid_accessories(&mut cursor, geom)?;
-    if !valid_acc_fixups.is_empty() {
-        write_accessory_indices(&mut cursor, &geom.valid_accessories, &valid_acc_fixups)?;
-    }
+    // 9. Valid accessories (flat i32 indices in both versions).
+    let (valid_acc_offset, num_valid_acc) = write_valid_accessories(&mut cursor, geom)?;
 
     // 10. Bone bounds (min[] then max[]).
     let (bounds_low_offset, bounds_high_offset, num_bounds) = write_bone_bounds(&mut cursor, geom)?;
@@ -389,29 +385,22 @@ fn write_bones(
 /// IDA analysis confirms both HW1 and HW2 use `BPackedArray_Simple__unpack`
 /// for validAccessories — they are always flat i32 index arrays.
 ///
-/// Returns `(offset, count, inner_fixups)` (fixups always empty).
+/// Returns `(offset, count)`.
 fn write_valid_accessories(
     cursor: &mut Cursor<&mut Vec<u8>>,
     geom: &UgxGeom,
-) -> Result<(u64, u32, Vec<usize>)> {
+) -> Result<(u64, u32)> {
     if geom.valid_accessories.is_empty() {
-        return Ok((0, 0, Vec::new()));
+        return Ok((0, 0));
     }
 
     pad_to_alignment(cursor, 4)?;
     let offset = cursor.stream_position()?;
     let count = crate::checked_u32(geom.valid_accessories.len(), "valid-accessory count")?;
-    for valid_acc in &geom.valid_accessories {
-        let index = geom
-            .accessories
-            .iter()
-            .position(|accessory| accessory == valid_acc)
-            .map_or(Ok(-1), |index| {
-                crate::checked_i32(index, "valid-accessory index")
-            })?;
+    for &index in &geom.valid_accessories {
         cursor.write_i32_le(index)?;
     }
-    Ok((offset, count, Vec::new()))
+    Ok((offset, count))
 }
 
 /// Write bone-bounds min/max arrays.  Returns

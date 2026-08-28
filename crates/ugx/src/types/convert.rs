@@ -389,7 +389,7 @@ pub fn hogan_to_legacy(hogan: &HoganMaterialData) -> LegacyMaterialData {
     };
 
     let parsed = parse_textures_string(&hogan.textures);
-    let flag = 7u8;
+    let flag = 7u16;
     if let Some(path) = parsed.diffuse {
         legacy.maps[MapType::Diffuse as usize] = vec![Map {
             name: path,

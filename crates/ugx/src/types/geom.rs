@@ -50,8 +50,12 @@ pub struct UgxGeom {
     pub index_buffer: Vec<u16>,
     /// Accessories (from `BCachedData`).
     pub accessories: Vec<Accessory>,
-    /// Valid accessories subset (from `BCachedData`).
-    pub valid_accessories: Vec<Accessory>,
+    /// Raw indices into [`Self::accessories`] that the game considers valid.
+    ///
+    /// These are stored as a flat i32 array on disk. Keeping the encoded
+    /// indices avoids losing duplicates or malformed/sentinel values while
+    /// reading; the game-compatible writer validates them before serialization.
+    pub valid_accessories: Vec<i32>,
     /// Is the entire mesh rigid (single bone)?
     pub rigid_only: bool,
     /// Rigid bone index (if `rigid_only`).

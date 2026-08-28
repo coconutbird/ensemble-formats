@@ -71,8 +71,14 @@ pub(crate) const EMPTY_OFFSET_SENTINEL_32: u32 = 0xFFFF_FFFF;
 // UGX file ID
 // ---------------------------------------------------------------------------
 
-/// UGX ECF file-level version magic (written in ECF header `id` field).
-pub const UGX_VERSION: u32 = 0xECDA_1015;
+/// UGX ECF file identifier required by the Halo Wars game loader.
+pub const UGX_FILE_ID: u32 = 0xAAC9_3746;
+
+/// Backward-compatible alias for the UGX ECF file identifier.
+///
+/// The historical name is imprecise: format versions are represented by
+/// [`crate::UgxVersion`], while this value is the ECF header's `id` field.
+pub const UGX_VERSION: u32 = UGX_FILE_ID;
 
 // ---------------------------------------------------------------------------
 // AABB tree

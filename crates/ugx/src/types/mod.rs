@@ -53,4 +53,4 @@ pub use version::UgxVersion;
 pub use math::{Matrix4x4, QForm};
 
 // Re-export from constants for backward compatibility.
-pub use crate::constants::UGX_VERSION;
+pub use crate::constants::{UGX_FILE_ID, UGX_VERSION};

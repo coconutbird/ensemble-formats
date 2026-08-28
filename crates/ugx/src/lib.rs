@@ -36,6 +36,22 @@
 //! }
 //! ```
 //!
+//! # Reading a file with bad UGX signatures
+//!
+//! Strict parsing rejects the wrong ECF file ID or cached-data signature. To
+//! inspect such a file while retaining checksum and engine-structure checks,
+//! provide the layout explicitly:
+//!
+//! ```no_run
+//! use ugx::{ReadOptions, UgxGeom, UgxVersion};
+//!
+//! let data = std::fs::read("model-with-bad-signature.ugx").expect("failed to read file");
+//! let options = ReadOptions::accepting_bad_signatures(UgxVersion::Hw1);
+//! let geom = UgxGeom::from_bytes_with_options(&data, options)
+//!     .expect("failed to parse UGX with a v4 layout hint");
+//! println!("Sections: {}", geom.sections.len());
+//! ```
+//!
 //! # Unpacking vertices
 //!
 //! ```no_run
@@ -69,7 +85,7 @@ pub use types::*;
 
 mod processing;
 mod reader;
-pub use reader::{Reader, read_materials};
+pub use reader::{ReadOptions, Reader, read_materials, read_materials_with_options};
 
 mod writer;
 pub use writer::Writer;

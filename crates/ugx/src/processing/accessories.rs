@@ -26,9 +26,10 @@ impl UgxGeom {
     /// If no tree was built (e.g. HW2, or no sections), falls back to
     /// the legacy group-by-`accessory_index` strategy.
     ///
-    /// `valid_accessories` is the subset of accessories that have non-empty
-    /// `object_indices` (leaf nodes with actual section geometry). The engine
-    /// reads this as a flat i32 index array via `BPackedArray_Simple__unpack`.
+    /// `valid_accessories` contains the indices of accessories that have
+    /// non-empty `object_indices` (leaf nodes with actual section geometry).
+    /// The engine reads this as a flat i32 array via
+    /// `BPackedArray_Simple__unpack`.
     ///
     /// # Errors
     ///
@@ -60,9 +61,10 @@ impl UgxGeom {
         self.valid_accessories = self
             .accessories
             .iter()
-            .filter(|a| !a.object_indices.is_empty())
-            .cloned()
-            .collect();
+            .enumerate()
+            .filter(|(_, accessory)| !accessory.object_indices.is_empty())
+            .map(|(index, _)| crate::checked_i32(index, "valid-accessory index"))
+            .collect::<Result<Vec<_>>>()?;
         Ok(())
     }
 
@@ -109,9 +111,10 @@ impl UgxGeom {
         self.valid_accessories = self
             .accessories
             .iter()
-            .filter(|a| !a.object_indices.is_empty())
-            .cloned()
-            .collect();
+            .enumerate()
+            .filter(|(_, accessory)| !accessory.object_indices.is_empty())
+            .map(|(index, _)| crate::checked_i32(index, "valid-accessory index"))
+            .collect::<Result<Vec<_>>>()?;
         Ok(())
     }
 

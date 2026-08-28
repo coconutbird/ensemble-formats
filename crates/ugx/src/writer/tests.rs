@@ -63,7 +63,7 @@ fn make_test_vertex_buffer(packer: &UnivertPacker) -> Vec<u8> {
 
 fn make_test_section(vert_size: i32, vb_bytes: i32) -> Section {
     Section {
-        material_index: -1,
+        material_index: 0,
         accessory_index: -1,
         max_bones: 0,
         rigid_bone_index: -1,
@@ -106,6 +106,18 @@ fn make_test_geom() -> UgxGeom {
             model_to_bone: Matrix4x4::identity(),
         },
     ];
+    let granny_bones = bones
+        .iter()
+        .map(|bone| GrannyBone {
+            name: bone.name.clone(),
+            parent_index: bone.parent_index,
+            local_transform: None,
+            inverse_world_matrix: Matrix4x4::identity(),
+            lod_error: 0.0,
+            extended_data: None,
+            extended_data_type: None,
+        })
+        .collect();
 
     UgxGeom {
         bounding_sphere: Sphere {
@@ -116,9 +128,12 @@ fn make_test_geom() -> UgxGeom {
             min: [0.0, 0.0, 0.0],
             max: [1.0, 1.0, 0.0],
         },
-        materials: Vec::new(),
+        materials: vec![Material {
+            name: "default".to_string(),
+            ..Material::default()
+        }],
         bones,
-        granny_bones: Vec::new(),
+        granny_bones,
         granny_meshes: Vec::new(),
         skeleton_lod_type: 0,
         bone_bounds: vec![
@@ -230,6 +245,8 @@ fn test_write_read_roundtrip() {
 #[test]
 fn test_write_read_materials_roundtrip() {
     let mut geom = make_test_geom();
+    let mut animated_uvw = [[0.0; 3]; MapType::NUM_TYPES];
+    animated_uvw[MapType::Diffuse as usize] = [0.025, -0.5, 0.125];
     geom.materials = vec![
         Material {
             name: "terrain_grass".to_string(),
@@ -244,7 +261,7 @@ fn test_write_read_materials_roundtrip() {
                     maps[MapType::Diffuse as usize] = vec![Map {
                         name: "art/textures/grass_diff.ddx".to_string(),
                         channel: 0,
-                        flags: 7,
+                        flags: 0x1234,
                     }];
                     maps[MapType::Normal as usize] = vec![Map {
                         name: "art/textures/grass_norm.ddx".to_string(),
@@ -253,6 +270,7 @@ fn test_write_read_materials_roundtrip() {
                     }];
                     maps
                 },
+                uvw_velocity: animated_uvw,
                 ..LegacyMaterialData::default()
             })),
         },
@@ -292,6 +310,11 @@ fn test_write_read_materials_roundtrip() {
     assert_eq!(l0.blend_type, 1);
     assert!((l0.opacity - 0.8).abs() < 0.01);
     assert_eq!(l0.maps[MapType::Diffuse as usize].len(), 1);
+    assert_eq!(l0.maps[MapType::Diffuse as usize][0].flags, 0x1234);
+    assert_float_array_bits_eq(
+        &l0.uvw_velocity[MapType::Diffuse as usize],
+        &[0.025, -0.5, 0.125],
+    );
     assert_eq!(
         l0.maps[MapType::Diffuse as usize][0].name,
         "art/textures/grass_diff.ddx"
@@ -310,6 +333,222 @@ fn test_write_read_materials_roundtrip() {
     assert_eq!(l1.maps[MapType::Gloss as usize][0].channel, 1);
     assert!(l0.maps[MapType::Gloss as usize].is_empty());
     assert!(l1.maps[MapType::Normal as usize].is_empty());
+}
+
+#[test]
+fn writer_always_emits_game_required_chunks() {
+    let geom = make_test_geom();
+    let bytes = Writer::write(&geom, UgxVersion::Hw2).unwrap();
+    let ecf = ecf::Reader::new(&bytes).unwrap();
+
+    assert_eq!(ecf.header().id, crate::UGX_FILE_ID);
+    assert!(ecf.find_chunk(ECF_GRANNY_CHUNK_ID).is_some());
+    assert!(ecf.find_chunk(ECF_MATERIAL_CHUNK_ID).is_some());
+
+    let granny = ecf.chunk_data_by_id(ECF_GRANNY_CHUNK_ID).unwrap();
+    assert_eq!(
+        u32::from_le_bytes(granny[0x60..0x64].try_into().unwrap()),
+        1
+    );
+    assert_ne!(
+        u64::from_le_bytes(granny[0x64..0x6C].try_into().unwrap()),
+        0
+    );
+    crate::Reader::read(&bytes).unwrap();
+}
+
+#[test]
+fn valid_accessory_indices_roundtrip_without_resolution() {
+    let mut geom = make_test_geom();
+    let duplicate = Accessory {
+        first_bone: 0,
+        num_bones: 2,
+        object_indices: vec![0],
+    };
+    geom.accessories = vec![duplicate.clone(), duplicate];
+    geom.valid_accessories = vec![1, 0, 1];
+
+    let bytes = Writer::write(&geom, UgxVersion::Hw2).unwrap();
+    let parsed = crate::Reader::read(&bytes).unwrap();
+
+    assert_eq!(parsed.valid_accessories, [1, 0, 1]);
+}
+
+#[test]
+fn hw1_writer_rejects_a_missing_vertex_packer() {
+    let geom = make_test_geom();
+    let error = Writer::write(&geom, UgxVersion::Hw1).unwrap_err();
+
+    assert!(error.to_string().contains("missing its vertex packer"));
+}
+
+#[test]
+fn writer_rejects_incomplete_engine_data() {
+    let mut geom = make_test_geom();
+    geom.materials.clear();
+    assert!(
+        Writer::write(&geom, UgxVersion::Hw2)
+            .unwrap_err()
+            .to_string()
+            .contains("references material")
+    );
+
+    let mut geom = make_test_geom();
+    geom.granny_bones.clear();
+    assert!(
+        Writer::write(&geom, UgxVersion::Hw2)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match Granny bone count")
+    );
+}
+
+#[test]
+fn signature_validation_is_independently_configurable() {
+    let original = Writer::write(&make_test_geom(), UgxVersion::Hw2).unwrap();
+
+    let mut bad_file_id = original.clone();
+    patch_file_id(&mut bad_file_id, 0xDEAD_BEEF);
+    assert!(matches!(
+        crate::Reader::read(&bad_file_id),
+        Err(crate::Error::InvalidFileId {
+            actual: 0xDEAD_BEEF,
+            ..
+        })
+    ));
+    assert!(matches!(
+        UgxGeom::from_bytes_unchecked(&bad_file_id),
+        Err(crate::Error::InvalidFileId {
+            actual: 0xDEAD_BEEF,
+            ..
+        })
+    ));
+    crate::Reader::read_with_options(
+        &bad_file_id,
+        crate::ReadOptions::accepting_bad_signatures(UgxVersion::Hw2),
+    )
+    .unwrap();
+
+    let mut bad_cached_signature = original;
+    patch_chunk_u32_le(
+        &mut bad_cached_signature,
+        ECF_CACHED_DATA_CHUNK_ID,
+        0,
+        0xDEAD_BEEF,
+    );
+    assert!(matches!(
+        crate::Reader::read(&bad_cached_signature),
+        Err(crate::Error::InvalidSignature {
+            actual: 0xDEAD_BEEF
+        })
+    ));
+    crate::Reader::read_with_options(
+        &bad_cached_signature,
+        crate::ReadOptions::accepting_bad_signatures(UgxVersion::Hw2),
+    )
+    .unwrap();
+
+    let options = crate::ReadOptions {
+        validate_signatures: false,
+        version_hint: None,
+        ..crate::ReadOptions::strict()
+    };
+    assert!(matches!(
+        crate::Reader::read_with_options(&bad_cached_signature, options),
+        Err(crate::Error::MissingVersionHint {
+            actual: 0xDEAD_BEEF
+        })
+    ));
+}
+
+#[test]
+fn engine_requirement_validation_is_independently_configurable() {
+    let original = Writer::write(&make_test_geom(), UgxVersion::Hw2).unwrap();
+    for (chunk_id, expected_name) in [
+        (ECF_GRANNY_CHUNK_ID, "granny_data (0x703)"),
+        (ECF_MATERIAL_CHUNK_ID, "materials (0x704)"),
+    ] {
+        let missing = without_chunk(&original, chunk_id);
+        assert!(matches!(
+            crate::Reader::read(&missing),
+            Err(crate::Error::MissingChunk(name)) if name == expected_name
+        ));
+
+        let options = crate::ReadOptions {
+            validate_engine_requirements: false,
+            ..crate::ReadOptions::strict()
+        };
+        crate::Reader::read_with_options(&missing, options).unwrap();
+    }
+}
+
+#[test]
+fn strict_reader_rejects_non_singleton_granny_model_array() {
+    let mut bytes = Writer::write(&make_test_geom(), UgxVersion::Hw2).unwrap();
+    patch_chunk_u32_le(&mut bytes, ECF_GRANNY_CHUNK_ID, 0x60, 2);
+
+    assert!(matches!(
+        crate::Reader::read(&bytes),
+        Err(crate::Error::InvalidGrannyModelCount { actual: 2 })
+    ));
+
+    let options = crate::ReadOptions {
+        validate_engine_requirements: false,
+        ..crate::ReadOptions::strict()
+    };
+    crate::Reader::read_with_options(&bytes, options).unwrap();
+}
+
+fn patch_file_id(data: &mut [u8], file_id: u32) {
+    data[20..24].copy_from_slice(&file_id.to_be_bytes());
+    let checksum = ecf::adler32(&data[12..32]);
+    data[8..12].copy_from_slice(&checksum.to_be_bytes());
+}
+
+fn patch_chunk_u32_le(data: &mut [u8], chunk_id: u64, relative_offset: usize, value: u32) {
+    let (chunk_index, chunk_offset, chunk_size, header_size, chunk_stride) = {
+        let ecf = ecf::Reader::new(data).unwrap();
+        let chunk_index = ecf
+            .chunks()
+            .iter()
+            .position(|chunk| chunk.id == chunk_id)
+            .unwrap();
+        let chunk = &ecf.chunks()[chunk_index];
+        (
+            chunk_index,
+            usize::try_from(chunk.offset).unwrap(),
+            usize::try_from(chunk.size).unwrap(),
+            usize::try_from(ecf.header().header_size).unwrap(),
+            ecf::EcfChunkHeader::SIZE + usize::from(ecf.header().chunk_extra_data_size),
+        )
+    };
+    let value_offset = chunk_offset.checked_add(relative_offset).unwrap();
+    let value_end = value_offset.checked_add(4).unwrap();
+    data[value_offset..value_end].copy_from_slice(&value.to_le_bytes());
+    let chunk_end = chunk_offset.checked_add(chunk_size).unwrap();
+    let checksum = ecf::adler32(&data[chunk_offset..chunk_end]);
+    let checksum_offset = header_size
+        .checked_add(chunk_index.checked_mul(chunk_stride).unwrap())
+        .unwrap()
+        .checked_add(16)
+        .unwrap();
+    data[checksum_offset..checksum_offset + 4].copy_from_slice(&checksum.to_be_bytes());
+}
+
+fn without_chunk(data: &[u8], excluded_id: u64) -> Vec<u8> {
+    let source = ecf::Reader::new(data).unwrap();
+    let mut rebuilt = ecf::Writer::new(source.header().id);
+    for (index, chunk) in source.chunks().iter().enumerate() {
+        if chunk.id != excluded_id {
+            rebuilt.add_chunk_full(
+                chunk.id,
+                source.chunk_data(index).unwrap(),
+                chunk.alignment_log2,
+                chunk.resource_flags,
+            );
+        }
+    }
+    rebuilt.finalize().unwrap()
 }
 
 #[test]

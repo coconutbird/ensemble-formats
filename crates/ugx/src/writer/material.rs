@@ -45,7 +45,7 @@ fn push_cb_node(parent: &mut bdt::Node, name: &str, data: &[u8]) {
 ///       <SpecPower> text=Float(...)
 ///       ...
 ///     <Maps>
-///       <diffuse @UVWVel=Float(0.0)>
+///       <diffuse @UVWVel=FloatVec(0.0, 0.0, 0.0)>
 ///         <Map @Name="texture_path" @Channel=Int(0) @Flags=UInt(7)>
 ///       ...
 /// ```
@@ -132,9 +132,10 @@ fn build_legacy_children(mat: &crate::types::LegacyMaterialData, node: &mut bdt:
         let uvw = mat.uvw_velocity[idx];
 
         let mut type_node = bdt::Node::new(map_type.name());
-        type_node
-            .attributes
-            .push(bdt::Attribute::new("UVWVel", bdt::Variant::Float(uvw[0])));
+        type_node.attributes.push(bdt::Attribute::new(
+            "UVWVel",
+            bdt::Variant::FloatVec(uvw.to_vec()),
+        ));
 
         for map in &mat.maps[idx] {
             let mut map_node = bdt::Node::new("Map");

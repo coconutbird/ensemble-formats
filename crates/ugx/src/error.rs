@@ -24,6 +24,16 @@ pub enum Error {
     )]
     InvalidSignature { actual: u32 },
 
+    /// Invalid UGX ECF file identifier.
+    #[error("Invalid UGX file ID: expected 0x{expected:08X}, got 0x{actual:08X}")]
+    InvalidFileId { expected: u32, actual: u32 },
+
+    /// An unrecognized cached-data signature needs an explicit layout hint.
+    #[error(
+        "Cannot infer the UGX layout from signature 0x{actual:08X}; provide a version hint when signature validation is disabled"
+    )]
+    MissingVersionHint { actual: u32 },
+
     /// Missing ECF chunk.
     #[error("Missing required ECF chunk: {0}")]
     MissingChunk(&'static str),
@@ -65,6 +75,18 @@ pub enum Error {
     /// Invalid Granny chunk — present but `FromFileName` is not "gr2ugx".
     #[error("Invalid Granny chunk: FromFileName is \"{actual}\", expected \"gr2ugx\"")]
     InvalidGrannyChunk { actual: String },
+
+    /// The Granny chunk does not contain exactly one model.
+    #[error("Invalid Granny chunk: expected exactly one model, got {actual}")]
+    InvalidGrannyModelCount { actual: u32 },
+
+    /// A required Granny pointer is null or outside the chunk.
+    #[error("Invalid Granny chunk: {context} pointer is null or out of bounds")]
+    InvalidGrannyPointer { context: &'static str },
+
+    /// A legacy material omits an attribute required by the game.
+    #[error("Legacy material is missing required attribute {0}")]
+    MissingMaterialAttribute(&'static str),
 
     /// I/O error.
     #[error("I/O error: {0}")]

@@ -167,8 +167,8 @@ pub struct Map {
     pub name: String,
     /// UV channel index.
     pub channel: i16,
-    /// Flags.
-    pub flags: u8,
+    /// Engine map flags bitmask.
+    pub flags: u16,
 }
 
 /// A shader permutation entry used in HW2 Hogan materials.

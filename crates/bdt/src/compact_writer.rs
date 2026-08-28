@@ -110,6 +110,21 @@ impl CompactCtx {
         Ok(ofs)
     }
 
+    /// Pad the indirect-value section for a naturally aligned scalar array.
+    fn align_value_data(&mut self, alignment: usize) -> Result<()> {
+        let remainder = self.value_data.len() % alignment;
+        if remainder != 0 {
+            let padding = alignment - remainder;
+            let new_len = self
+                .value_data
+                .len()
+                .checked_add(padding)
+                .ok_or(Error::SizeOverflow("value data alignment"))?;
+            self.value_data.resize(new_len, 0);
+        }
+        Ok(())
+    }
+
     /// Encode a Variant into compact NV flags + value.
     fn encode_variant(&mut self, variant: &Variant) -> Result<(u16, u32)> {
         // nv_flags bit layout:
@@ -141,6 +156,7 @@ impl CompactCtx {
             }
             Variant::Double(v) => {
                 // Indirect: store in value_data
+                self.align_value_data(core::mem::align_of::<f64>())?;
                 let offset = checked_u32(self.value_data.len(), "value data offset")?;
                 if self.big_endian {
                     self.value_data.extend_from_slice(&v.to_be_bytes());
@@ -150,8 +166,35 @@ impl CompactCtx {
                 let flags: u16 = (3 << 2) | (3 << 5); // Float type + size_log2=3 (8 bytes), NOT direct
                 Ok((flags, offset))
             }
+            Variant::FloatVec(values) => {
+                if !(2..=4).contains(&values.len()) {
+                    return Err(Error::InvalidFloatVectorLength(values.len()));
+                }
+                let data_size = values
+                    .len()
+                    .checked_mul(core::mem::size_of::<f32>())
+                    .ok_or(Error::SizeOverflow("float-vector byte count"))?;
+                let encoded_size = checked_u16(data_size, "float-vector byte count")?;
+                if encoded_size > 0x7F {
+                    return Err(Error::SizeOverflow("float-vector byte count"));
+                }
+
+                self.align_value_data(core::mem::align_of::<f32>())?;
+                let offset = checked_u32(self.value_data.len(), "value data offset")?;
+                for value in values {
+                    if self.big_endian {
+                        self.value_data.extend_from_slice(&value.to_be_bytes());
+                    } else {
+                        self.value_data.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+                let flags: u16 = (3 << 2) | (2 << 5) | (encoded_size << 9);
+                Ok((flags, offset))
+            }
             Variant::String(s) => self.encode_string_value(s),
-            _ => Ok((0x0002, 0)), // Fallback to null for unsupported types
+            Variant::Null => Ok((0x0002, 0)),
+            Variant::UString(_) => Err(Error::UnsupportedCompactVariant("UTF-16 string")),
+            Variant::Fract24(_) => Err(Error::UnsupportedCompactVariant("24-bit fraction")),
         }
     }
 
@@ -170,6 +213,17 @@ impl CompactCtx {
             Ok((flags, value))
         } else {
             // Indirect: store in value_data
+            if len >= 127 {
+                self.align_value_data(core::mem::align_of::<u32>())?;
+                let extended_size = checked_u32(len, "string length")?;
+                if self.big_endian {
+                    self.value_data
+                        .extend_from_slice(&extended_size.to_be_bytes());
+                } else {
+                    self.value_data
+                        .extend_from_slice(&extended_size.to_le_bytes());
+                }
+            }
             let offset = checked_u32(self.value_data.len(), "value data offset")?;
             self.value_data.extend_from_slice(bytes);
             self.value_data.push(0);
@@ -377,6 +431,7 @@ impl CompactCtx {
 #[cfg(test)]
 mod tests {
     extern crate std;
+    use alloc::vec;
     use std::println;
 
     use super::*;
@@ -513,5 +568,59 @@ mod tests {
         } else {
             panic!("Expected string for Map Name");
         }
+    }
+
+    #[test]
+    fn compact_float_vector_uses_engine_array_encoding() {
+        let expected = vec![0.025, -0.5, 0.125];
+        let mut root = Node::new("Root");
+        root.attributes.push(Attribute::new(
+            "UVWVel",
+            Variant::FloatVec(expected.clone()),
+        ));
+
+        let data = CompactWriter::write(&root).unwrap();
+
+        // One node starts at 28, followed by two 8-byte name/value entries.
+        // UVWVel is the last entry, so its engine flags are 0x194C:
+        // float, f32 elements, 12 data bytes, and LAST_NAME_VALUE.
+        let flags = u16::from_le_bytes([data[50], data[51]]);
+        assert_eq!(flags, 0x194C);
+
+        let parsed = Reader::read(&data, Endian::Little)
+            .unwrap()
+            .expect("float-vector tree");
+        let value = &parsed.get_attribute("UVWVel").unwrap().value;
+        assert_eq!(value, &Variant::FloatVec(expected));
+    }
+
+    #[test]
+    fn compact_float_vector_rejects_invalid_component_count() {
+        let mut root = Node::new("Root");
+        root.attributes
+            .push(Attribute::new("UVWVel", Variant::FloatVec(vec![1.0])));
+
+        assert!(matches!(
+            CompactWriter::write(&root),
+            Err(Error::InvalidFloatVectorLength(1))
+        ));
+    }
+
+    #[test]
+    fn compact_roundtrip_extended_string_size() {
+        let expected = "x".repeat(200);
+        let mut root = Node::new("Root");
+        root.attributes
+            .push(Attribute::with_string("Long", &expected));
+
+        let data = CompactWriter::write(&root).unwrap();
+        let parsed = Reader::read(&data, Endian::Little)
+            .unwrap()
+            .expect("extended-string tree");
+
+        assert_eq!(
+            parsed.get_attribute("Long").unwrap().value,
+            Variant::String(expected)
+        );
     }
 }

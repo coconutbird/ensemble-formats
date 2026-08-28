@@ -291,9 +291,14 @@ fn decode_compact_value(nv: CompactNvRaw, value_data: &[u8], big_endian: bool) -
             value_bytes,
             big_endian,
         ),
-        TypeClass::Float => {
-            decode_compact_float(is_direct, type_size_log2, value, value_bytes, big_endian)
-        }
+        TypeClass::Float => decode_compact_float(
+            is_direct,
+            type_size_log2,
+            data_size,
+            value,
+            value_bytes,
+            big_endian,
+        ),
         TypeClass::String => decode_compact_string(
             is_direct,
             type_size_log2,
@@ -404,18 +409,40 @@ fn decode_compact_int(
 /// Decode a float or double value from a compact name-value entry.
 ///
 /// Direct values are reinterpreted as `f32` via `from_bits`. Indirect values
-/// are read from the value data section; `type_size_log2 == 3` indicates a
-/// 64-bit double.
+/// with a byte count larger than one element are decoded as float vectors;
+/// `type_size_log2 == 3` with no array byte count indicates a 64-bit double.
 fn decode_compact_float(
     is_direct: bool,
     type_size_log2: usize,
+    data_size: usize,
     value: u32,
     value_bytes: &[u8],
     big_endian: bool,
 ) -> Variant {
     if is_direct {
         Variant::Float(f32::from_bits(value))
-    } else if type_size_log2 == 3 && value_bytes.len() >= 8 {
+    } else if type_size_log2 == 2 && data_size > core::mem::size_of::<f32>() {
+        if !data_size.is_multiple_of(core::mem::size_of::<f32>()) {
+            return Variant::FloatVec(Vec::new());
+        }
+        let Some(bytes) = value_bytes.get(..data_size) else {
+            return Variant::FloatVec(Vec::new());
+        };
+        let values = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|component| {
+                let bytes = [component[0], component[1], component[2], component[3]];
+                if big_endian {
+                    f32::from_be_bytes(bytes)
+                } else {
+                    f32::from_le_bytes(bytes)
+                }
+            })
+            .collect();
+        Variant::FloatVec(values)
+    } else if type_size_log2 == 3 && (data_size == 0 || data_size == 8) && value_bytes.len() >= 8 {
         // Double
         let v = if big_endian {
             f64::from_be_bytes([

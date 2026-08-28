@@ -17,8 +17,8 @@
 //! │ Chunk 0x700: BCachedData - Header, sections, bones, accessories     │
 //! │ Chunk 0x701: Index Buffer - Triangle indices (u16 array)            │
 //! │ Chunk 0x702: Vertex Buffer - Packed vertex data                     │
-//! │ Chunk 0x703: Granny Data - Bone inverse world matrices (optional)   │
-//! │ Chunk 0x704: Materials - BBinaryDataTree document (optional)        │
+//! │ Chunk 0x703: Granny Data - Bone inverse world matrices (required)   │
+//! │ Chunk 0x704: Materials - BBinaryDataTree document (required)        │
 //! │ Chunk 0x705: AABB Tree - Spatial acceleration structure (optional)  │
 //!
 //! The AABB tree is a streamed format (not flat binary) with variable-length
@@ -105,6 +105,9 @@ mod aabb_tree;
 mod cached_data;
 mod granny;
 mod material;
+mod options;
+
+pub use options::ReadOptions;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -115,6 +118,7 @@ use nostdio::{Cursor, ReadLe};
 use crate::constants::{
     ECF_AABB_TREE_CHUNK_ID, ECF_CACHED_DATA_CHUNK_ID, ECF_GRANNY_CHUNK_ID, ECF_IB_CHUNK_ID,
     ECF_MATERIAL_CHUNK_ID, ECF_VB_CHUNK_ID, GEOM_HEADER_SIGNATURE_HW1, GEOM_HEADER_SIGNATURE_HW2,
+    UGX_FILE_ID,
 };
 use crate::error::{Error, Result};
 use crate::types::raw::GeomHeaderRaw;
@@ -133,10 +137,10 @@ impl UgxGeom {
     ///
     /// # Errors
     ///
-    /// Returns an error if the ECF container or any required UGX chunk is
-    /// invalid, missing, truncated, or fails checksum validation.
+    /// Returns an error if the ECF file ID, cached-data signature, checksums,
+    /// engine-required chunks, or any encoded UGX structure is invalid.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        Self::from_bytes_impl(data, true)
+        Self::from_bytes_with_options(data, ReadOptions::strict())
     }
 
     /// Parse UGX geometry from a byte slice, skipping ECF checksum validation.
@@ -146,15 +150,28 @@ impl UgxGeom {
     /// Returns an error if the ECF container or any required UGX chunk is
     /// invalid, missing, or truncated.
     pub fn from_bytes_unchecked(data: &[u8]) -> Result<Self> {
-        Self::from_bytes_impl(data, false)
+        Self::from_bytes_with_options(data, ReadOptions::unchecked_checksums())
     }
 
-    fn from_bytes_impl(data: &[u8], validate: bool) -> Result<Self> {
-        let ecf = if validate {
+    /// Parse UGX geometry with explicit validation controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if enabled validation fails, a required structure is
+    /// missing, or any encoded count, offset, or value is malformed.
+    pub fn from_bytes_with_options(data: &[u8], options: ReadOptions) -> Result<Self> {
+        let ecf = if options.validate_checksums {
             ecf::Reader::new(data)?
         } else {
             ecf::Reader::new_unchecked(data)?
         };
+
+        if options.validate_signatures && ecf.header().id != UGX_FILE_ID {
+            return Err(Error::InvalidFileId {
+                expected: UGX_FILE_ID,
+                actual: ecf.header().id,
+            });
+        }
 
         let cached_data = ecf
             .chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID)
@@ -168,9 +185,24 @@ impl UgxGeom {
             .chunk_data_by_id(ECF_IB_CHUNK_ID)
             .map_err(|_| Error::MissingChunk("index_buffer (0x701)"))?;
 
-        let granny_data = ecf.chunk_data_by_id(ECF_GRANNY_CHUNK_ID).ok();
-        let material_data = ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID).ok();
-        let aabb_tree_raw = ecf.chunk_data_by_id(ECF_AABB_TREE_CHUNK_ID).ok();
+        let granny_data = read_optional_chunk(&ecf, ECF_GRANNY_CHUNK_ID)?;
+        let material_data = read_optional_chunk(&ecf, ECF_MATERIAL_CHUNK_ID)?;
+        let aabb_tree_raw = read_optional_chunk(&ecf, ECF_AABB_TREE_CHUNK_ID)?;
+
+        if options.validate_engine_requirements {
+            if granny_data.is_none() {
+                return Err(Error::MissingChunk("granny_data (0x703)"));
+            }
+            if material_data.is_none() {
+                return Err(Error::MissingChunk("materials (0x704)"));
+            }
+        }
+
+        if ib_data.len() % core::mem::size_of::<u16>() != 0 {
+            return Err(Error::UnsupportedFormat(String::from(
+                "index-buffer chunk has a trailing partial index",
+            )));
+        }
 
         let num_indices = ib_data.len() / 2;
         let mut index_buffer = Vec::with_capacity(num_indices);
@@ -186,6 +218,7 @@ impl UgxGeom {
             aabb_tree_raw.as_deref(),
             vertex_buffer,
             index_buffer,
+            options,
         )
     }
 
@@ -197,6 +230,7 @@ impl UgxGeom {
         aabb_tree_raw: Option<&[u8]>,
         vertex_buffer: Vec<u8>,
         index_buffer: Vec<u16>,
+        options: ReadOptions,
     ) -> Result<Self> {
         let (hdr, rest): (Ref<_, GeomHeaderRaw>, _) =
             Ref::from_prefix(data).map_err(|_| Error::UnexpectedEof {
@@ -204,11 +238,7 @@ impl UgxGeom {
             })?;
 
         let signature = u32::from_le_bytes(hdr.signature);
-        let version = match signature {
-            GEOM_HEADER_SIGNATURE_HW1 => UgxVersion::Hw1,
-            GEOM_HEADER_SIGNATURE_HW2 => UgxVersion::Hw2,
-            _ => return Err(Error::InvalidSignature { actual: signature }),
-        };
+        let version = read_version(signature, options)?;
 
         let rigid_bone_index = i32::from_le_bytes(hdr.rigid_bone_index);
 
@@ -230,7 +260,9 @@ impl UgxGeom {
 
         // Validate the Granny chunk: the engine checks FromFileName == "gr2ugx"
         // at +0x10 before parsing. If the chunk exists but is invalid, error out.
-        if let Some(granny) = granny_data {
+        if options.validate_engine_requirements
+            && let Some(granny) = granny_data
+        {
             validate_granny_chunk(granny)?;
         }
 
@@ -250,7 +282,7 @@ impl UgxGeom {
         // IDA: BUGXGeomData::readCachedData uses BPackedArray_Simple__unpack for
         // validAccessories (v6+28) in BOTH HW1 and HW2 — they are i32 indices into
         // the accessories array, not full 24-byte AccessoryRaw structs.
-        let valid_accessories = read_valid_accessory_indices(data, pos, &accessories)?;
+        let valid_accessories = read_valid_accessory_indices(data, pos)?;
 
         let bone_bounds = read_bone_bounds(data, pos)?;
 
@@ -303,12 +335,36 @@ impl UgxGeom {
 ///
 /// # Errors
 ///
-/// Returns an error if the ECF container or material chunk is invalid.
+/// Returns an error if the ECF container, UGX file ID, or material chunk is
+/// invalid or if the material chunk is missing.
 pub fn read_materials(data: &[u8]) -> Result<Vec<Material>> {
-    let ecf = ecf::Reader::new(data)?;
-    match ecf.chunk_data_by_id(ECF_MATERIAL_CHUNK_ID) {
-        Ok(mat_data) => parse_materials(&mat_data),
-        Err(_) => Ok(Vec::new()),
+    read_materials_with_options(data, ReadOptions::strict())
+}
+
+/// Read only the materials with explicit UGX validation controls.
+///
+/// # Errors
+///
+/// Returns an error if enabled ECF validation fails or the material document
+/// is malformed. Strict mode also rejects a missing material chunk.
+pub fn read_materials_with_options(data: &[u8], options: ReadOptions) -> Result<Vec<Material>> {
+    let ecf = if options.validate_checksums {
+        ecf::Reader::new(data)?
+    } else {
+        ecf::Reader::new_unchecked(data)?
+    };
+    if options.validate_signatures && ecf.header().id != UGX_FILE_ID {
+        return Err(Error::InvalidFileId {
+            expected: UGX_FILE_ID,
+            actual: ecf.header().id,
+        });
+    }
+    match read_optional_chunk(&ecf, ECF_MATERIAL_CHUNK_ID)? {
+        Some(mat_data) => parse_materials(&mat_data),
+        None if options.validate_engine_requirements => {
+            Err(Error::MissingChunk("materials (0x704)"))
+        }
+        None => Ok(Vec::new()),
     }
 }
 
@@ -324,6 +380,38 @@ impl Reader {
     /// invalid, missing, truncated, or fails checksum validation.
     pub fn read(data: &[u8]) -> Result<UgxGeom> {
         UgxGeom::from_bytes(data)
+    }
+
+    /// Read a UGX file with explicit validation controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if enabled validation fails or the file is malformed.
+    pub fn read_with_options(data: &[u8], options: ReadOptions) -> Result<UgxGeom> {
+        UgxGeom::from_bytes_with_options(data, options)
+    }
+}
+
+fn read_optional_chunk(ecf: &ecf::Reader<'_>, id: u64) -> Result<Option<Vec<u8>>> {
+    if ecf.find_chunk(id).is_some() {
+        ecf.chunk_data_by_id(id).map(Some).map_err(Error::from)
+    } else {
+        Ok(None)
+    }
+}
+
+fn read_version(signature: u32, options: ReadOptions) -> Result<UgxVersion> {
+    if !options.validate_signatures
+        && let Some(version) = options.version_hint
+    {
+        return Ok(version);
+    }
+
+    match signature {
+        GEOM_HEADER_SIGNATURE_HW1 => Ok(UgxVersion::Hw1),
+        GEOM_HEADER_SIGNATURE_HW2 => Ok(UgxVersion::Hw2),
+        _ if options.validate_signatures => Err(Error::InvalidSignature { actual: signature }),
+        _ => Err(Error::MissingVersionHint { actual: signature }),
     }
 }
 

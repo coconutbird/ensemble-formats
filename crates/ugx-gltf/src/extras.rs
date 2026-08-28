@@ -103,7 +103,7 @@ pub(crate) struct MaterialExtrasJson {
 pub(crate) struct MapEntryJson {
     pub name: String,
     pub channel: i16,
-    pub flags: u8,
+    pub flags: u16,
 }
 
 /// HW2 Hogan material data stored in extras.

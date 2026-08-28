@@ -439,18 +439,14 @@ pub(super) fn read_packed_accessories(data: &[u8], pos: &mut usize) -> Result<Ve
     Ok(accessories)
 }
 
-/// Read HW2 valid-accessory indices (4-byte i32 per element).
+/// Read valid-accessory indices (4-byte i32 per element).
 ///
-/// In HW2, valid accessories are stored as indices into the accessories array
-/// rather than full 24-byte `AccessoryRaw` structs. We resolve them by looking
-/// up the corresponding accessory from the already-parsed list.
-pub(super) fn read_valid_accessory_indices(
-    data: &[u8],
-    pos: &mut usize,
-    accessories: &[Accessory],
-) -> Result<Vec<Accessory>> {
+/// Both supported versions store raw indices into the accessories array. They
+/// are deliberately preserved without resolution so duplicates and malformed
+/// or sentinel values remain observable to permissive readers.
+pub(super) fn read_valid_accessory_indices(data: &[u8], pos: &mut usize) -> Result<Vec<i32>> {
     let (count, raw_offset) =
-        read_packed_array_header(data, pos, "PackedArrayRaw valid_accessory_indices (HW2)")?;
+        read_packed_array_header(data, pos, "PackedArrayRaw valid_accessory_indices")?;
     let Some(offset) = resolve_offset(raw_offset, "valid-accessory index offset")? else {
         return Ok(Vec::new());
     };
@@ -462,11 +458,7 @@ pub(super) fn read_valid_accessory_indices(
     let mut idx_cur = Cursor::new(data_tail(data, offset, "valid-accessory indices")?);
 
     for _ in 0..count {
-        if let Ok(index) = usize::try_from(idx_cur.read_i32_le()?)
-            && let Some(accessory) = accessories.get(index)
-        {
-            valid.push(accessory.clone());
-        }
+        valid.push(idx_cur.read_i32_le()?);
     }
 
     Ok(valid)
