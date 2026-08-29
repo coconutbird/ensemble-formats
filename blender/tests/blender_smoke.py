@@ -14,6 +14,7 @@ import sys
 import tempfile
 
 import bpy
+from _bpy_restrict_state import RestrictBlend
 
 
 WORKSPACE = Path(__file__).resolve().parents[2]
@@ -22,7 +23,7 @@ if str(BLENDER_DIR) not in sys.path:
     sys.path.insert(0, str(BLENDER_DIR))
 
 import ugx_gltf  # noqa: E402
-from ugx_gltf import bridge  # noqa: E402
+from ugx_gltf import bridge, properties  # noqa: E402
 
 
 def clear_scene() -> None:
@@ -51,16 +52,46 @@ def build_triangle() -> bpy.types.Object:
     bpy.context.view_layer.objects.active = obj
     assert bpy.ops.ugx_gltf.initialize_mesh_metadata() == {"FINISHED"}
     assert bpy.ops.ugx_gltf.initialize_material_metadata() == {"FINISHED"}
-    mesh["ugx_lod_near_distance"] = 2.5
-    mesh["ugx_lod_far_distance"] = 100.0
-    mesh["ugx_lod_fade_distance"] = 4.0
-    material["ugx_material_version"] = 4
-    material["ugx_spec_power"] = 23.0
+    mesh_settings = mesh.ugx_gltf
+    mesh_settings.lod_near_distance = 2.5
+    mesh_settings.lod_far_distance = 100.0
+    mesh_settings.lod_fade_distance = 4.0
+    mesh_settings.hw2_has_color = True
+    mesh_settings.hw2_color_before_skin = True
+
+    material_settings = material.ugx_gltf
+    material_settings.material_version = 4
+    material_settings.color_gloss = True
+    material_settings.opacity_valid = True
+    material_settings.two_sided = True
+    material_settings.disable_shadows = True
+    material_settings.global_env = True
+    material_settings.terrain_conform = True
+    material_settings.local_reflection = True
+    material_settings.disable_shadow_reception = True
+    material_settings.blend_type = "2"
+    material_settings.opacity = 0.625
+    material_settings.spec_power = 23.0
+    material_settings.spec_color = (0.125, 0.25, 0.5)
+    material_settings.env_reflectivity = 0.75
+    material_settings.env_sharpness = 0.875
+    material_settings.env_fresnel = 0.375
+    material_settings.env_fresnel_power = 6.5
+    material_settings.accessory_index = "4294967295"
+    texture = material_settings.maps.add()
+    texture.map_type = "diffuse"
+    texture.texture_path = r"art\smoke\smoke_diffuse.dds"
+    texture.channel = 1
+    texture.flags = 0x1234
+    diffuse_velocity = next(
+        item for item in material_settings.uvw_velocities if item.map_type == "diffuse"
+    )
+    diffuse_velocity.velocity = (0.25, -0.5, 1.0)
     obj.location = (2.0, -3.0, 4.0)
     obj.rotation_euler = (0.2, -0.3, 0.7)
     obj.scale = (1.25, 0.5, 2.0)
     bpy.context.view_layer.update()
-    bpy.context.scene["ugx_max_instances"] = 3
+    bpy.context.scene.ugx_gltf.max_instances = 3
     return obj
 
 
@@ -85,6 +116,88 @@ def assert_positions_near(
             )
 
 
+def verify_stumpy_compatibility_operator(
+    converter: Path, temporary_path: Path
+) -> None:
+    """Exercise legacy-scene detection and its non-destructive binding repair."""
+    clear_scene()
+    armature_data = bpy.data.armatures.new("stumpy_armature")
+    armature = bpy.data.objects.new("stumpy_armature", armature_data)
+    bpy.context.collection.objects.link(armature)
+    bpy.context.view_layer.objects.active = armature
+    armature.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+    root = armature.data.edit_bones.new("GrannyRootBone")
+    root.head = (0.0, 0.0, 0.0)
+    root.tail = (0.0, 1.0, 0.0)
+    attach = armature.data.edit_bones.new("AttachBone")
+    attach.head = (0.0, 1.0, 0.0)
+    attach.tail = (0.0, 2.0, 0.0)
+    attach.parent = root
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    mesh = bpy.data.meshes.new("stumpy_mesh")
+    mesh.from_pydata(
+        [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 1.0, 0.0)],
+        [],
+        [(0, 1, 2)],
+    )
+    material = bpy.data.materials.new("stumpy_material")
+    mesh.materials.append(material)
+    obj = bpy.data.objects.new("stumpy_mesh", mesh)
+    bpy.context.collection.objects.link(obj)
+    modifier = obj.modifiers.new("Armature", "ARMATURE")
+    modifier.object = armature
+    group = obj.vertex_groups.new(name="GrannyRootBone")
+    group.add([0, 1, 2], 1.0, "REPLACE")
+    obj["MaxHandle"] = 7
+    obj["ugxMatIndex"] = 1
+    bpy.context.scene["ugxMats"] = [
+        {
+            "path_df": r"\unsc\smoke\stumpy_df",
+            "chan_df": "1",
+            "cFlagTwoSided": True,
+        }
+    ]
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+    assert properties.is_stumpy_max_scene(bpy.context.scene, [obj, armature])
+    assert bpy.ops.ugx_gltf.apply_stumpy_compatibility() == {"FINISHED"}
+    settings = mesh.ugx_gltf
+    assert bpy.context.scene.ugx_gltf.coordinate_preset == "STUMPY"
+    assert settings.section_mode == "SKINNED"
+    assert settings.force_bone == "AttachBone"
+    assert settings.max_bones == 4
+    assert mesh["ugx_section_mode"] == "SKINNED"
+    assert mesh["ugx_force_bone"] == "AttachBone"
+    assert mesh["ugx_max_bones"] == 4
+    material_settings = material.ugx_gltf
+    assert material_settings.two_sided
+    diffuse = next(item for item in material_settings.maps if item.map_type == "diffuse")
+    assert diffuse.texture_path == r"\unsc\smoke\stumpy_df"
+    assert diffuse.channel == 1
+
+    armature.select_set(False)
+    armature.hide_set(True)
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    destination = temporary_path / "hidden_stumpy_armature.ugx"
+    result = bpy.ops.export_scene.ugx(
+        filepath=str(destination),
+        version="HW1",
+        include_skeleton=True,
+        selected_only=True,
+        apply_modifiers=False,
+        coordinate_preset="STUMPY",
+    )
+    assert result == {"FINISHED"}, result
+    assert armature.hide_get(), "export did not restore the hidden armature state"
+    summary = bridge.inspect_ugx(converter, destination)
+    assert summary["bones"] == 2, summary
+    assert summary["vertices"] == 3, summary
+
+
 def verify_exported_metadata(
     gltf_path: Path, *, expect_legacy: bool, expect_lod: bool
 ) -> None:
@@ -98,11 +211,32 @@ def verify_exported_metadata(
         assert mesh_extras["ugx_lod_near_distance"] == 2.5, mesh_extras
         assert mesh_extras["ugx_lod_far_distance"] == 100.0, mesh_extras
         assert mesh_extras["ugx_lod_fade_distance"] == 4.0, mesh_extras
+        assert mesh_extras["ugx_hw2_has_color"] is True, mesh_extras
 
     material_extras = root["materials"][0]["extras"]
     assert material_extras["ugx_material_version"] == 4, material_extras
     if expect_legacy:
         assert material_extras["ugx_spec_power"] == 23.0, material_extras
+        assert material_extras["ugx_flags"] == 0xFB, material_extras
+        assert root["materials"][0]["doubleSided"] is True
+        assert material_extras["ugx_blend_type"] == 2, material_extras
+        visual_alpha = root["materials"][0]["pbrMetallicRoughness"][
+            "baseColorFactor"
+        ][3]
+        assert abs(visual_alpha - 0.625) <= 1.0 / 255.0, root["materials"][0]
+        assert material_extras["ugx_spec_color"] == [0.125, 0.25, 0.5]
+        assert material_extras["ugx_env_reflectivity"] == 0.75
+        assert material_extras["ugx_env_sharpness"] == 0.875
+        assert material_extras["ugx_env_fresnel"] == 0.375
+        assert material_extras["ugx_env_fresnel_power"] == 6.5
+        assert material_extras["ugx_accessory_index"] == 4294967295
+        diffuse = material_extras["ugx_maps"]["diffuse"][0]
+        assert diffuse == {
+            "name": r"art\smoke\smoke_diffuse.dds",
+            "channel": 1,
+            "flags": 0x1234,
+        }, diffuse
+        assert material_extras["ugx_uvw_velocity"][0] == [0.25, -0.5, 1.0]
     else:
         assert "ugx_hogan" in material_extras, material_extras
 
@@ -159,7 +293,10 @@ def main() -> None:
         raise RuntimeError(f"Build ugx-cli before this test: missing {converter}")
     os.environ[bridge.CONVERTER_ENV] = str(converter)
 
-    ugx_gltf.register()
+    # Blender enables extensions under this guard, where bpy.data is the
+    # deliberately limited _RestrictData object.
+    with RestrictBlend():
+        ugx_gltf.register()
     try:
         clear_scene()
         source_object = build_triangle()
@@ -257,6 +394,54 @@ def main() -> None:
             assert_positions_near(world_positions(meshes[0]), expected_world_positions)
             assert bpy.context.scene["ugx_max_instances"] == 3
 
+            hogan_material = meshes[0].data.materials[0]
+            hogan_settings = hogan_material.ugx_gltf
+            assert hogan_settings.initialized
+            assert hogan_settings.family == "HOGAN"
+            assert hogan_settings.permutations
+            assert hogan_settings.parameters
+            hogan_settings.hogan_shadow_requires_consts = True
+            hogan_settings.hogan_terrain_blending = True
+            hogan_settings.hogan_textures = r"art\smoke\edited_[al]"
+            edited_parameter = next(
+                item
+                for item in hogan_settings.parameters
+                if item.encoding == "NAMED"
+            )
+            edited_parameter.value = (
+                0.75,
+                edited_parameter.value[1],
+                edited_parameter.value[2],
+                edited_parameter.value[3],
+            )
+            edited_hogan_path = temporary_path / "edited_hogan.ugx"
+            result = bpy.ops.export_scene.ugx(
+                filepath=str(edited_hogan_path),
+                version="HW2",
+                include_skeleton=False,
+                selected_only=False,
+                apply_modifiers=False,
+            )
+            assert result == {"FINISHED"}, result
+            edited_hogan_gltf = temporary_path / "edited_hogan.gltf"
+            bridge.convert_ugx_to_gltf(
+                converter,
+                edited_hogan_path,
+                edited_hogan_gltf,
+                include_skeleton=False,
+            )
+            edited_root = json.loads(edited_hogan_gltf.read_text(encoding="utf-8"))
+            edited_hogan = edited_root["materials"][0]["extras"]["ugx_hogan"]
+            assert edited_hogan["shadow_requires_consts"] is True
+            assert edited_hogan["terrain_blending"] is True
+            assert edited_hogan["textures"] == r"art\smoke\edited_[al]"
+            parameter_map = edited_hogan[
+                "vs_cb" if edited_parameter.stage == "VS" else "ps_cb"
+            ]
+            edited_value = parameter_map[edited_parameter.name]
+            first_component = edited_value[0] if isinstance(edited_value, list) else edited_value
+            assert abs(first_component - 0.75) < 1e-6, parameter_map
+
             cross_convert_real_fixture(
                 converter,
                 temporary_path,
@@ -271,6 +456,7 @@ def main() -> None:
                 "HW1",
                 verify_checksums=True,
             )
+            verify_stumpy_compatibility_operator(converter, temporary_path)
     finally:
         ugx_gltf.unregister()
 

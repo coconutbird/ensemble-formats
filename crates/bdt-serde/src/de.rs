@@ -669,6 +669,7 @@ impl<'de> de::Deserializer<'de> for VariantDeserializer<'_> {
             Variant::UInt(v) => visitor.visit_u32(*v),
             Variant::Bool(v) => visitor.visit_bool(*v),
             Variant::String(s) | Variant::UString(s) => visitor.visit_string(s.clone()),
+            Variant::Bytes(bytes) => visitor.visit_byte_buf(bytes.clone()),
             Variant::FloatVec(_) => visitor.visit_string(self.0.to_string_value()),
         }
     }

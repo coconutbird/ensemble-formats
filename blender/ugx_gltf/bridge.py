@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -127,13 +128,7 @@ def convert_ugx_to_gltf(
     Raises:
         BridgeError: If conversion fails.
     """
-    arguments = [
-        "to-gltf",
-        "--input",
-        str(source),
-        "--output",
-        str(destination),
-    ]
+    arguments = ["to-gltf", "--input", str(source), "--output", str(destination)]
     if not include_skeleton:
         arguments.append("--no-skeleton")
     if not verify_checksums:
@@ -148,6 +143,8 @@ def convert_gltf_to_ugx(
     *,
     version: str,
     include_skeleton: bool = True,
+    model_scale: float = 1.0,
+    mirror_x: bool = False,
     timeout_seconds: int = 300,
 ) -> ConversionResult:
     """Convert a glTF or GLB file to UGX using Rust.
@@ -158,6 +155,8 @@ def convert_gltf_to_ugx(
     normalized_version = version.lower()
     if normalized_version not in {"hw1", "hw2"}:
         raise BridgeError(f"Unsupported UGX target version: {version}")
+    if not math.isfinite(model_scale) or model_scale <= 0.0:
+        raise BridgeError("UGX model scale must be finite and greater than zero")
     arguments = [
         "from-gltf",
         "--input",
@@ -169,6 +168,10 @@ def convert_gltf_to_ugx(
     ]
     if not include_skeleton:
         arguments.append("--no-skeleton")
+    if model_scale != 1.0:
+        arguments.extend(("--scale", format(model_scale, ".17g")))
+    if mirror_x:
+        arguments.append("--mirror-x")
     return run_converter(executable, arguments, timeout_seconds=timeout_seconds)
 
 

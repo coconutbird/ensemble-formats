@@ -96,5 +96,45 @@ class InspectTests(unittest.TestCase):
             bridge.run_converter = original
 
 
+class ExportCommandTests(unittest.TestCase):
+    """Check authoring transforms are forwarded without a shell."""
+
+    def test_stumpy_transform_arguments(self):
+        captured = []
+        original = bridge.run_converter
+
+        def capture(_executable, arguments, *, timeout_seconds):
+            del timeout_seconds
+            captured.extend(arguments)
+            return bridge.ConversionResult(("ugx",), "", "")
+
+        bridge.run_converter = capture
+        try:
+            bridge.convert_gltf_to_ugx(
+                Path("ugx"),
+                Path("source.glb"),
+                Path("output.ugx"),
+                version="HW1",
+                model_scale=1.575,
+                mirror_x=True,
+            )
+        finally:
+            bridge.run_converter = original
+
+        self.assertIn("--scale", captured)
+        self.assertEqual(captured[captured.index("--scale") + 1], "1.575")
+        self.assertIn("--mirror-x", captured)
+
+    def test_rejects_invalid_scale(self):
+        with self.assertRaises(bridge.BridgeError):
+            bridge.convert_gltf_to_ugx(
+                Path("ugx"),
+                Path("source.glb"),
+                Path("output.ugx"),
+                version="HW1",
+                model_scale=0.0,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

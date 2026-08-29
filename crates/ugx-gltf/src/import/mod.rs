@@ -7,7 +7,9 @@ mod accessor;
 mod bounds;
 mod material;
 mod mesh;
+mod model_transform;
 mod primitive;
+mod section;
 mod skeleton;
 
 #[cfg(test)]
@@ -24,11 +26,13 @@ use crate::extras::{MeshExtrasJson, SceneExtrasJson};
 use accessor::resolve_buffer;
 use bounds::compute_bounds;
 use material::import_materials;
-use mesh::{
-    MeshInfo, VertexPackingFeatures, build_packer, detect_global_bones,
-    generate_granny_meshes_from_vertices,
+use mesh::{MeshInfo, VertexPackingFeatures, build_packer, generate_granny_meshes_from_vertices};
+use model_transform::{
+    apply_model_transform, apply_node_transform, normalized_direction, transform_direction,
+    transform_point, transform_skeleton, validate_model_scale,
 };
 use primitive::import_primitive;
+use section::{SectionKind, apply_forced_bone, classify_section};
 use skeleton::import_skeleton;
 
 /// Import options for glTF → UGX conversion.
@@ -45,6 +49,10 @@ pub struct GltfImportOptions {
     /// - `Hw2`: `HalfFloat4` positions, `Dec3N` normals/tangents, PT0NA0S byte order,
     ///   and an in-memory external packer matching the UFX declaration.
     pub version: UgxVersion,
+    /// Uniform authoring-space scale applied to geometry and bone translations.
+    pub model_scale: f32,
+    /// Reflect model space across X, including winding and inverse bind matrices.
+    pub mirror_x: bool,
 }
 
 impl Default for GltfImportOptions {
@@ -53,6 +61,8 @@ impl Default for GltfImportOptions {
             include_skeleton: true,
             include_materials: true,
             version: UgxVersion::Hw2,
+            model_scale: 1.0,
+            mirror_x: false,
         }
     }
 }
@@ -79,13 +89,6 @@ struct PrimitiveFeatures {
     has_skin: bool,
     has_colors: bool,
     max_texcoords: usize,
-}
-
-struct SectionKind {
-    global_bones: bool,
-    rigid_only: bool,
-    bone_index: i32,
-    max_bones: i32,
 }
 
 struct ImportContext<'a> {
@@ -122,6 +125,7 @@ pub fn import_from_gltf(
     buffer_data: Option<&[u8]>,
     options: &GltfImportOptions,
 ) -> Result<UgxGeom> {
+    validate_model_scale(options.model_scale)?;
     let root: gltf_json::Root = serde_json::from_str(json)
         .map_err(|error| Error::UnsupportedFormat(format!("Invalid glTF JSON: {error}")))?;
     let buffer = resolve_buffer(&root, buffer_data)?;
@@ -136,6 +140,12 @@ pub fn import_from_gltf(
         bones.push(bone);
         granny_bones.push(granny_bone);
     }
+    transform_skeleton(
+        &mut bones,
+        &mut granny_bones,
+        options.model_scale,
+        options.mirror_x,
+    )?;
     let mut materials = if options.include_materials {
         import_materials(&root)?
     } else {
@@ -532,12 +542,23 @@ fn import_mesh_primitive(
     if let Some(mesh_node) = mesh_node {
         apply_node_transform(&mut vertices, &mut indices, &mesh_node.transform)?;
     }
-    let features = primitive_features(&vertices, has_skin);
+    apply_model_transform(
+        &mut vertices,
+        &mut indices,
+        context.options.model_scale,
+        context.options.mirror_x,
+    )?;
+    let force_skin = extras.is_some_and(|value| !value.force_bone.is_empty());
+    apply_forced_bone(&mut vertices, extras, context.bones)?;
+    let features = primitive_features(&vertices, has_skin || force_skin);
     let kind = classify_section(
         &vertices,
         features.has_skin,
-        mesh_node,
+        mesh_node.is_some_and(|info| info.has_skin),
+        mesh_node.and_then(|info| info.parent_bone_index),
         !context.bones.is_empty(),
+        extras,
+        context.bones,
     )?;
     let (packer, final_vertices) = prepare_section_vertices(
         vertices,
@@ -559,75 +580,6 @@ fn import_mesh_primitive(
             extras,
         },
     )
-}
-
-fn apply_node_transform(
-    vertices: &mut [UnpackedVertex],
-    indices: &mut [u16],
-    transform: &Matrix4x4,
-) -> Result<()> {
-    let determinant = linear_determinant(transform);
-    if !determinant.is_finite() || determinant.abs() < 1.0e-10 {
-        return Err(Error::UnsupportedFormat(
-            "Mesh node transform is singular".into(),
-        ));
-    }
-    let normal_transform = transform
-        .inverse()
-        .ok_or_else(|| Error::UnsupportedFormat("Mesh node transform is singular".into()))?
-        .transpose();
-    let handedness = determinant.signum();
-    for vertex in vertices {
-        vertex.position = transform_point(vertex.position, transform);
-        let normal = normalized_direction(
-            transform_direction(vertex.normal, &normal_transform),
-            [0.0, 1.0, 0.0],
-        );
-        vertex.normal = normal;
-        let source_tangent = [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]];
-        if squared_length(source_tangent) > 1.0e-12 {
-            let transformed = transform_direction(source_tangent, transform);
-            let fallback = fallback_tangent(normal);
-            let tangent =
-                normalized_direction(transformed, [fallback[0], fallback[1], fallback[2]]);
-            vertex.tangent = [
-                tangent[0],
-                tangent[1],
-                tangent[2],
-                vertex.tangent[3] * handedness,
-            ];
-        }
-    }
-    if determinant < 0.0 {
-        for triangle in indices.as_chunks_mut::<3>().0 {
-            triangle.swap(1, 2);
-        }
-    }
-    Ok(())
-}
-
-fn linear_determinant(matrix: &Matrix4x4) -> f32 {
-    let rows = &matrix.rows;
-    rows[0][0] * (rows[1][1] * rows[2][2] - rows[1][2] * rows[2][1])
-        - rows[0][1] * (rows[1][0] * rows[2][2] - rows[1][2] * rows[2][0])
-        + rows[0][2] * (rows[1][0] * rows[2][1] - rows[1][1] * rows[2][0])
-}
-
-fn normalized_direction(value: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
-    let length_squared = squared_length(value);
-    if !length_squared.is_finite() || length_squared < 1.0e-12 {
-        fallback
-    } else {
-        let inverse_length = length_squared.sqrt().recip();
-        value.map(|component| component * inverse_length)
-    }
-}
-
-fn squared_length(value: [f32; 3]) -> f32 {
-    value
-        .iter()
-        .map(|component| component * component)
-        .sum::<f32>()
 }
 
 fn primitive_features(vertices: &[UnpackedVertex], has_skeleton: bool) -> PrimitiveFeatures {
@@ -656,59 +608,6 @@ fn primitive_features(vertices: &[UnpackedVertex], has_skeleton: bool) -> Primit
             .max()
             .unwrap_or(0),
     }
-}
-
-fn classify_section(
-    vertices: &[UnpackedVertex],
-    has_skin: bool,
-    mesh_node: Option<&MeshNodeInfo>,
-    has_bones: bool,
-) -> Result<SectionKind> {
-    if let Some(bone_index) =
-        mesh_node.and_then(|info| (!info.has_skin).then_some(info.parent_bone_index).flatten())
-    {
-        return Ok(SectionKind {
-            global_bones: true,
-            rigid_only: true,
-            bone_index: checked_i32(bone_index, "rigid bone index")?,
-            max_bones: 1,
-        });
-    }
-    if has_skin && mesh_node.is_some_and(|info| info.has_skin) {
-        let max_bones = vertices
-            .iter()
-            .map(|vertex| {
-                vertex
-                    .bone_weights
-                    .iter()
-                    .filter(|&&weight| weight > 0.0)
-                    .count()
-            })
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        return Ok(SectionKind {
-            global_bones: false,
-            rigid_only: false,
-            bone_index: i32::MAX,
-            max_bones: checked_i32(max_bones, "maximum bone influences")?,
-        });
-    }
-    if has_bones && !has_skin {
-        return Ok(SectionKind {
-            global_bones: false,
-            rigid_only: true,
-            bone_index: 0,
-            max_bones: 1,
-        });
-    }
-    let (global_bones, rigid_only, bone_index, max_bones) = detect_global_bones(vertices, has_skin);
-    Ok(SectionKind {
-        global_bones,
-        rigid_only,
-        bone_index,
-        max_bones,
-    })
 }
 
 fn prepare_section_vertices(
@@ -808,24 +707,6 @@ fn restore_rigid_vertex(
     restored.bone_weights = [0.0; 4];
     restored.bone_indices = [0; 4];
     restored
-}
-
-fn transform_point(value: [f32; 3], matrix: &Matrix4x4) -> [f32; 3] {
-    let rows = &matrix.rows;
-    [
-        value[0] * rows[0][0] + value[1] * rows[1][0] + value[2] * rows[2][0] + rows[3][0],
-        value[0] * rows[0][1] + value[1] * rows[1][1] + value[2] * rows[2][1] + rows[3][1],
-        value[0] * rows[0][2] + value[1] * rows[1][2] + value[2] * rows[2][2] + rows[3][2],
-    ]
-}
-
-fn transform_direction(value: [f32; 3], matrix: &Matrix4x4) -> [f32; 3] {
-    let rows = &matrix.rows;
-    [
-        value[0] * rows[0][0] + value[1] * rows[1][0] + value[2] * rows[2][0],
-        value[0] * rows[0][1] + value[1] * rows[1][1] + value[2] * rows[2][1],
-        value[0] * rows[0][2] + value[1] * rows[1][2] + value[2] * rows[2][2],
-    ]
 }
 
 fn append_section(imported: &mut ImportedMeshes, input: SectionInput<'_>) -> Result<()> {

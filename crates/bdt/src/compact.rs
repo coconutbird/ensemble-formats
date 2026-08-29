@@ -187,7 +187,7 @@ fn build_compact_tree(
         let (name, text) = if num_nv > 0 && nv_start < nvs.len() {
             let nv = &nvs[nv_start];
             let name = read_null_terminated_string(name_data, nv.name_ofs(big_endian) as usize);
-            let text = decode_compact_value(*nv, value_data, big_endian);
+            let text = decode_compact_value(*nv, value_data, big_endian, is_raw_byte_node(&name));
             (name, text)
         } else {
             (String::new(), Variant::Null)
@@ -201,7 +201,8 @@ fn build_compact_tree(
             for nv in &nvs[attr_start..attr_end] {
                 let attr_name =
                     read_null_terminated_string(name_data, nv.name_ofs(big_endian) as usize);
-                let attr_value = decode_compact_value(*nv, value_data, big_endian);
+                let attr_value =
+                    decode_compact_value(*nv, value_data, big_endian, is_raw_byte_node(&attr_name));
                 attributes.push(Attribute {
                     name: attr_name,
                     value: attr_value,
@@ -250,7 +251,12 @@ fn build_compact_tree(
 }
 
 /// Decode a compact `BPackedNameValue` to a Variant.
-fn decode_compact_value(nv: CompactNvRaw, value_data: &[u8], big_endian: bool) -> Variant {
+fn decode_compact_value(
+    nv: CompactNvRaw,
+    value_data: &[u8],
+    big_endian: bool,
+    preserve_raw_string: bool,
+) -> Variant {
     let flags = nv.flags(big_endian);
     let value = nv.value(big_endian);
     let type_class = TypeClass::from_flags(flags);
@@ -306,8 +312,16 @@ fn decode_compact_value(nv: CompactNvRaw, value_data: &[u8], big_endian: bool) -
             value,
             value_data,
             big_endian,
+            preserve_raw_string,
         ),
     }
+}
+
+fn is_raw_byte_node(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "vscbdata" | "pscbdata" | "hscbdata" | "dscbdata" | "gscbdata"
+    )
 }
 
 /// Decode an integer value from a compact name-value entry.
@@ -502,12 +516,21 @@ fn decode_compact_string(
     value: u32,
     value_data: &[u8],
     big_endian: bool,
+    preserve_raw: bool,
 ) -> Variant {
     if is_direct {
         // Direct string: up to 4 bytes in value
         let bytes = value.to_le_bytes();
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(4);
-        Variant::String(String::from_utf8_lossy(&bytes[..end]).into_owned())
+        let bytes = &bytes[..data_size.min(bytes.len())];
+        if preserve_raw {
+            Variant::Bytes(bytes.to_vec())
+        } else {
+            let end = bytes
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(bytes.len());
+            Variant::String(String::from_utf8_lossy(&bytes[..end]).into_owned())
+        }
     } else {
         // String in value data at offset
         let offset = value as usize;
@@ -560,17 +583,17 @@ fn decode_compact_string(
                 Variant::String(String::new())
             }
         } else {
-            // Narrow string (ASCII/UTF-8)
-            if offset < value_data.len() {
-                let end = value_data[offset..]
-                    .iter()
-                    .position(|&b| b == 0)
-                    .unwrap_or(actual_size.min(value_data.len() - offset));
-                Variant::String(
-                    String::from_utf8_lossy(&value_data[offset..offset + end]).into_owned(),
-                )
+            let available = value_data.get(offset..).unwrap_or_default();
+            let byte_count = actual_size.min(available.len());
+            let bytes = &available[..byte_count];
+            if preserve_raw {
+                Variant::Bytes(bytes.to_vec())
             } else {
-                Variant::String(String::new())
+                let end = bytes
+                    .iter()
+                    .position(|&byte| byte == 0)
+                    .unwrap_or(bytes.len());
+                Variant::String(String::from_utf8_lossy(&bytes[..end]).into_owned())
             }
         }
     }

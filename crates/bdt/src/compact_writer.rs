@@ -192,6 +192,7 @@ impl CompactCtx {
                 Ok((flags, offset))
             }
             Variant::String(s) => self.encode_string_value(s),
+            Variant::Bytes(bytes) => self.encode_byte_string_value(bytes),
             Variant::Null => Ok((0x0002, 0)),
             Variant::UString(_) => Err(Error::UnsupportedCompactVariant("UTF-16 string")),
             Variant::Fract24(_) => Err(Error::UnsupportedCompactVariant("24-bit fraction")),
@@ -199,7 +200,13 @@ impl CompactCtx {
     }
 
     fn encode_string_value(&mut self, s: &str) -> Result<(u16, u32)> {
-        let bytes = s.as_bytes();
+        self.encode_byte_string_value(s.as_bytes())
+    }
+
+    /// Encode a narrow, length-delimited string payload without interpreting
+    /// its bytes. Compact BDT uses this representation for both UTF-8 text and
+    /// raw Hogan constant-buffer data.
+    fn encode_byte_string_value(&mut self, bytes: &[u8]) -> Result<(u16, u32)> {
         let len = bytes.len();
 
         if len <= 4 {
@@ -622,5 +629,23 @@ mod tests {
             parsed.get_attribute("Long").unwrap().value,
             Variant::String(expected)
         );
+    }
+
+    #[test]
+    fn compact_roundtrip_hogan_constant_buffer_bytes() {
+        let expected = vec![
+            0x00, 0x00, 0x40, 0x3F, 0xCD, 0xCC, 0xCC, 0x3D, 0x00, 0x80, 0xFF, 0x7F,
+        ];
+        let mut root = Node::new("HoganMaterial");
+        let mut cb = Node::new("PSCBData");
+        cb.text = Variant::Bytes(expected.clone());
+        root.children.push(cb);
+
+        let data = CompactWriter::write(&root).unwrap();
+        let parsed = Reader::read(&data, Endian::Little)
+            .unwrap()
+            .expect("Hogan material tree");
+
+        assert_eq!(parsed.children[0].text, Variant::Bytes(expected));
     }
 }

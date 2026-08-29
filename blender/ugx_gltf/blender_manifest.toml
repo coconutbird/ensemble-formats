@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "ugx_gltf"
-version = "0.1.0"
+version = "0.3.0"
 name = "UGX glTF"
 tagline = "Import and export Halo Wars UGX models through glTF"
 maintainer = "coconutbird"

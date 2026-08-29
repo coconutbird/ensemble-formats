@@ -138,6 +138,13 @@ pub enum Variant {
     String(String),
     /// UTF-16 string (wide), stored as a Rust `String` after decoding.
     UString(String),
+    /// Raw bytes encoded with the compact format's length-delimited string type.
+    ///
+    /// Some game data, notably Hogan material constant buffers, deliberately
+    /// stores arbitrary binary in this field even though the BDT type is named
+    /// "string". Keeping bytes distinct avoids UTF-8 replacement and embedded
+    /// NUL truncation during a read/write cycle.
+    Bytes(Vec<u8>),
     /// Vector of 2–4 floats (e.g. position, color).
     FloatVec(Vec<f32>),
     /// 24-bit fixed-point fraction (value × 10 000, sign-magnitude).
@@ -175,6 +182,7 @@ impl Variant {
                 }
             }
             Variant::String(s) | Variant::UString(s) => s.clone(),
+            Variant::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
             Variant::FloatVec(v) => v
                 .iter()
                 .map(alloc::string::ToString::to_string)

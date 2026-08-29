@@ -13,7 +13,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use gltf_json as json;
 use ugx::{Error, Matrix4x4, Result, Section, UgxGeom, UnpackedVertex};
 
-use crate::extras::{MeshExtrasJson, SceneExtrasJson, to_raw_value};
+use crate::extras::{MeshExtrasJson, SceneExtrasJson, SectionModeJson, to_raw_value};
 use material::build_materials;
 use primitive::{PrimitiveInput, PrimitiveOutput, create_primitive};
 use skeleton::{
@@ -299,9 +299,24 @@ fn build_mesh_extras(
     let hw2_color_before_skin = geometry
         .infer_hw2_skin_order(section_index)?
         .is_some_and(|order| order == ugx::Hw2SkinOrder::ColorThenSkin);
+    let section_mode = if section.global_bones {
+        SectionModeJson::Global
+    } else if section.rigid_only {
+        SectionModeJson::Rigid
+    } else {
+        SectionModeJson::Skinned
+    };
+    let binding_bone = (section.global_bones || section.rigid_only)
+        .then(|| usize::try_from(section.rigid_bone_index).ok())
+        .flatten()
+        .and_then(|index| geometry.bones.get(index))
+        .map_or_else(String::new, |bone| bone.name.clone());
     let mut extras = MeshExtrasJson {
         hw2_has_color,
         hw2_color_before_skin,
+        section_mode,
+        binding_bone,
+        max_bones: Some(section.max_bones),
         lod_near_distance: section.lod_near_distance,
         lod_far_distance: section.lod_far_distance,
         lod_fade_distance: section.lod_fade_distance,

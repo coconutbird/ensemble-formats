@@ -19,6 +19,7 @@ EXTENSION_FILES = (
     "blender_manifest.toml",
     "bridge.py",
     "glb.py",
+    "metadata.py",
     "operators.py",
     "preferences.py",
     "properties.py",

@@ -66,6 +66,12 @@ enum Commands {
         /// Target game version: "hw1" for Halo Wars DE (v4) or "hw2" for Halo Wars 2 (v6)
         #[arg(long, default_value = "hw2")]
         version: String,
+        /// Uniform authoring-space scale applied to geometry and skeleton translations
+        #[arg(long, default_value_t = 1.0)]
+        scale: f32,
+        /// Reflect authoring space across X (also fixes winding and bind matrices)
+        #[arg(long)]
+        mirror_x: bool,
     },
     /// Convert a UGX directly between the HW1 v4 and HW2 v6 representations
     Convert {
@@ -126,9 +132,11 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
             output,
             no_skeleton,
             version,
+            scale,
+            mirror_x,
         } => {
             let ugx_version = parse_ugx_version(&version)?;
-            cmd_from_gltf(&input, &output, no_skeleton, ugx_version)?;
+            cmd_from_gltf(&input, &output, no_skeleton, ugx_version, scale, mirror_x)?;
         }
         Commands::Convert {
             input,
@@ -216,6 +224,8 @@ fn cmd_from_gltf(
     output: &Path,
     no_skeleton: bool,
     version: UgxVersion,
+    scale: f32,
+    mirror_x: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let source = crate::gltf_io::read(input)?;
 
@@ -223,6 +233,8 @@ fn cmd_from_gltf(
         include_skeleton: !no_skeleton,
         include_materials: true,
         version,
+        model_scale: scale,
+        mirror_x,
     };
 
     let geom = import_from_gltf(&source.json, source.buffer.as_deref(), &options)?;

@@ -25,11 +25,14 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 
 `blender/ugx_gltf` is a Blender 4.2+ import/export extension backed by the Rust
 `ugx-gltf` converter. It supports editable UGX meshes, materials, skeletons,
-skin weights, and UGX-specific glTF metadata. Build an installable archive for
+skin weights, and UGX-specific glTF metadata. Its Blender panels expose legacy
+render flags and all texture bindings, Hogan shader metadata and parameters,
+section binding/LOD/layout controls, model instance settings, and a legacy
+Stumpy/3ds Max coordinate-and-weight repair. Build an installable archive for
 the current platform with:
 
 ```text
-python blender/package_extension.py
+mise run blender:package
 ```
 
 See [`blender/ugx_gltf/README.md`](blender/ugx_gltf/README.md) for installation,

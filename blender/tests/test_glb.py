@@ -54,6 +54,50 @@ class GlbTests(unittest.TestCase):
             {"keep": True, "ugx_max_instances": 7},
         )
 
+    def test_update_ugx_extras_restores_exact_unsigned_material_values(self):
+        document = glb.GlbDocument(
+            {
+                "asset": {"version": "2.0"},
+                "scene": 0,
+                "scenes": [{}],
+                "materials": [
+                    {
+                        "name": "hogan",
+                        "extras": {"keep": True, "ugx_stale": 1},
+                    }
+                ],
+            },
+            [],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "model.glb"
+            path.write_bytes(glb.encode_glb(document))
+
+            glb.update_ugx_extras(
+                path,
+                {"ugx_max_instances": 3},
+                {
+                    "hogan": {
+                        "ugx_material_version": 5,
+                        "ugx_hogan": {
+                            "shader_permutations": [
+                                {"name": "HOGAN_STANDARD_0", "hash": 0xFFFFFFFF}
+                            ]
+                        },
+                    }
+                },
+            )
+
+            updated = glb.decode_glb(path.read_bytes()).json_document
+        self.assertEqual(updated["scenes"][0]["extras"]["ugx_max_instances"], 3)
+        extras = updated["materials"][0]["extras"]
+        self.assertTrue(extras["keep"])
+        self.assertNotIn("ugx_stale", extras)
+        self.assertEqual(
+            extras["ugx_hogan"]["shader_permutations"][0]["hash"],
+            0xFFFFFFFF,
+        )
+
     def test_rejects_header_length_mismatch(self):
         malformed = struct.pack("<4sII", b"glTF", 2, 16) + b"\0" * 4
         malformed = malformed[:-1]

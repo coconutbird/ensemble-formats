@@ -378,6 +378,38 @@ pub(crate) struct MeshExtrasJson {
     )]
     pub hw2_color_before_skin: bool,
 
+    /// Exact section binding mode. `Auto` derives it from the glTF hierarchy.
+    #[serde(
+        rename = "ugx_section_mode",
+        default,
+        skip_serializing_if = "is_default"
+    )]
+    pub section_mode: SectionModeJson,
+
+    /// Bone used by rigid/global sections, resolved by name after Blender export.
+    #[serde(
+        rename = "ugx_binding_bone",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub binding_bone: String,
+
+    /// Optional authoring override that binds every skinned vertex to one bone.
+    #[serde(
+        rename = "ugx_force_bone",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub force_bone: String,
+
+    /// Exact section `MaxBones` value; omitted when it should be derived.
+    #[serde(
+        rename = "ugx_max_bones",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_bones: Option<i32>,
+
     /// LOD near transition distance (HW2 section +0x2C).
     /// Omitted when `0.0` (default for single-LOD or closest LOD).
     #[serde(
@@ -411,9 +443,34 @@ impl MeshExtrasJson {
             && self.granny_mesh_index.is_none()
             && !self.hw2_has_color
             && !self.hw2_color_before_skin
+            && self.section_mode.is_auto()
+            && self.binding_bone.is_empty()
+            && self.force_bone.is_empty()
+            && self.max_bones.is_none()
             && is_zero(self.lod_near_distance)
             && is_f32_max(self.lod_far_distance)
             && is_zero(self.lod_fade_distance)
+    }
+}
+
+/// How a glTF mesh should be represented by the UGX section renderer.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum SectionModeJson {
+    /// Infer rigid/skinned behavior from the glTF skin and node hierarchy.
+    #[default]
+    Auto,
+    /// Keep blend indices and weights in the vertex buffer.
+    Skinned,
+    /// Remove skin data and bind the section rigidly to one bone.
+    Rigid,
+    /// Use the HW1 `GlobalBones` rigid-section convention.
+    Global,
+}
+
+impl SectionModeJson {
+    fn is_auto(self) -> bool {
+        self == Self::Auto
     }
 }
 

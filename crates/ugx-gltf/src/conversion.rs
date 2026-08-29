@@ -31,6 +31,7 @@ pub fn convert_ugx_version(source: &UgxGeom, target: UgxVersion) -> Result<UgxGe
             include_skeleton: true,
             include_materials: true,
             version: target,
+            ..GltfImportOptions::default()
         },
     )?;
     validate_conversion(source, &converted, target)?;

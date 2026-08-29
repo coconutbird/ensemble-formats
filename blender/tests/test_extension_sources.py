@@ -8,6 +8,7 @@ import unittest
 
 
 EXTENSION_DIR = Path(__file__).parents[1] / "ugx_gltf"
+PACKAGE_SCRIPT = Path(__file__).parents[1] / "package_extension.py"
 
 
 class ExtensionSourceTests(unittest.TestCase):
@@ -28,6 +29,12 @@ class ExtensionSourceTests(unittest.TestCase):
         self.assertEqual(manifest["type"], "add-on")
         self.assertGreaterEqual(manifest["blender_version_min"], "4.2.0")
         self.assertIn("files", manifest["permissions"])
+
+    def test_packager_includes_every_extension_python_module(self):
+        package_source = PACKAGE_SCRIPT.read_text(encoding="utf-8")
+        for path in sorted(EXTENSION_DIR.glob("*.py")):
+            with self.subTest(path=path.name):
+                self.assertIn(f'"{path.name}"', package_source)
 
 
 if __name__ == "__main__":

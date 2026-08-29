@@ -278,12 +278,12 @@ fn variant_to_bool(v: &bdt::Variant) -> bool {
 
 /// Extract raw bytes from a BDT variant used for constant buffer data.
 ///
-/// CB data is stored as a BDT "string" node containing raw binary. Because
-/// the BDT reader decodes strings via `from_utf8_lossy`, non-UTF-8 binary
-/// data may have been corrupted. A future `Bytes` variant would fix this.
+/// CB data is stored as a compact BDT "string" node containing raw binary.
+/// The BDT reader represents non-text payloads as [`bdt::Variant::Bytes`].
 fn variant_to_bytes(v: &bdt::Variant) -> Vec<u8> {
     match v {
         bdt::Variant::String(s) | bdt::Variant::UString(s) => s.as_bytes().to_vec(),
+        bdt::Variant::Bytes(bytes) => bytes.clone(),
         bdt::Variant::UInt(u) => {
             if *u == 0 {
                 Vec::new()

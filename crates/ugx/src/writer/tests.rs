@@ -251,6 +251,51 @@ fn detects_written_ugx_version() {
 }
 
 #[test]
+fn hogan_constant_buffers_roundtrip_as_exact_bytes() {
+    let mut geom = make_test_geom();
+    let expected = HoganMaterialData {
+        shader_permutations: vec![ShaderPermutation {
+            name: "HOGAN_STANDARD_00000000003009A0".to_string(),
+            hash: u32::MAX,
+        }],
+        ufx_version: 9,
+        blend_mode: 2,
+        shadow_requires_consts: true,
+        skinned: false,
+        terrain_blending: true,
+        vs_cb_data: vec![0x00, 0xFF, 0x80],
+        ps_cb_data: vec![
+            0x00, 0x00, 0x40, 0x3F, 0xCD, 0xCC, 0xCC, 0x3D, 0x00, 0x80, 0xFF, 0x7F, 0x00, 0x00,
+            0x00, 0x00,
+        ],
+        hs_cb_data: (0_u8..=129).collect(),
+        ds_cb_data: Vec::new(),
+        gs_cb_data: vec![0xDE, 0x00, 0xAD, 0xFF, 0xBE, 0xEF],
+        textures: r"art\test\model_[al]".to_string(),
+    };
+    geom.materials = vec![Material {
+        name: String::new(),
+        material_version: 5,
+        data: MaterialData::Hogan(Box::new(expected.clone())),
+    }];
+
+    let bytes = write_ugx(&geom, UgxVersion::Hw2).unwrap();
+    let read_back = crate::Reader::read(&bytes).unwrap();
+    let actual = read_back.materials[0].hogan().expect("Hogan material");
+
+    assert_eq!(
+        actual.shader_permutations[0].name,
+        expected.shader_permutations[0].name
+    );
+    assert_eq!(actual.shader_permutations[0].hash, u32::MAX);
+    assert_eq!(actual.vs_cb_data, expected.vs_cb_data);
+    assert_eq!(actual.ps_cb_data, expected.ps_cb_data);
+    assert_eq!(actual.hs_cb_data, expected.hs_cb_data);
+    assert_eq!(actual.ds_cb_data, expected.ds_cb_data);
+    assert_eq!(actual.gs_cb_data, expected.gs_cb_data);
+}
+
+#[test]
 fn test_write_read_materials_roundtrip() {
     let mut geom = make_test_geom();
     let mut animated_uvw = [[0.0; 3]; MapType::NUM_TYPES];

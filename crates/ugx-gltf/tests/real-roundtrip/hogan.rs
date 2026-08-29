@@ -78,6 +78,7 @@ fn inspect_file(path: &Path, stats: &mut HoganStats) -> Result<(), String> {
             version: UgxVersion::Hw2,
             include_skeleton: true,
             include_materials: true,
+            ..GltfImportOptions::default()
         },
     )
     .map_err(|error| format!("{}: import: {error}", path.display()))?;

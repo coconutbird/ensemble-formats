@@ -145,3 +145,64 @@ def update_scene_extras(path: Path, extras: Mapping[str, object]) -> None:
         raise GlbError("Exported GLB scene extras are not an object")
     current_extras.update(extras)
     path.write_bytes(encode_glb(document))
+
+
+def update_ugx_extras(
+    path: Path,
+    scene_extras: Mapping[str, object],
+    material_extras: Mapping[str, Mapping[str, object]],
+) -> None:
+    """Write exact scene and named-material UGX metadata into an exported GLB.
+
+    Blender ID properties use signed 32-bit integers, while UGX has unsigned
+    32-bit hashes and indices. This final JSON merge restores their exact types
+    after Blender's glTF exporter has finished.
+
+    Raises:
+        GlbError: If the GLB scene/material structure or name mapping is invalid.
+        OSError: If the file cannot be read or replaced.
+    """
+    document = decode_glb(path.read_bytes())
+    root = document.json_document
+
+    scenes = root.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        raise GlbError("Exported GLB contains no scenes")
+    scene_index = root.get("scene", 0)
+    if not isinstance(scene_index, int) or not 0 <= scene_index < len(scenes):
+        raise GlbError("Exported GLB has an invalid active scene index")
+    scene = scenes[scene_index]
+    if not isinstance(scene, dict):
+        raise GlbError("Exported GLB scene is not an object")
+    current_scene_extras = scene.setdefault("extras", {})
+    if not isinstance(current_scene_extras, dict):
+        raise GlbError("Exported GLB scene extras are not an object")
+    current_scene_extras.update(scene_extras)
+
+    materials = root.get("materials", [])
+    if not isinstance(materials, list):
+        raise GlbError("Exported GLB materials are not an array")
+    exported_by_name = {}
+    for material in materials:
+        if not isinstance(material, dict):
+            raise GlbError("Exported GLB material is not an object")
+        name = material.get("name")
+        if isinstance(name, str):
+            exported_by_name[name] = material
+
+    missing = sorted(set(material_extras) - set(exported_by_name))
+    if missing:
+        raise GlbError(
+            "Exported GLB is missing UGX materials: " + ", ".join(missing)
+        )
+    for name, exact_extras in material_extras.items():
+        material = exported_by_name[name]
+        current = material.setdefault("extras", {})
+        if not isinstance(current, dict):
+            raise GlbError(f"Exported material '{name}' extras are not an object")
+        for key in tuple(current):
+            if key.startswith("ugx_"):
+                del current[key]
+        current.update(exact_extras)
+
+    path.write_bytes(encode_glb(document))

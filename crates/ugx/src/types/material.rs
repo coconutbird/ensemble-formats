@@ -204,9 +204,8 @@ pub struct HoganMaterialData {
     /// buffer, then `memcpy`s this data into the VS constant buffer before
     /// rendering.  Empty means the shader uses its compiled-in defaults.
     ///
-    /// **Note:** BDT currently decodes all "string" nodes via
-    /// `from_utf8_lossy`, so non-UTF-8 binary data may be corrupted on
-    /// roundtrip.  A future `Bytes` variant would fix this.
+    /// Compact BDT exposes these nominal string payloads as raw bytes so
+    /// embedded NUL and non-UTF-8 data round-trip unchanged.
     pub vs_cb_data: Vec<u8>,
     /// Pixel shader constant buffer initialization data (see [`vs_cb_data`](Self::vs_cb_data)).
     pub ps_cb_data: Vec<u8>,

@@ -30,7 +30,7 @@ fn push_cb_node(parent: &mut bdt::Node, name: &str, data: &[u8]) {
     if data.is_empty() {
         node.text = bdt::Variant::UInt(0);
     } else {
-        node.text = bdt::Variant::String(alloc::string::String::from_utf8_lossy(data).into_owned());
+        node.text = bdt::Variant::Bytes(data.to_vec());
     }
     parent.children.push(node);
 }

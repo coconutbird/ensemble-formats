@@ -1,0 +1,3 @@
+[tasks."blender:package"]
+description = "Build an installable Blender UGX extension archive for the current platform"
+run = "python blender/package_extension.py"

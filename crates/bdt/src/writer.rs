@@ -365,6 +365,9 @@ fn pack_variant(variant: &Variant, buf: &mut VariantBuffer) -> Result<u32> {
         Variant::Double(v) => buf.add_double(*v),
         Variant::String(s) => buf.add_string(s),
         Variant::UString(s) => buf.add_ustring(s),
+        Variant::Bytes(_) => Err(Error::InvalidString(
+            "raw byte variants require the compact BDT writer".into(),
+        )),
         Variant::FloatVec(v) => buf.add_float_vec(v),
     }
 }
