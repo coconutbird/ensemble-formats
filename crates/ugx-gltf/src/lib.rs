@@ -17,6 +17,9 @@
 mod extras;
 mod hogan_cb_layout;
 
+mod conversion;
+pub use conversion::{convert_ugx_version, convert_ugx_version_to_bytes};
+
 mod export;
 pub use export::{GltfExport, GltfExportOptions, export_to_gltf, export_to_gltf_with_buffer_name};
 

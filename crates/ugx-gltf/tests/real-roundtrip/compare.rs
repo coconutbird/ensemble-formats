@@ -2,7 +2,7 @@ use ugx::{
     GrannyBone, GrannyLocalTransform, HoganMaterialData, LegacyMaterialData, MapType, Material,
     MaterialData, UgxGeom, UgxVersion, UnpackedVertex,
 };
-use ugx_gltf::{GltfExportOptions, GltfImportOptions, export_to_gltf, import_from_gltf};
+use ugx_gltf::convert_ugx_version_to_bytes;
 
 pub(super) enum RoundtripResult {
     Passed,
@@ -15,15 +15,23 @@ pub(super) fn roundtrip_bytes(label: &str, data: &[u8], version: UgxVersion) -> 
         Ok(geometry) => geometry,
         Err(error) => return RoundtripResult::ReadSkipped(format!("{label}: read: {error}")),
     };
-    let reread = match export_import_write(&original, version) {
+    compare_converted_geometry(label, &original, version)
+}
+
+pub(super) fn compare_converted_geometry(
+    label: &str,
+    original: &UgxGeom,
+    target: UgxVersion,
+) -> RoundtripResult {
+    let reread = match convert_write(original, target) {
         Ok(geometry) => geometry,
         Err(error) => return RoundtripResult::Failed(format!("{label}: {error}")),
     };
     let comparison = Comparison {
         label,
-        original: &original,
+        original,
         reread: &reread,
-        version,
+        version: target,
     };
     match comparison.run() {
         Ok(()) => RoundtripResult::Passed,
@@ -31,28 +39,9 @@ pub(super) fn roundtrip_bytes(label: &str, data: &[u8], version: UgxVersion) -> 
     }
 }
 
-fn export_import_write(original: &UgxGeom, version: UgxVersion) -> Result<UgxGeom, String> {
-    let export = export_to_gltf(
-        original,
-        &GltfExportOptions {
-            embed_buffers: false,
-            include_materials: true,
-            include_skeleton: true,
-        },
-    )
-    .map_err(|error| format!("export: {error}"))?;
-    let imported = import_from_gltf(
-        &export.json,
-        export.buffer.as_deref(),
-        &GltfImportOptions {
-            version,
-            include_skeleton: true,
-            include_materials: true,
-        },
-    )
-    .map_err(|error| format!("import: {error}"))?;
-    let bytes =
-        ugx::Writer::write(&imported, version).map_err(|error| format!("write: {error}"))?;
+fn convert_write(original: &UgxGeom, version: UgxVersion) -> Result<UgxGeom, String> {
+    let bytes = convert_ugx_version_to_bytes(original, version)
+        .map_err(|error| format!("convert/write: {error}"))?;
     ugx::Reader::read(&bytes).map_err(|error| format!("re-read: {error}"))
 }
 
@@ -72,7 +61,10 @@ impl Comparison<'_> {
         self.compare_granny_bones()?;
         self.compare_bone_bindings()?;
         self.compare_indices()?;
-        if self.original.aabb_tree.is_some() && self.reread.aabb_tree.is_none() {
+        if self.version.has_aabb_tree()
+            && !self.original.sections.is_empty()
+            && self.reread.aabb_tree.is_none()
+        {
             return Err(format!("{}: AABB tree lost during roundtrip", self.label));
         }
         Ok(())
@@ -125,6 +117,7 @@ impl Comparison<'_> {
     }
 
     fn compare_materials(&self) -> Result<(), String> {
+        let skinned_materials = ugx::types::convert::material_skinned_flags(self.original);
         for (material_index, (source, result)) in self
             .original
             .materials
@@ -141,7 +134,10 @@ impl Comparison<'_> {
             let converted = ugx::types::convert::convert_material(
                 source,
                 self.version == UgxVersion::Hw2,
-                false,
+                skinned_materials
+                    .get(material_index)
+                    .copied()
+                    .unwrap_or(false),
             );
             compare_material(self.label, material_index, &converted, result)?;
         }

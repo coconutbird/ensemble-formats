@@ -7,7 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use ugx::{Reader as UgxReader, UgxVersion, Writer as UgxWriter};
 use ugx_gltf::{
-    GltfExportOptions, GltfImportOptions, export_to_gltf_with_buffer_name, import_from_gltf,
+    GltfExportOptions, GltfImportOptions, convert_ugx_version_to_bytes,
+    export_to_gltf_with_buffer_name, import_from_gltf,
 };
 
 #[derive(Parser)]
@@ -66,6 +67,21 @@ enum Commands {
         #[arg(long, default_value = "hw2")]
         version: String,
     },
+    /// Convert a UGX directly between the HW1 v4 and HW2 v6 representations
+    Convert {
+        /// Input UGX file
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Output UGX file
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Target game version: "hw1"/"v4" or "hw2"/"v6"
+        #[arg(long)]
+        version: String,
+        /// Skip checksum validation on the source file
+        #[arg(long)]
+        no_verify: bool,
+    },
     /// Dump ECF structure for debugging
     Dump {
         /// Input UGX file
@@ -111,16 +127,15 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
             no_skeleton,
             version,
         } => {
-            let ugx_version = match version.to_lowercase().as_str() {
-                "hw1" | "de" | "v4" => UgxVersion::Hw1,
-                "hw2" | "v6" => UgxVersion::Hw2,
-                other => {
-                    eprintln!("Unknown version '{other}', expected 'hw1' or 'hw2'");
-                    std::process::exit(1);
-                }
-            };
+            let ugx_version = parse_ugx_version(&version)?;
             cmd_from_gltf(&input, &output, no_skeleton, ugx_version)?;
         }
+        Commands::Convert {
+            input,
+            output,
+            version,
+            no_verify,
+        } => cmd_convert(&input, &output, parse_ugx_version(&version)?, no_verify)?,
         Commands::Dump { input } => cmd_dump(&input)?,
         Commands::Diff {
             original,
@@ -130,6 +145,14 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn parse_ugx_version(value: &str) -> Result<UgxVersion, Box<dyn std::error::Error>> {
+    match value.to_lowercase().as_str() {
+        "hw1" | "de" | "v4" => Ok(UgxVersion::Hw1),
+        "hw2" | "v6" => Ok(UgxVersion::Hw2),
+        other => Err(format!("unknown version '{other}', expected 'hw1' or 'hw2'").into()),
+    }
 }
 
 fn cmd_to_gltf(
@@ -204,8 +227,9 @@ fn cmd_from_gltf(
 
     let geom = import_from_gltf(&source.json, source.buffer.as_deref(), &options)?;
 
-    // Write UGX
-    let ugx_data = UgxWriter::write(&geom, version)?;
+    // Serialize and strictly read the selected target representation before
+    // exposing it to Blender or another glTF caller.
+    let ugx_data = write_verified_ugx(&geom, version)?;
     fs::write(output, &ugx_data)?;
 
     println!("Wrote {}", output.display());
@@ -222,6 +246,57 @@ fn cmd_from_gltf(
         geom.total_triangles()
     );
 
+    Ok(())
+}
+
+fn write_verified_ugx(
+    geometry: &ugx::UgxGeom,
+    version: UgxVersion,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let bytes = UgxWriter::write(geometry, version)?;
+    let detected = ugx::detect_version(&bytes)?;
+    if detected != version {
+        return Err(
+            format!("writer produced {detected:?} data while {version:?} was requested").into(),
+        );
+    }
+    UgxReader::read(&bytes)?;
+    Ok(bytes)
+}
+
+fn cmd_convert(
+    input: &Path,
+    output: &Path,
+    target: UgxVersion,
+    no_verify: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let data = fs::read(input)?;
+    let source_version = if no_verify {
+        ugx::detect_version_with_options(&data, ugx::ReadOptions::unchecked_checksums())?
+    } else {
+        ugx::detect_version(&data)?
+    };
+    let source = if no_verify {
+        ugx::UgxGeom::from_bytes_unchecked(&data)?
+    } else {
+        UgxReader::read(&data)?
+    };
+    let converted = convert_ugx_version_to_bytes(&source, target)?;
+    fs::write(output, converted)?;
+
+    println!(
+        "Converted {} from {source_version:?} to {target:?}",
+        input.display()
+    );
+    println!("Wrote {}", output.display());
+    println!(
+        "Preserved {} sections, {} materials, {} bones, {} vertices, and {} triangles",
+        source.sections.len(),
+        source.materials.len(),
+        source.bones.len(),
+        source.total_vertices(),
+        source.total_triangles()
+    );
     Ok(())
 }
 

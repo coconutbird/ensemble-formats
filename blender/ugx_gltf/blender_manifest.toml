@@ -1,0 +1,23 @@
+schema_version = "1.0.0"
+
+id = "ugx_gltf"
+version = "0.1.0"
+name = "UGX glTF"
+tagline = "Import and export Halo Wars UGX models through glTF"
+maintainer = "coconutbird"
+type = "add-on"
+
+website = "https://github.com/coconutbird/ensemble-formats"
+tags = ["Import-Export"]
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+
+[permissions]
+files = "Import and export UGX models and run the Rust converter"
+
+[build]
+paths_exclude_pattern = [
+    "__pycache__/",
+    "*.pyc",
+    "/bin/",
+]

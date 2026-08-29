@@ -10,6 +10,9 @@ mod mesh;
 mod primitive;
 mod skeleton;
 
+#[cfg(test)]
+mod tests;
+
 use ugx::types::MaterialData;
 use ugx::types::convert::convert_geom_materials;
 use ugx::{
@@ -742,9 +745,12 @@ fn prepare_section_vertices(
     let matrix = usize::try_from(kind.bone_index)
         .ok()
         .and_then(|index| world_matrices.get(index));
+    let normal_matrix = matrix
+        .and_then(Matrix4x4::inverse)
+        .map(|inverse| inverse.transpose());
     let restored = vertices
         .iter()
-        .map(|vertex| restore_rigid_vertex(vertex, matrix))
+        .map(|vertex| restore_rigid_vertex(vertex, matrix, normal_matrix.as_ref()))
         .collect();
     (packer, restored)
 }
@@ -779,17 +785,26 @@ fn fallback_tangent(normal: [f32; 3]) -> [f32; 4] {
     [tangent[0], tangent[1], tangent[2], 1.0]
 }
 
-fn restore_rigid_vertex(vertex: &UnpackedVertex, matrix: Option<&Matrix4x4>) -> UnpackedVertex {
+fn restore_rigid_vertex(
+    vertex: &UnpackedVertex,
+    matrix: Option<&Matrix4x4>,
+    normal_matrix: Option<&Matrix4x4>,
+) -> UnpackedVertex {
     let mut restored = vertex.clone();
     if let Some(matrix) = matrix {
         restored.position = transform_point(vertex.position, matrix);
-        restored.normal = transform_direction(vertex.normal, matrix);
         let tangent = transform_direction(
             [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]],
             matrix,
         );
+        let fallback = fallback_tangent(vertex.normal);
+        let tangent = normalized_direction(tangent, [fallback[0], fallback[1], fallback[2]]);
         restored.tangent = [tangent[0], tangent[1], tangent[2], vertex.tangent[3]];
     }
+    let normal = normal_matrix.map_or(vertex.normal, |transform| {
+        transform_direction(vertex.normal, transform)
+    });
+    restored.normal = normalized_direction(normal, [0.0, 1.0, 0.0]);
     restored.bone_weights = [0.0; 4];
     restored.bone_indices = [0; 4];
     restored
@@ -953,20 +968,14 @@ fn merge_preserved_granny_meshes(
 }
 
 fn convert_materials_for_version(geometry: &mut UgxGeom, version: UgxVersion) {
-    let convert_to_hogan = version == UgxVersion::Hw2
-        && geometry
-            .materials
-            .iter()
-            .any(|material| matches!(&material.data, MaterialData::Legacy(_)));
-    let convert_to_legacy = version == UgxVersion::Hw1
-        && geometry
-            .materials
-            .iter()
-            .any(|material| matches!(&material.data, MaterialData::Hogan(_)));
-    if convert_to_hogan {
-        geometry.materials = convert_geom_materials(geometry, true);
-    } else if convert_to_legacy {
-        geometry.materials = convert_geom_materials(geometry, false);
+    let needs_conversion = geometry.materials.iter().any(|material| match version {
+        UgxVersion::Hw1 => {
+            material.material_version != 4 || matches!(&material.data, MaterialData::Hogan(_))
+        }
+        UgxVersion::Hw2 => matches!(&material.data, MaterialData::Legacy(_)),
+    });
+    if needs_conversion {
+        geometry.materials = convert_geom_materials(geometry, version == UgxVersion::Hw2);
     }
 }
 

@@ -105,6 +105,31 @@ fn assert_near(actual: f32, expected: f32) {
 }
 
 #[test]
+fn rigid_export_uses_inverse_transpose_for_normals() {
+    let model_to_bone = Matrix4x4 {
+        rows: [
+            [0.5, 0.0, 0.0, 0.0],
+            [0.0, 0.25, 0.0, 0.0],
+            [0.0, 0.0, 0.125, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    };
+    let mut source = vertex([1.0, 2.0, 3.0]);
+    source.normal = [0.2, 0.3, 0.4];
+    source.tangent = [0.4, 0.3, 0.2, -1.0];
+
+    let converted = prepare_vertices(&[source], Some(0), &[model_to_bone]).unwrap();
+
+    assert_near(converted[0].normal[0], 0.4);
+    assert_near(converted[0].normal[1], 1.2);
+    assert_near(converted[0].normal[2], 3.2);
+    assert_near(converted[0].tangent[0], 0.2);
+    assert_near(converted[0].tangent[1], 0.075);
+    assert_near(converted[0].tangent[2], 0.025);
+    assert_eq!(converted[0].tangent[3].to_bits(), (-1.0f32).to_bits());
+}
+
+#[test]
 fn exports_the_detected_uv_set_count() {
     let no_uvs = vec![vertex([0.0; 3]); 3];
     let built = build_primitive(&no_uvs, false, 0, -1);

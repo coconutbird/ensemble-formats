@@ -226,16 +226,24 @@ fn prepare_vertices(
     let matrix = matrices.get(bone_index).ok_or_else(|| {
         Error::UnsupportedFormat("Rigid section references a missing bone matrix".into())
     })?;
+    let normal_matrix = matrix
+        .inverse()
+        .ok_or_else(|| Error::UnsupportedFormat("Rigid bone transform is singular".into()))?
+        .transpose();
     Ok(vertices
         .iter()
-        .map(|vertex| transform_rigid_vertex(vertex, matrix))
+        .map(|vertex| transform_rigid_vertex(vertex, matrix, &normal_matrix))
         .collect())
 }
 
-fn transform_rigid_vertex(vertex: &UnpackedVertex, matrix: &Matrix4x4) -> UnpackedVertex {
+fn transform_rigid_vertex(
+    vertex: &UnpackedVertex,
+    matrix: &Matrix4x4,
+    normal_matrix: &Matrix4x4,
+) -> UnpackedVertex {
     let mut transformed = vertex.clone();
     transformed.position = transform_point(vertex.position, matrix);
-    transformed.normal = transform_direction(vertex.normal, matrix);
+    transformed.normal = transform_direction(vertex.normal, normal_matrix);
     let tangent = transform_direction(
         [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]],
         matrix,

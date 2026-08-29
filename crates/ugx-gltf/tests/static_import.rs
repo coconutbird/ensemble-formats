@@ -114,6 +114,25 @@ fn static_mesh_gets_required_root_binding() {
 }
 
 #[test]
+fn hw1_import_normalizes_legacy_material_revision() {
+    let mut root: serde_json::Value = serde_json::from_str(&triangle_gltf(true)).unwrap();
+    root["materials"][0]["extras"] = serde_json::json!({"ugx_material_version": 5});
+
+    let geometry = import_from_gltf(
+        &root.to_string(),
+        Some(&triangle_buffer()),
+        &GltfImportOptions {
+            version: UgxVersion::Hw1,
+            ..GltfImportOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(geometry.materials[0].material_version, 4);
+    ugx::Writer::write(&geometry, UgxVersion::Hw1).unwrap();
+}
+
+#[test]
 fn materialless_mesh_gets_required_default_material() {
     let buffer = triangle_buffer();
     let geometry = import_from_gltf(

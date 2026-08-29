@@ -35,6 +35,27 @@ python blender/package_extension.py
 See [`blender/ugx_gltf/README.md`](blender/ugx_gltf/README.md) for installation,
 development, metadata, and format details.
 
+## UGX version conversion
+
+The `ugx` command can repack a model directly between the Halo Wars DE v4 and
+Halo Wars 2 v6 representations:
+
+```text
+ugx convert --input model_v4.ugx --output model_v6.ugx --version hw2
+ugx convert --input model_v6.ugx --output model_v4.ugx --version hw1
+```
+
+Conversion rebuilds target-specific vertex packing, materials, skeleton/section
+metadata, bounds, accessories, and acceleration data. The command verifies the
+written version and strictly reads the output before returning success. For an
+editable workflow, import either version with the Blender extension, modify the
+scene, and choose Halo Wars DE or Halo Wars 2 as the export target.
+
+The formats do not carry identical information: v6-only LOD distances cannot be
+stored in a v4 section, and Hogan/legacy material conversion necessarily uses
+the closest available texture and shader mapping. Geometry, topology, skinning,
+and shared skeleton metadata are retained within the target packing precision.
+
 ## File Formats
 
 ### Container/Archive Formats

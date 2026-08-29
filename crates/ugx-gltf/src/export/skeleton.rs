@@ -117,14 +117,17 @@ fn get_section_bone_names(
 /// 3. Smallest superset (mesh contains all section bones with fewest extras)
 /// 4. Highest overlap if no complete containment
 ///
-/// Returns the mesh index, or mesh count to create a new mesh if none match.
+/// Returns the best existing mesh index.
 fn find_best_matching_mesh(
     section_bones: &std::collections::HashSet<String>,
     mesh_bone_sets: &[std::collections::HashSet<&str>],
     mesh_usage_count: &[usize],
 ) -> usize {
-    if section_bones.is_empty() || mesh_bone_sets.is_empty() {
-        return mesh_bone_sets.len(); // Fallback: create new mesh
+    if mesh_bone_sets.is_empty() {
+        return 0;
+    }
+    if section_bones.is_empty() {
+        return least_used_mesh(mesh_usage_count);
     }
 
     let mut best_mesh = mesh_bone_sets.len();
@@ -168,14 +171,18 @@ fn find_best_matching_mesh(
     // child bones, leading to zero overlap.
     if best_score.3 == 0 && !mesh_bone_sets.is_empty() {
         // Pick the mesh with the lowest usage count (round-robin).
-        mesh_usage_count
-            .iter()
-            .enumerate()
-            .min_by_key(|&(_, c)| *c)
-            .map_or(mesh_bone_sets.len(), |(i, _)| i)
+        least_used_mesh(mesh_usage_count)
     } else {
         best_mesh
     }
+}
+
+fn least_used_mesh(mesh_usage_count: &[usize]) -> usize {
+    mesh_usage_count
+        .iter()
+        .enumerate()
+        .min_by_key(|&(_, count)| *count)
+        .map_or(0, |(index, _)| index)
 }
 
 /// Create skeleton nodes from cached data bones (0x700 chunk).
@@ -479,4 +486,23 @@ fn build_bone_extras(bone: &GrannyBone) -> json::Extras {
 fn json_f32(v: f32) -> serde_json::Value {
     serde_json::Number::from_f64(f64::from(v))
         .map_or(serde_json::Value::Null, serde_json::Value::Number)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_section_bones_use_an_existing_least_used_mesh() {
+        let section_bones = std::collections::HashSet::new();
+        let mesh_bone_sets = vec![
+            std::collections::HashSet::from(["root"]),
+            std::collections::HashSet::from(["spine"]),
+            std::collections::HashSet::from(["head"]),
+        ];
+
+        let selected = find_best_matching_mesh(&section_bones, &mesh_bone_sets, &[2, 0, 1]);
+
+        assert_eq!(selected, 1);
+    }
 }
