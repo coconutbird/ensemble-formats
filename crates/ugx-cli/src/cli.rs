@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use ecf::Reader as EcfReader;
 use std::cmp::Ordering;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ugx::{Reader as UgxReader, UgxVersion, Writer as UgxWriter};
 use ugx_gltf::{
     GltfExportOptions, GltfImportOptions, export_to_gltf_with_buffer_name, import_from_gltf,
@@ -29,6 +29,9 @@ enum Commands {
         /// Skip ECF checksum validation
         #[arg(long)]
         no_verify: bool,
+        /// Print a machine-readable JSON summary
+        #[arg(long)]
+        json: bool,
     },
     /// Convert UGX to glTF format
     ToGltf {
@@ -90,7 +93,11 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Info { input, no_verify } => crate::info::cmd_info(&input, no_verify)?,
+        Commands::Info {
+            input,
+            no_verify,
+            json,
+        } => crate::info::cmd_info(&input, no_verify, json)?,
         Commands::ToGltf {
             input,
             output,
@@ -126,8 +133,8 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_to_gltf(
-    input: &PathBuf,
-    output: &PathBuf,
+    input: &Path,
+    output: &Path,
     external_buffer: bool,
     no_skeleton: bool,
     no_verify: bool,
@@ -181,139 +188,13 @@ fn cmd_to_gltf(
     Ok(())
 }
 
-/// Parse a GLB file and return the JSON string and binary buffer.
-struct GltfSource {
-    json: String,
-    buffer: Option<Vec<u8>>,
-}
-
-fn parse_glb(data: &[u8]) -> Result<GltfSource, Box<dyn std::error::Error>> {
-    // GLB Header: magic (4) + version (4) + length (4) = 12 bytes
-    if data.len() < 12 {
-        return Err("GLB file too small".into());
-    }
-
-    let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-    if magic != 0x4654_6C67 {
-        // "glTF" in little-endian
-        return Err(format!("Invalid GLB magic: 0x{magic:08X}").into());
-    }
-
-    let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-    if version != 2 {
-        return Err(format!("Unsupported GLB version: {version}").into());
-    }
-
-    let _total_length = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
-
-    // Parse chunks
-    let mut offset = 12usize;
-    let mut json_str = String::new();
-    let mut bin_data: Option<Vec<u8>> = None;
-
-    while offset + 8 <= data.len() {
-        let chunk_length = u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
-        let chunk_type = u32::from_le_bytes([
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-        ]);
-        offset += 8;
-
-        if offset + chunk_length > data.len() {
-            return Err("GLB chunk extends beyond file".into());
-        }
-
-        match chunk_type {
-            0x4E4F_534A => {
-                // "JSON" in little-endian
-                json_str = String::from_utf8(data[offset..offset + chunk_length].to_vec())?;
-            }
-            0x004E_4942 => {
-                // "BIN\0" in little-endian
-                bin_data = Some(data[offset..offset + chunk_length].to_vec());
-            }
-            _ => {
-                // Unknown chunk type, skip
-            }
-        }
-
-        offset += chunk_length;
-    }
-
-    if json_str.is_empty() {
-        return Err("GLB file missing JSON chunk".into());
-    }
-
-    Ok(GltfSource {
-        json: json_str,
-        buffer: bin_data,
-    })
-}
-
 fn cmd_from_gltf(
-    input: &PathBuf,
-    output: &PathBuf,
+    input: &Path,
+    output: &Path,
     no_skeleton: bool,
     version: UgxVersion,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if input is GLB or glTF based on extension
-    let is_glb = input
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("glb"));
-
-    let source = if is_glb {
-        // Parse GLB container
-        let data = fs::read(input)?;
-        parse_glb(&data)?
-    } else {
-        // Read glTF JSON
-        let json_str = fs::read_to_string(input)?;
-
-        // Parse JSON to find the buffer URI
-        let root: serde_json::Value = serde_json::from_str(&json_str)?;
-        let buffer_data = if let Some(buffers) = root.get("buffers").and_then(|b| b.as_array()) {
-            if let Some(first_buffer) = buffers.first() {
-                if let Some(uri) = first_buffer.get("uri").and_then(|u| u.as_str()) {
-                    // Check if it's a file path (not base64 embedded)
-                    if uri.starts_with("data:") {
-                        None // Base64 embedded, will be handled by import_from_gltf
-                    } else {
-                        // Resolve relative to the input file's directory
-                        let base_dir = input.parent().unwrap_or(std::path::Path::new("."));
-                        let bin_path = base_dir.join(uri);
-                        if bin_path.exists() {
-                            Some(fs::read(&bin_path)?)
-                        } else {
-                            return Err(format!(
-                                "External buffer file not found: {} (expected at {})",
-                                uri,
-                                bin_path.display()
-                            )
-                            .into());
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        GltfSource {
-            json: json_str,
-            buffer: buffer_data,
-        }
-    };
+    let source = crate::gltf_io::read(input)?;
 
     let options = GltfImportOptions {
         include_skeleton: !no_skeleton,
@@ -344,7 +225,7 @@ fn cmd_from_gltf(
     Ok(())
 }
 
-fn cmd_dump(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_dump(input: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let data = std::fs::read(input)?;
     let ecf = EcfReader::new(&data)?;
 
@@ -420,7 +301,7 @@ fn hexdump(data: &[u8], max: usize) {
     }
 }
 
-fn cmd_diff(orig_path: &PathBuf, rt_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_diff(orig_path: &Path, rt_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let orig_data = fs::read(orig_path)?;
     let rt_data = fs::read(rt_path)?;
     let orig_ecf = EcfReader::new(&orig_data)?;

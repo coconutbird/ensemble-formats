@@ -168,6 +168,20 @@ fn test_dec3n_roundtrip() {
 }
 
 #[test]
+fn test_dec3n_negative_unit_axis_roundtrip() {
+    let value = [-1.0, 0.0, 0.0, 1.0];
+    let result = roundtrip_pack_unpack(VertexElementType::Dec3N, value);
+
+    assert!(
+        (result[0] + 1.0).abs() < 0.01,
+        "expected -1, got {}",
+        result[0]
+    );
+    assert!(result[1].abs() < 0.01);
+    assert!(result[2].abs() < 0.01);
+}
+
+#[test]
 fn test_dec3n_negative_handedness() {
     let v = [0.5, -0.5, 1.0, -1.0];
     let r = roundtrip_pack_unpack(VertexElementType::Dec3N, v);

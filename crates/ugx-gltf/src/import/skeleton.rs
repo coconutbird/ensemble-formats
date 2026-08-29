@@ -15,6 +15,11 @@ pub(crate) fn import_skeleton(
     if root.skins.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
+    if root.skins.len() > 1 {
+        return Err(Error::UnsupportedFormat(
+            "UGX supports only one glTF skin".into(),
+        ));
+    }
 
     let skin = &root.skins[0];
     let joint_count = skin.joints.len();
@@ -22,41 +27,42 @@ pub(crate) fn import_skeleton(
         return Ok((Vec::new(), Vec::new()));
     }
 
-    // Read inverse bind matrices
-    let ibm_data = if let Some(ref ibm_accessor) = skin.inverse_bind_matrices {
-        let acc = &root.accessors[ibm_accessor.value()];
-        read_accessor_f32(acc, root, buffer_bytes)?
-    } else {
-        // Default to identity matrices
-        let mut data = Vec::with_capacity(joint_count * 16);
-        for _ in 0..joint_count {
-            data.extend_from_slice(&[
-                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            ]);
-        }
-        data
-    };
+    let ibm_data = read_inverse_bind_matrices(root, buffer_bytes, skin)?;
 
     // Build a map from node index → joint index
     let mut node_to_joint: std::collections::HashMap<usize, usize> =
         std::collections::HashMap::new();
     for (joint_idx, joint_node) in skin.joints.iter().enumerate() {
-        node_to_joint.insert(joint_node.value(), joint_idx);
+        let node_index = joint_node.value();
+        if node_index >= root.nodes.len() {
+            return Err(Error::UnsupportedFormat(
+                "Skin joint node index is out of bounds".into(),
+            ));
+        }
+        if node_to_joint.insert(node_index, joint_idx).is_some() {
+            return Err(Error::UnsupportedFormat(
+                "Skin contains the same joint node more than once".into(),
+            ));
+        }
     }
+    let parents = super::build_node_parents(root)?;
 
     // Build bones from joint nodes
     let mut bones = Vec::with_capacity(joint_count);
     let mut granny_bones = Vec::with_capacity(joint_count);
 
     for (joint_idx, joint_node_idx) in skin.joints.iter().enumerate() {
-        let node = &root.nodes[joint_node_idx.value()];
+        let node_index = joint_node_idx.value();
+        let node = root.nodes.get(node_index).ok_or_else(|| {
+            Error::UnsupportedFormat("Skin joint node index is out of bounds".into())
+        })?;
 
         let name = node
             .name
             .clone()
             .unwrap_or_else(|| format!("bone_{joint_idx}"));
 
-        let parent_index = find_parent_index(root, skin, joint_idx, joint_node_idx.value())?;
+        let parent_index = find_parent_index(&parents, &node_to_joint, node_index)?;
 
         // Read inverse bind matrix (16 floats)
         // Our export wrote DX row-major matrix rows flat into glTF column-major storage.
@@ -70,6 +76,7 @@ pub(crate) fn import_skeleton(
             *row = *values;
         }
         let model_to_bone = Matrix4x4 { rows };
+        validate_inverse_bind_matrix(&model_to_bone)?;
 
         bones.push(Bone {
             name: name.clone(),
@@ -94,27 +101,110 @@ pub(crate) fn import_skeleton(
     Ok((bones, granny_bones))
 }
 
-fn find_parent_index(
+fn read_inverse_bind_matrices(
     root: &gltf_json::Root,
+    buffer_bytes: &[u8],
     skin: &gltf_json::Skin,
-    joint_index: usize,
+) -> Result<Vec<f32>> {
+    if skin
+        .skeleton
+        .as_ref()
+        .is_some_and(|node| node.value() >= root.nodes.len())
+    {
+        return Err(Error::UnsupportedFormat(
+            "Skin skeleton node index is out of bounds".into(),
+        ));
+    }
+    let matrix_value_count = skin
+        .joints
+        .len()
+        .checked_mul(16)
+        .ok_or(Error::SizeOverflow("inverse-bind-matrix value count"))?;
+    let Some(ibm_accessor) = &skin.inverse_bind_matrices else {
+        let mut data = Vec::with_capacity(matrix_value_count);
+        for _ in &skin.joints {
+            data.extend_from_slice(&[
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ]);
+        }
+        return Ok(data);
+    };
+    let accessor = root.accessors.get(ibm_accessor.value()).ok_or_else(|| {
+        Error::UnsupportedFormat("Inverse-bind-matrix accessor is out of bounds".into())
+    })?;
+    validate_inverse_bind_accessor(accessor)?;
+    let values = read_accessor_f32(accessor, root, buffer_bytes)?;
+    if values.len() != matrix_value_count {
+        return Err(Error::UnsupportedFormat(format!(
+            "Inverse-bind-matrix accessor has {} values; expected {matrix_value_count}",
+            values.len()
+        )));
+    }
+    Ok(values)
+}
+
+fn validate_inverse_bind_accessor(accessor: &gltf_json::Accessor) -> Result<()> {
+    use gltf_json::accessor::{ComponentType, Type};
+    use gltf_json::validation::Checked::Valid;
+    let component_type = match accessor.component_type {
+        Valid(gltf_json::accessor::GenericComponentType(component_type)) => component_type,
+        gltf_json::validation::Checked::Invalid => {
+            return Err(Error::UnsupportedFormat(
+                "Invalid inverse-bind-matrix component type".into(),
+            ));
+        }
+    };
+    if accessor.type_ != Valid(Type::Mat4)
+        || component_type != ComponentType::F32
+        || accessor.normalized
+    {
+        return Err(Error::UnsupportedFormat(
+            "Inverse bind matrices must use unnormalized MAT4 floats".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_inverse_bind_matrix(matrix: &Matrix4x4) -> Result<()> {
+    let rows = &matrix.rows;
+    if rows.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(Error::UnsupportedFormat(
+            "Inverse bind matrix contains a non-finite value".into(),
+        ));
+    }
+    let affine_tolerance = 1.0e-6;
+    if rows[0][3].abs() > affine_tolerance
+        || rows[1][3].abs() > affine_tolerance
+        || rows[2][3].abs() > affine_tolerance
+        || (rows[3][3] - 1.0).abs() > affine_tolerance
+        || matrix.inverse().is_none()
+    {
+        return Err(Error::UnsupportedFormat(
+            "Inverse bind matrix must be invertible and affine".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn find_parent_index(
+    parents: &[Option<usize>],
+    node_to_joint: &std::collections::HashMap<usize, usize>,
     joint_node_index: usize,
 ) -> Result<i32> {
-    for (candidate_index, candidate_node_index) in skin.joints.iter().enumerate() {
-        if candidate_index == joint_index {
-            continue;
-        }
-        let candidate = &root.nodes[candidate_node_index.value()];
-        if candidate.children.as_ref().is_some_and(|children| {
-            children
-                .iter()
-                .any(|child| child.value() == joint_node_index)
-        }) {
-            return i32::try_from(candidate_index)
+    let mut parent = parents.get(joint_node_index).copied().flatten();
+    for _ in 0..parents.len() {
+        let Some(parent_index) = parent else {
+            return Ok(-1);
+        };
+        if let Some(&joint_index) = node_to_joint.get(&parent_index) {
+            return i32::try_from(joint_index)
                 .map_err(|_| Error::SizeOverflow("skeleton parent index"));
         }
+        parent = parents.get(parent_index).copied().flatten();
     }
-    Ok(-1)
+    Err(Error::UnsupportedFormat(
+        "glTF node hierarchy contains a cycle".into(),
+    ))
 }
 
 /// Parsed bone extras from glTF node.

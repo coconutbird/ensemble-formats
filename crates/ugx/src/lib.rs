@@ -70,7 +70,7 @@
 #![no_std]
 extern crate alloc;
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", test))]
 extern crate std;
 
 mod constants;
@@ -85,7 +85,10 @@ pub use types::*;
 
 mod processing;
 mod reader;
-pub use reader::{ReadOptions, Reader, read_materials, read_materials_with_options};
+pub use reader::{
+    ReadOptions, Reader, detect_version, detect_version_with_options, read_materials,
+    read_materials_with_options,
+};
 
 mod writer;
 pub use writer::Writer;

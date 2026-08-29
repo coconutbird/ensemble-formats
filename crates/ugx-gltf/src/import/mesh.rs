@@ -73,7 +73,7 @@ pub(super) fn generate_granny_meshes_from_vertices(
                 }
             }
             for section in &sections[ss..es] {
-                if section.global_bones
+                if (section.global_bones || section.rigid_only)
                     && let Ok(bone_index) = u16::try_from(section.rigid_bone_index)
                 {
                     used_bones.insert(bone_index);
@@ -264,8 +264,19 @@ pub(super) fn build_packer(
     has_skin: bool,
     has_colors: bool,
 ) -> UnivertPacker {
+    // HW2 vertex declarations live outside the UGX file. Keep the emitted
+    // byte layout canonical so it can be inferred from the section stride:
+    // PT0NA0, optional skin, extra UV sets, then optional diffuse color.
+    // A diffuse element disambiguates multiple UV sets from a lone color.
+    let emitted_texcoords = match version {
+        UgxVersion::Hw1 => max_texcoords,
+        UgxVersion::Hw2 => max_texcoords.max(1),
+    }
+    .min(MAX_UV);
+    let emitted_tangents = has_tangents || version == UgxVersion::Hw2;
+    let emitted_colors = has_colors || (version == UgxVersion::Hw2 && emitted_texcoords > 1);
     let mut uv_types = [VertexElementType::Ignore; MAX_UV];
-    for uv_type in uv_types.iter_mut().take(max_texcoords.min(MAX_UV)) {
+    for uv_type in uv_types.iter_mut().take(emitted_texcoords) {
         *uv_type = VertexElementType::HalfFloat2;
     }
 
@@ -273,35 +284,31 @@ pub(super) fn build_packer(
         UgxVersion::Hw1 => {
             let mut po = String::from("P");
             po.push('N');
-            if has_tangents {
+            if emitted_tangents {
                 po.push_str("A0");
             }
             if has_skin {
                 po.push('S');
             }
-            for digit in "0123456789".chars().take(max_texcoords.min(MAX_UV)) {
+            for digit in "0123456789".chars().take(emitted_texcoords) {
                 po.push('T');
                 po.push(digit);
             }
-            if has_colors {
+            if emitted_colors {
                 po.push('D');
             }
             po
         }
         UgxVersion::Hw2 => {
-            let mut po = String::from("P");
-            for digit in "0123456789".chars().take(max_texcoords.min(MAX_UV)) {
-                po.push('T');
-                po.push(digit);
-            }
-            po.push('N');
-            if has_tangents {
-                po.push_str("A0");
-            }
+            let mut po = String::from("PT0NA0");
             if has_skin {
                 po.push('S');
             }
-            if has_colors {
+            for digit in "123456789".chars().take(emitted_texcoords - 1) {
+                po.push('T');
+                po.push(digit);
+            }
+            if emitted_colors {
                 po.push('D');
             }
             po

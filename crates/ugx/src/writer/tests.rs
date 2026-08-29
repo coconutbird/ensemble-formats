@@ -243,6 +243,13 @@ fn test_write_read_roundtrip() {
 }
 
 #[test]
+fn detects_written_ugx_version() {
+    let bytes = write_ugx(&make_test_geom(), UgxVersion::Hw2).unwrap();
+
+    assert_eq!(crate::detect_version(&bytes).unwrap(), UgxVersion::Hw2);
+}
+
+#[test]
 fn test_write_read_materials_roundtrip() {
     let mut geom = make_test_geom();
     let mut animated_uvw = [[0.0; 3]; MapType::NUM_TYPES];

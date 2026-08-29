@@ -238,7 +238,7 @@ impl UgxGeom {
             })?;
 
         let signature = u32::from_le_bytes(hdr.signature);
-        let version = read_version(signature, options)?;
+        let version = decode_version(signature, options)?;
 
         let rigid_bone_index = i32::from_le_bytes(hdr.rigid_bone_index);
 
@@ -368,6 +368,54 @@ pub fn read_materials_with_options(data: &[u8], options: ReadOptions) -> Result<
     }
 }
 
+/// Detect the layout version encoded by a UGX file.
+///
+/// This validates the ECF checksums, UGX file identifier, and cached-data
+/// signature without parsing the complete model.
+///
+/// # Errors
+///
+/// Returns an error if the ECF container is malformed, a checksum fails, the
+/// file is not UGX, the cached-data chunk is missing or truncated, or its
+/// signature is unknown.
+pub fn detect_version(data: &[u8]) -> Result<UgxVersion> {
+    detect_version_with_options(data, ReadOptions::strict())
+}
+
+/// Detect the layout version encoded by a UGX file with explicit validation controls.
+///
+/// # Errors
+///
+/// Returns an error if enabled ECF validation fails, the cached-data chunk is
+/// missing or truncated, or its signature cannot be resolved using `options`.
+pub fn detect_version_with_options(data: &[u8], options: ReadOptions) -> Result<UgxVersion> {
+    let ecf = if options.validate_checksums {
+        ecf::Reader::new(data)?
+    } else {
+        ecf::Reader::new_unchecked(data)?
+    };
+    if options.validate_signatures && ecf.header().id != UGX_FILE_ID {
+        return Err(Error::InvalidFileId {
+            expected: UGX_FILE_ID,
+            actual: ecf.header().id,
+        });
+    }
+
+    let cached_data = ecf
+        .chunk_data_by_id(ECF_CACHED_DATA_CHUNK_ID)
+        .map_err(|_| Error::MissingChunk("cached_data (0x700)"))?;
+    let signature_bytes: [u8; 4] = cached_data
+        .get(..4)
+        .ok_or_else(|| Error::UnexpectedEof {
+            context: String::from("UGX cached-data signature"),
+        })?
+        .try_into()
+        .map_err(|_| Error::UnexpectedEof {
+            context: String::from("UGX cached-data signature"),
+        })?;
+    decode_version(u32::from_le_bytes(signature_bytes), options)
+}
+
 /// UGX file reader.
 pub struct Reader;
 
@@ -400,7 +448,7 @@ fn read_optional_chunk(ecf: &ecf::Reader<'_>, id: u64) -> Result<Option<Vec<u8>>
     }
 }
 
-fn read_version(signature: u32, options: ReadOptions) -> Result<UgxVersion> {
+fn decode_version(signature: u32, options: ReadOptions) -> Result<UgxVersion> {
     if !options.validate_signatures
         && let Some(version) = options.version_hint
     {

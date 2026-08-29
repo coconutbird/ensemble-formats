@@ -12,7 +12,10 @@ mod skeleton;
 
 use ugx::types::MaterialData;
 use ugx::types::convert::convert_geom_materials;
-use ugx::{Error, GeometryFlags, Matrix4x4, Result, Section, UgxGeom, UgxVersion, UnpackedVertex};
+use ugx::{
+    Bone, Error, GeometryFlags, GrannyBone, Material, Matrix4x4, Result, Section, UgxGeom,
+    UgxVersion, UnpackedVertex,
+};
 
 use crate::extras::{MeshExtrasJson, SceneExtrasJson};
 use accessor::resolve_buffer;
@@ -48,9 +51,12 @@ impl Default for GltfImportOptions {
     }
 }
 
+#[derive(Clone)]
 struct MeshNodeInfo {
     has_skin: bool,
     parent_bone_index: Option<usize>,
+    transform: Matrix4x4,
+    name: Option<String>,
 }
 
 #[derive(Default)]
@@ -81,7 +87,9 @@ struct ImportContext<'a> {
     buffer: &'a [u8],
     options: &'a GltfImportOptions,
     bones: &'a [ugx::Bone],
-    mesh_nodes: &'a std::collections::HashMap<usize, MeshNodeInfo>,
+    use_skinning: bool,
+    mesh_nodes: &'a std::collections::HashMap<usize, Vec<MeshNodeInfo>>,
+    restrict_to_scene_nodes: bool,
     world_matrices: &'a [Matrix4x4],
 }
 
@@ -111,97 +119,311 @@ pub fn import_from_gltf(
     let root: gltf_json::Root = serde_json::from_str(json)
         .map_err(|error| Error::UnsupportedFormat(format!("Invalid glTF JSON: {error}")))?;
     let buffer = resolve_buffer(&root, buffer_data)?;
-    let (bones, granny_bones) = if options.include_skeleton {
+    let (mut bones, mut granny_bones) = if options.include_skeleton {
         import_skeleton(&root, &buffer)?
     } else {
         (Vec::new(), Vec::new())
     };
-    let materials = if options.include_materials {
+    let use_skinning = !bones.is_empty();
+    if bones.is_empty() && !root.meshes.is_empty() {
+        let (bone, granny_bone) = synthetic_root_bone();
+        bones.push(bone);
+        granny_bones.push(granny_bone);
+    }
+    let mut materials = if options.include_materials {
         import_materials(&root)?
     } else {
         Vec::new()
     };
-    let mesh_nodes = build_mesh_node_map(&root);
+    if materials.is_empty() && !root.meshes.is_empty() {
+        materials.push(Material {
+            name: "default".into(),
+            ..Material::default()
+        });
+    }
+    let (mesh_nodes, restrict_to_scene_nodes) = build_mesh_node_map(&root, use_skinning)?;
     let world_matrices = granny_bones
         .iter()
         .map(|bone| {
             bone.inverse_world_matrix
                 .inverse()
-                .unwrap_or_else(Matrix4x4::identity)
+                .ok_or_else(|| Error::UnsupportedFormat("Bone transform is singular".into()))
         })
-        .collect::<Vec<_>>();
-    let imported = import_meshes(
-        &root,
-        &buffer,
+        .collect::<Result<Vec<_>>>()?;
+    let context = ImportContext {
+        root: &root,
+        buffer: &buffer,
         options,
-        &bones,
-        &mesh_nodes,
-        &world_matrices,
-    )?;
+        bones: &bones,
+        use_skinning,
+        mesh_nodes: &mesh_nodes,
+        restrict_to_scene_nodes,
+        world_matrices: &world_matrices,
+    };
+    let imported = import_meshes(&context)?;
+    if imported.sections.is_empty() {
+        return Err(Error::UnsupportedFormat(
+            "The active glTF scene contains no triangle meshes".into(),
+        ));
+    }
     finish_geometry(&root, options, bones, granny_bones, materials, imported)
 }
 
-fn build_mesh_node_map(root: &gltf_json::Root) -> std::collections::HashMap<usize, MeshNodeInfo> {
-    let mut node_parent = std::collections::HashMap::new();
+fn synthetic_root_bone() -> (Bone, GrannyBone) {
+    let inverse_world_matrix = Matrix4x4::identity();
+    (
+        Bone {
+            name: "root".into(),
+            parent_index: -1,
+            model_to_bone: inverse_world_matrix.clone(),
+        },
+        GrannyBone {
+            name: "root".into(),
+            parent_index: -1,
+            local_transform: None,
+            inverse_world_matrix,
+            lod_error: 0.0,
+            extended_data: None,
+            extended_data_type: None,
+        },
+    )
+}
+
+fn build_mesh_node_map(
+    root: &gltf_json::Root,
+    use_skinning: bool,
+) -> Result<(std::collections::HashMap<usize, Vec<MeshNodeInfo>>, bool)> {
+    let parents = build_node_parents(root)?;
+    let world_matrices = build_node_world_matrices(root, &parents)?;
+    let active_nodes = active_node_indices(root)?;
+    let joint_indices: std::collections::HashMap<usize, usize> = if use_skinning {
+        root.skins
+            .first()
+            .map(|skin| {
+                skin.joints
+                    .iter()
+                    .enumerate()
+                    .map(|(joint_index, node)| (node.value(), joint_index))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let mut result: std::collections::HashMap<usize, Vec<MeshNodeInfo>> =
+        std::collections::HashMap::new();
+    for (node_index, node) in root.nodes.iter().enumerate() {
+        if active_nodes
+            .as_ref()
+            .is_some_and(|indices| !indices.contains(&node_index))
+        {
+            continue;
+        }
+        let Some(mesh_index) = node.mesh.as_ref().map(gltf_json::Index::value) else {
+            continue;
+        };
+        if mesh_index >= root.meshes.len() {
+            return Err(Error::UnsupportedFormat(
+                "Mesh node index is out of bounds".into(),
+            ));
+        }
+        if use_skinning && node.skin.as_ref().is_some_and(|skin| skin.value() != 0) {
+            return Err(Error::UnsupportedFormat(
+                "UGX supports only one glTF skin".into(),
+            ));
+        }
+        let has_skin = use_skinning && node.skin.is_some();
+        let parent_joint = (!has_skin)
+            .then(|| nearest_joint_parent(node_index, &parents, &joint_indices))
+            .flatten();
+        let parent_bone_index = parent_joint.map(|(_, bone_index)| bone_index);
+        let transform = if has_skin {
+            Matrix4x4::identity()
+        } else if let Some((parent_node_index, _)) = parent_joint {
+            let parent_inverse = world_matrices[parent_node_index].inverse().ok_or_else(|| {
+                Error::UnsupportedFormat("Rigid mesh parent transform is singular".into())
+            })?;
+            world_matrices[node_index].multiply(&parent_inverse)
+        } else {
+            world_matrices[node_index].clone()
+        };
+        result.entry(mesh_index).or_default().push(MeshNodeInfo {
+            has_skin,
+            parent_bone_index,
+            transform,
+            name: node.name.clone(),
+        });
+    }
+    Ok((result, active_nodes.is_some()))
+}
+
+fn active_node_indices(root: &gltf_json::Root) -> Result<Option<std::collections::HashSet<usize>>> {
+    let Some(scene_index) = active_scene_index(root)? else {
+        return Ok(None);
+    };
+    let scene = &root.scenes[scene_index];
+    let mut pending = scene
+        .nodes
+        .iter()
+        .map(gltf_json::Index::value)
+        .collect::<Vec<_>>();
+    let mut active = std::collections::HashSet::new();
+    while let Some(node_index) = pending.pop() {
+        let node = root
+            .nodes
+            .get(node_index)
+            .ok_or_else(|| Error::UnsupportedFormat("Scene node index is out of bounds".into()))?;
+        if !active.insert(node_index) {
+            continue;
+        }
+        pending.extend(node.children.iter().flatten().map(gltf_json::Index::value));
+    }
+    Ok(Some(active))
+}
+
+fn active_scene_index(root: &gltf_json::Root) -> Result<Option<usize>> {
+    if root.scenes.is_empty() {
+        if root.scene.is_some() {
+            return Err(Error::UnsupportedFormat(
+                "Default scene index is out of bounds".into(),
+            ));
+        }
+        return Ok(None);
+    }
+    let index = root.scene.as_ref().map_or(0, gltf_json::Index::value);
+    if index >= root.scenes.len() {
+        return Err(Error::UnsupportedFormat(
+            "Default scene index is out of bounds".into(),
+        ));
+    }
+    Ok(Some(index))
+}
+
+fn build_node_parents(root: &gltf_json::Root) -> Result<Vec<Option<usize>>> {
+    let mut parents = vec![None; root.nodes.len()];
     for (parent_index, node) in root.nodes.iter().enumerate() {
-        if let Some(children) = &node.children {
-            for child in children {
-                node_parent.insert(child.value(), parent_index);
+        for child in node.children.iter().flatten() {
+            let child_index = child.value();
+            let slot = parents.get_mut(child_index).ok_or_else(|| {
+                Error::UnsupportedFormat("Node child index is out of bounds".into())
+            })?;
+            if slot.replace(parent_index).is_some() {
+                return Err(Error::UnsupportedFormat(
+                    "glTF node has more than one parent".into(),
+                ));
             }
         }
     }
-    let joint_nodes: std::collections::HashSet<_> = root
-        .skins
-        .first()
-        .map(|skin| skin.joints.iter().map(gltf_json::Index::value).collect())
-        .unwrap_or_default();
-    root.nodes
+    Ok(parents)
+}
+
+fn build_node_world_matrices(
+    root: &gltf_json::Root,
+    parents: &[Option<usize>],
+) -> Result<Vec<Matrix4x4>> {
+    let local = root
+        .nodes
         .iter()
-        .enumerate()
-        .filter_map(|(node_index, node)| {
-            let mesh_index = node.mesh?.value();
-            let has_skin = node.skin.is_some();
-            let parent_bone_index = (!has_skin)
-                .then(|| node_parent.get(&node_index).copied())
-                .flatten()
-                .filter(|parent| joint_nodes.contains(parent))
-                .and_then(|parent| {
-                    root.skins
-                        .first()?
-                        .joints
-                        .iter()
-                        .position(|joint| joint.value() == parent)
-                });
-            Some((
-                mesh_index,
-                MeshNodeInfo {
-                    has_skin,
-                    parent_bone_index,
-                },
-            ))
+        .map(node_local_matrix)
+        .collect::<Result<Vec<_>>>()?;
+    let mut world: Vec<Option<Matrix4x4>> = vec![None; root.nodes.len()];
+    let mut visiting = vec![false; root.nodes.len()];
+    for start in 0..root.nodes.len() {
+        if world[start].is_some() {
+            continue;
+        }
+        let mut path = Vec::new();
+        let mut current = start;
+        while world[current].is_none() {
+            if visiting[current] {
+                return Err(Error::UnsupportedFormat(
+                    "glTF node hierarchy contains a cycle".into(),
+                ));
+            }
+            visiting[current] = true;
+            path.push(current);
+            let Some(parent) = parents[current] else {
+                break;
+            };
+            current = parent;
+        }
+        while let Some(node_index) = path.pop() {
+            let matrix = parents[node_index]
+                .and_then(|parent| world[parent].as_ref())
+                .map_or_else(
+                    || local[node_index].clone(),
+                    |parent_world| local[node_index].multiply(parent_world),
+                );
+            world[node_index] = Some(matrix);
+            visiting[node_index] = false;
+        }
+    }
+    world
+        .into_iter()
+        .map(|matrix| {
+            matrix.ok_or_else(|| {
+                Error::UnsupportedFormat("Cannot resolve glTF node transform".into())
+            })
         })
         .collect()
 }
 
-fn import_meshes(
-    root: &gltf_json::Root,
-    buffer: &[u8],
-    options: &GltfImportOptions,
-    bones: &[ugx::Bone],
-    mesh_nodes: &std::collections::HashMap<usize, MeshNodeInfo>,
-    world_matrices: &[Matrix4x4],
-) -> Result<ImportedMeshes> {
-    let context = ImportContext {
-        root,
-        buffer,
-        options,
-        bones,
-        mesh_nodes,
-        world_matrices,
-    };
+fn node_local_matrix(node: &gltf_json::Node) -> Result<Matrix4x4> {
+    let rows = node.matrix.map_or_else(
+        || {
+            gltf::scene::Transform::Decomposed {
+                translation: node.translation.unwrap_or([0.0; 3]),
+                rotation: node.rotation.unwrap_or_default().0,
+                scale: node.scale.unwrap_or([1.0; 3]),
+            }
+            .matrix()
+        },
+        |matrix| {
+            [
+                [matrix[0], matrix[1], matrix[2], matrix[3]],
+                [matrix[4], matrix[5], matrix[6], matrix[7]],
+                [matrix[8], matrix[9], matrix[10], matrix[11]],
+                [matrix[12], matrix[13], matrix[14], matrix[15]],
+            ]
+        },
+    );
+    if rows.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(Error::UnsupportedFormat(
+            "glTF node transform contains a non-finite value".into(),
+        ));
+    }
+    let affine_tolerance = 1.0e-6;
+    if rows[0][3].abs() > affine_tolerance
+        || rows[1][3].abs() > affine_tolerance
+        || rows[2][3].abs() > affine_tolerance
+        || (rows[3][3] - 1.0).abs() > affine_tolerance
+    {
+        return Err(Error::UnsupportedFormat(
+            "glTF mesh node transform must be affine".into(),
+        ));
+    }
+    Ok(Matrix4x4 { rows })
+}
+
+fn nearest_joint_parent(
+    node_index: usize,
+    parents: &[Option<usize>],
+    joint_indices: &std::collections::HashMap<usize, usize>,
+) -> Option<(usize, usize)> {
+    let mut parent = parents.get(node_index).copied().flatten();
+    while let Some(parent_index) = parent {
+        if let Some(&joint_index) = joint_indices.get(&parent_index) {
+            return Some((parent_index, joint_index));
+        }
+        parent = parents.get(parent_index).copied().flatten();
+    }
+    None
+}
+
+fn import_meshes(context: &ImportContext<'_>) -> Result<ImportedMeshes> {
     let mut imported = ImportedMeshes::default();
-    for (mesh_index, mesh) in root.meshes.iter().enumerate() {
-        import_mesh(&context, mesh_index, mesh, &mut imported)?;
+    for (mesh_index, mesh) in context.root.meshes.iter().enumerate() {
+        import_mesh(context, mesh_index, mesh, &mut imported)?;
     }
     Ok(imported)
 }
@@ -212,24 +434,55 @@ fn import_mesh(
     mesh: &gltf_json::Mesh,
     imported: &mut ImportedMeshes,
 ) -> Result<()> {
-    let name = mesh
-        .name
-        .clone()
-        .unwrap_or_else(|| format!("mesh_{mesh_index}"));
-    let start_vertex = imported.vertices.len();
-    let start_section = imported.sections.len();
     let extras: Option<MeshExtrasJson> = mesh
         .extras
         .as_ref()
         .and_then(|raw| serde_json::from_str(raw.get()).ok());
+    if let Some(instances) = context.mesh_nodes.get(&mesh_index) {
+        for mesh_node in instances {
+            import_mesh_instance(
+                context,
+                mesh_index,
+                mesh,
+                Some(mesh_node),
+                extras.as_ref(),
+                instances.len() == 1,
+                imported,
+            )?;
+        }
+        return Ok(());
+    }
+    if context.restrict_to_scene_nodes {
+        return Ok(());
+    }
+    import_mesh_instance(
+        context,
+        mesh_index,
+        mesh,
+        None,
+        extras.as_ref(),
+        true,
+        imported,
+    )
+}
+
+fn import_mesh_instance(
+    context: &ImportContext<'_>,
+    mesh_index: usize,
+    mesh: &gltf_json::Mesh,
+    mesh_node: Option<&MeshNodeInfo>,
+    extras: Option<&MeshExtrasJson>,
+    preserve_granny_index: bool,
+    imported: &mut ImportedMeshes,
+) -> Result<()> {
+    let name = mesh_node
+        .and_then(|info| info.name.clone())
+        .or_else(|| mesh.name.clone())
+        .unwrap_or_else(|| format!("mesh_{mesh_index}"));
+    let start_vertex = imported.vertices.len();
+    let start_section = imported.sections.len();
     for primitive in &mesh.primitives {
-        import_mesh_primitive(
-            context,
-            context.mesh_nodes.get(&mesh_index),
-            primitive,
-            extras.as_ref(),
-            imported,
-        )?;
+        import_mesh_primitive(context, mesh_node, primitive, extras, imported)?;
     }
     let end_vertex = imported.vertices.len();
     if end_vertex > start_vertex {
@@ -239,7 +492,9 @@ fn import_mesh(
             end_vertex,
             start_section,
             imported.sections.len(),
-            extras.and_then(|value| value.granny_mesh_index),
+            preserve_granny_index
+                .then(|| extras.and_then(|value| value.granny_mesh_index))
+                .flatten(),
         ));
     }
     Ok(())
@@ -252,18 +507,32 @@ fn import_mesh_primitive(
     extras: Option<&MeshExtrasJson>,
     imported: &mut ImportedMeshes,
 ) -> Result<()> {
-    let (vertices, indices, material_index) = import_primitive(
+    let has_skin = context.use_skinning && mesh_node.is_some_and(|info| info.has_skin);
+    let (mut vertices, mut indices, source_material_index) = import_primitive(
         primitive,
         context.root,
         context.buffer,
-        !context.bones.is_empty(),
+        has_skin,
         context.bones.len(),
     )?;
+    let material_index = if context.options.include_materials {
+        source_material_index
+    } else {
+        0
+    };
     if vertices.is_empty() || indices.is_empty() {
         return Ok(());
     }
-    let features = primitive_features(&vertices, !context.bones.is_empty());
-    let kind = classify_section(&vertices, features.has_skin, mesh_node)?;
+    if let Some(mesh_node) = mesh_node {
+        apply_node_transform(&mut vertices, &mut indices, &mesh_node.transform)?;
+    }
+    let features = primitive_features(&vertices, has_skin);
+    let kind = classify_section(
+        &vertices,
+        features.has_skin,
+        mesh_node,
+        !context.bones.is_empty(),
+    )?;
     let (packer, final_vertices) = prepare_section_vertices(
         vertices,
         &features,
@@ -283,6 +552,84 @@ fn import_mesh_primitive(
             extras,
         },
     )
+}
+
+fn apply_node_transform(
+    vertices: &mut [UnpackedVertex],
+    indices: &mut [u16],
+    transform: &Matrix4x4,
+) -> Result<()> {
+    let determinant = linear_determinant(transform);
+    if !determinant.is_finite() || determinant.abs() < 1.0e-10 {
+        return Err(Error::UnsupportedFormat(
+            "Mesh node transform is singular".into(),
+        ));
+    }
+    let normal_transform = transform
+        .inverse()
+        .ok_or_else(|| Error::UnsupportedFormat("Mesh node transform is singular".into()))?
+        .transpose();
+    let handedness = determinant.signum();
+    for vertex in vertices {
+        vertex.position = transform_point(vertex.position, transform);
+        let normal = normalized_direction(
+            transform_direction(vertex.normal, &normal_transform),
+            [0.0, 1.0, 0.0],
+        );
+        vertex.normal = normal;
+        let source_tangent = [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]];
+        if squared_length(source_tangent) > 1.0e-12 {
+            let transformed = transform_direction(source_tangent, transform);
+            let projection = transformed
+                .iter()
+                .zip(normal)
+                .map(|(tangent, normal)| tangent * normal)
+                .sum::<f32>();
+            let orthogonal = [
+                transformed[0] - normal[0] * projection,
+                transformed[1] - normal[1] * projection,
+                transformed[2] - normal[2] * projection,
+            ];
+            let fallback = fallback_tangent(normal);
+            let tangent = normalized_direction(orthogonal, [fallback[0], fallback[1], fallback[2]]);
+            vertex.tangent = [
+                tangent[0],
+                tangent[1],
+                tangent[2],
+                vertex.tangent[3] * handedness,
+            ];
+        }
+    }
+    if determinant < 0.0 {
+        for triangle in indices.as_chunks_mut::<3>().0 {
+            triangle.swap(1, 2);
+        }
+    }
+    Ok(())
+}
+
+fn linear_determinant(matrix: &Matrix4x4) -> f32 {
+    let rows = &matrix.rows;
+    rows[0][0] * (rows[1][1] * rows[2][2] - rows[1][2] * rows[2][1])
+        - rows[0][1] * (rows[1][0] * rows[2][2] - rows[1][2] * rows[2][0])
+        + rows[0][2] * (rows[1][0] * rows[2][1] - rows[1][1] * rows[2][0])
+}
+
+fn normalized_direction(value: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let length_squared = squared_length(value);
+    if !length_squared.is_finite() || length_squared < 1.0e-12 {
+        fallback
+    } else {
+        let inverse_length = length_squared.sqrt().recip();
+        value.map(|component| component * inverse_length)
+    }
+}
+
+fn squared_length(value: [f32; 3]) -> f32 {
+    value
+        .iter()
+        .map(|component| component * component)
+        .sum::<f32>()
 }
 
 fn primitive_features(vertices: &[UnpackedVertex], has_skeleton: bool) -> PrimitiveFeatures {
@@ -317,6 +664,7 @@ fn classify_section(
     vertices: &[UnpackedVertex],
     has_skin: bool,
     mesh_node: Option<&MeshNodeInfo>,
+    has_bones: bool,
 ) -> Result<SectionKind> {
     if let Some(bone_index) =
         mesh_node.and_then(|info| (!info.has_skin).then_some(info.parent_bone_index).flatten())
@@ -328,7 +676,7 @@ fn classify_section(
             max_bones: 1,
         });
     }
-    if mesh_node.is_some_and(|info| info.has_skin) {
+    if has_skin && mesh_node.is_some_and(|info| info.has_skin) {
         let max_bones = vertices
             .iter()
             .map(|vertex| {
@@ -348,6 +696,14 @@ fn classify_section(
             max_bones: checked_i32(max_bones, "maximum bone influences")?,
         });
     }
+    if has_bones && !has_skin {
+        return Ok(SectionKind {
+            global_bones: false,
+            rigid_only: true,
+            bone_index: 0,
+            max_bones: 1,
+        });
+    }
     let (global_bones, rigid_only, bone_index, max_bones) = detect_global_bones(vertices, has_skin);
     Ok(SectionKind {
         global_bones,
@@ -358,7 +714,7 @@ fn classify_section(
 }
 
 fn prepare_section_vertices(
-    vertices: Vec<UnpackedVertex>,
+    mut vertices: Vec<UnpackedVertex>,
     features: &PrimitiveFeatures,
     kind: &SectionKind,
     version: UgxVersion,
@@ -372,6 +728,9 @@ fn prepare_section_vertices(
         features.has_skin && !rigid,
         features.has_colors,
     );
+    if version == UgxVersion::Hw2 {
+        canonicalize_hw2_vertices(&mut vertices, features);
+    }
     if !rigid {
         return (packer, vertices);
     }
@@ -383,6 +742,36 @@ fn prepare_section_vertices(
         .map(|vertex| restore_rigid_vertex(vertex, matrix))
         .collect();
     (packer, restored)
+}
+
+fn canonicalize_hw2_vertices(vertices: &mut [UnpackedVertex], features: &PrimitiveFeatures) {
+    for vertex in vertices {
+        vertex.num_texcoords = vertex.num_texcoords.max(1);
+        if !features.has_tangents {
+            vertex.tangent = fallback_tangent(vertex.normal);
+        }
+        if features.max_texcoords > 1 && !features.has_colors {
+            vertex.diffuse = [1.0; 4];
+        }
+    }
+}
+
+fn fallback_tangent(normal: [f32; 3]) -> [f32; 4] {
+    let normal = normalized_direction(normal, [0.0, 1.0, 0.0]);
+    let reference = if normal[2].abs() < 0.999 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let tangent = normalized_direction(
+        [
+            reference[1] * normal[2] - reference[2] * normal[1],
+            reference[2] * normal[0] - reference[0] * normal[2],
+            reference[0] * normal[1] - reference[1] * normal[0],
+        ],
+        [1.0, 0.0, 0.0],
+    );
+    [tangent[0], tangent[1], tangent[2], 1.0]
 }
 
 fn restore_rigid_vertex(vertex: &UnpackedVertex, matrix: Option<&Matrix4x4>) -> UnpackedVertex {
@@ -507,7 +896,7 @@ fn finish_geometry(
         index_buffer: imported.index_buffer,
         rigid_only: all_rigid,
         rigid_bone_index: 0,
-        max_instances: scene_max_instances(root),
+        max_instances: scene_max_instances(root)?,
         instance_index_multiplier: i16::try_from(multiplier)
             .map_err(|_| Error::SizeOverflow("instance-index multiplier"))?,
         large_geom_bone_index: i16::MAX,
@@ -523,12 +912,12 @@ fn finish_geometry(
     Ok(geometry)
 }
 
-fn scene_max_instances(root: &gltf_json::Root) -> i16 {
-    root.scenes
-        .first()
+fn scene_max_instances(root: &gltf_json::Root) -> Result<i16> {
+    Ok(active_scene_index(root)?
+        .and_then(|index| root.scenes.get(index))
         .and_then(|scene| scene.extras.as_ref())
         .and_then(|raw| serde_json::from_str::<SceneExtrasJson>(raw.get()).ok())
-        .map_or(1, |extras| extras.ugx_max_instances)
+        .map_or(1, |extras| extras.ugx_max_instances))
 }
 
 fn convert_materials_for_version(geometry: &mut UgxGeom, version: UgxVersion) {

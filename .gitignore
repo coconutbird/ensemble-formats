@@ -43,6 +43,7 @@ Thumbs.db
 *.bak
 root/
 d3dasm/
+/dist/
 
 # Environment
 .env

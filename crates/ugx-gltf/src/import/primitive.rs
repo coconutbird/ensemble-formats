@@ -1,6 +1,6 @@
 //! Mesh primitive import from glTF.
 
-use gltf_json::mesh::Semantic;
+use gltf_json::mesh::{Mode, Semantic};
 use gltf_json::validation::Checked::Valid;
 use num_traits::ToPrimitive;
 use ugx::{Error, MAX_UV, Result, UnpackedVertex};
@@ -26,10 +26,43 @@ pub(crate) fn import_primitive(
     has_skeleton: bool,
     bone_count: usize,
 ) -> Result<(Vec<UnpackedVertex>, Vec<u16>, i32)> {
+    if primitive.mode != Valid(Mode::Triangles) {
+        return Err(Error::UnsupportedFormat(
+            "UGX import supports only glTF TRIANGLES primitives".into(),
+        ));
+    }
+    if primitive
+        .targets
+        .as_ref()
+        .is_some_and(|targets| !targets.is_empty())
+    {
+        return Err(Error::UnsupportedFormat(
+            "UGX does not support glTF morph targets".into(),
+        ));
+    }
     let attributes = read_attributes(primitive, root, buffer_bytes, has_skeleton)?;
     let indices = read_indices(primitive, root, buffer_bytes, attributes.vertex_count)?;
+    if indices.len() % 3 != 0 {
+        return Err(Error::UnsupportedFormat(format!(
+            "Triangle primitive has {} indices, which is not divisible by three",
+            indices.len()
+        )));
+    }
+    if indices
+        .iter()
+        .any(|&index| usize::from(index) >= attributes.vertex_count)
+    {
+        return Err(Error::UnsupportedFormat(
+            "Primitive index is outside its POSITION accessor".into(),
+        ));
+    }
     let vertices = build_vertices(&attributes, bone_count)?;
-    let material_index = primitive.material.map_or(Ok(-1), |material| {
+    let material_index = primitive.material.map_or(Ok(0), |material| {
+        if material.value() >= root.materials.len() {
+            return Err(Error::UnsupportedFormat(
+                "Primitive material index is out of bounds".into(),
+            ));
+        }
         i32::try_from(material.value()).map_err(|_| Error::SizeOverflow("glTF material index"))
     })?;
     Ok((vertices, indices, material_index))
@@ -48,12 +81,18 @@ fn read_attributes(
     let position_accessor = root.accessors.get(position_index.value()).ok_or_else(|| {
         Error::UnsupportedFormat("POSITION accessor index is out of bounds".into())
     })?;
+    validate_attribute_accessor(position_accessor, &Semantic::Positions)?;
     let vertex_count = usize::try_from(position_accessor.count.0)
         .map_err(|_| Error::SizeOverflow("primitive vertex count"))?;
     let positions = read_accessor_f32(position_accessor, root, buffer_bytes)?;
-    let normals = read_attribute(primitive, root, buffer_bytes, Semantic::Normals)?
+    validate_attribute(&positions, vertex_count, 3, "POSITION")?;
+    let normals = read_attribute(primitive, root, buffer_bytes, &Semantic::Normals)?
         .unwrap_or_else(|| [0.0, 1.0, 0.0].repeat(vertex_count));
-    let tangents = read_attribute(primitive, root, buffer_bytes, Semantic::Tangents)?;
+    validate_attribute(&normals, vertex_count, 3, "NORMAL")?;
+    let tangents = read_attribute(primitive, root, buffer_bytes, &Semantic::Tangents)?;
+    if let Some(values) = &tangents {
+        validate_attribute(values, vertex_count, 4, "TANGENT")?;
+    }
 
     let mut uv_sets = Vec::new();
     for index in 0..MAX_UV {
@@ -63,23 +102,47 @@ fn read_attributes(
             primitive,
             root,
             buffer_bytes,
-            Semantic::TexCoords(semantic_index),
+            &Semantic::TexCoords(semantic_index),
         )?
         else {
             break;
         };
+        validate_attribute(&values, vertex_count, 2, "TEXCOORD")?;
         uv_sets.push(values);
     }
 
     let joints = has_skeleton
-        .then(|| read_attribute(primitive, root, buffer_bytes, Semantic::Joints(0)))
+        .then(|| read_attribute(primitive, root, buffer_bytes, &Semantic::Joints(0)))
         .transpose()?
         .flatten();
     let weights = has_skeleton
-        .then(|| read_attribute(primitive, root, buffer_bytes, Semantic::Weights(0)))
+        .then(|| read_attribute(primitive, root, buffer_bytes, &Semantic::Weights(0)))
         .transpose()?
         .flatten();
-    let colors = read_attribute(primitive, root, buffer_bytes, Semantic::Colors(0))?;
+    match (&joints, &weights) {
+        (Some(joints), Some(weights)) => {
+            validate_attribute(joints, vertex_count, 4, "JOINTS_0")?;
+            validate_attribute(weights, vertex_count, 4, "WEIGHTS_0")?;
+        }
+        (None, None) if !has_skeleton => {}
+        _ => {
+            return Err(Error::UnsupportedFormat(
+                "Skinned primitive must contain both JOINTS_0 and WEIGHTS_0".into(),
+            ));
+        }
+    }
+    let colors = read_attribute(primitive, root, buffer_bytes, &Semantic::Colors(0))?;
+    if let Some(values) = &colors {
+        let vec3_length = checked_attribute_length(vertex_count, 3, "COLOR_0")?;
+        let vec4_length = checked_attribute_length(vertex_count, 4, "COLOR_0")?;
+        if values.len() != vec3_length && values.len() != vec4_length {
+            return Err(Error::UnsupportedFormat(format!(
+                "COLOR_0 accessor has {} values; expected {vec3_length} or {vec4_length}",
+                values.len()
+            )));
+        }
+        validate_finite(values, "COLOR_0")?;
+    }
 
     Ok(PrimitiveAttributes {
         positions,
@@ -93,19 +156,92 @@ fn read_attributes(
     })
 }
 
+fn validate_attribute(
+    values: &[f32],
+    vertex_count: usize,
+    component_count: usize,
+    semantic: &'static str,
+) -> Result<()> {
+    let expected = checked_attribute_length(vertex_count, component_count, semantic)?;
+    if values.len() != expected {
+        return Err(Error::UnsupportedFormat(format!(
+            "{semantic} accessor has {} values; expected {expected}",
+            values.len()
+        )));
+    }
+    validate_finite(values, semantic)
+}
+
+fn checked_attribute_length(
+    vertex_count: usize,
+    component_count: usize,
+    semantic: &'static str,
+) -> Result<usize> {
+    vertex_count
+        .checked_mul(component_count)
+        .ok_or(Error::SizeOverflow(semantic))
+}
+
+fn validate_finite(values: &[f32], semantic: &'static str) -> Result<()> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(Error::UnsupportedFormat(format!(
+            "{semantic} accessor contains a non-finite value"
+        )));
+    }
+    Ok(())
+}
+
 fn read_attribute(
     primitive: &gltf_json::mesh::Primitive,
     root: &gltf_json::Root,
     buffer_bytes: &[u8],
-    semantic: Semantic,
+    semantic: &Semantic,
 ) -> Result<Option<Vec<f32>>> {
-    let Some(accessor_index) = primitive.attributes.get(&Valid(semantic)) else {
+    let Some(accessor_index) = primitive.attributes.get(&Valid(semantic.clone())) else {
         return Ok(None);
     };
     let accessor = root.accessors.get(accessor_index.value()).ok_or_else(|| {
         Error::UnsupportedFormat("Primitive accessor index is out of bounds".into())
     })?;
+    validate_attribute_accessor(accessor, semantic)?;
     read_accessor_f32(accessor, root, buffer_bytes).map(Some)
+}
+
+fn validate_attribute_accessor(accessor: &gltf_json::Accessor, semantic: &Semantic) -> Result<()> {
+    use gltf_json::accessor::ComponentType::{F32, U8, U16};
+    let component_type = accessor_component_type(accessor)?;
+    let valid = match semantic {
+        Semantic::Positions | Semantic::Normals | Semantic::Tangents => {
+            component_type == F32 && !accessor.normalized
+        }
+        Semantic::TexCoords(_) | Semantic::Colors(_) => {
+            (component_type == F32 && !accessor.normalized)
+                || (matches!(component_type, U8 | U16) && accessor.normalized)
+        }
+        Semantic::Joints(_) => matches!(component_type, U8 | U16) && !accessor.normalized,
+        Semantic::Weights(_) => {
+            (component_type == F32 && !accessor.normalized)
+                || (matches!(component_type, U8 | U16) && accessor.normalized)
+        }
+        Semantic::Extras(_) => false,
+    };
+    if !valid {
+        return Err(Error::UnsupportedFormat(format!(
+            "Unsupported component type or normalization for {semantic:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn accessor_component_type(
+    accessor: &gltf_json::Accessor,
+) -> Result<gltf_json::accessor::ComponentType> {
+    match accessor.component_type {
+        Valid(gltf_json::accessor::GenericComponentType(component_type)) => Ok(component_type),
+        gltf_json::validation::Checked::Invalid => {
+            Err(Error::UnsupportedFormat("Invalid component type".into()))
+        }
+    }
 }
 
 fn read_indices(
@@ -119,6 +255,7 @@ fn read_indices(
             .accessors
             .get(index_accessor.value())
             .ok_or_else(|| Error::UnsupportedFormat("Index accessor is out of bounds".into()))?;
+        validate_index_accessor(accessor)?;
         return read_accessor_f32(accessor, root, buffer_bytes)?
             .into_iter()
             .map(|value| checked_u16_float(value, "primitive index"))
@@ -131,12 +268,27 @@ fn read_indices(
         .collect()
 }
 
+fn validate_index_accessor(accessor: &gltf_json::Accessor) -> Result<()> {
+    use gltf_json::accessor::{ComponentType, Type};
+    let is_scalar = accessor.type_ == Valid(Type::Scalar);
+    let valid_component = matches!(
+        accessor_component_type(accessor)?,
+        ComponentType::U8 | ComponentType::U16 | ComponentType::U32
+    );
+    if !is_scalar || !valid_component || accessor.normalized {
+        return Err(Error::UnsupportedFormat(
+            "Index accessor must use unnormalized unsigned scalar values".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn build_vertices(
     attributes: &PrimitiveAttributes,
     bone_count: usize,
 ) -> Result<Vec<UnpackedVertex>> {
-    let max_bone_index =
-        u16::try_from(bone_count).map_err(|_| Error::SizeOverflow("primitive bone count"))?;
+    let max_bone_index = u16::try_from(bone_count.saturating_sub(1))
+        .map_err(|_| Error::SizeOverflow("primitive bone count"))?;
     (0..attributes.vertex_count)
         .map(|index| build_vertex(attributes, index, max_bone_index))
         .collect()
@@ -185,10 +337,33 @@ fn read_skin(
         return Ok(([0; 4], [0.0; 4]));
     };
     let joint_values = components_at::<4>(joints, index, "JOINTS_0")?;
-    let bone_weights = components_at::<4>(weights, index, "WEIGHTS_0")?;
+    let mut bone_weights = components_at::<4>(weights, index, "WEIGHTS_0")?;
+    if bone_weights
+        .iter()
+        .any(|weight| !weight.is_finite() || *weight < 0.0)
+    {
+        return Err(Error::UnsupportedFormat(
+            "Skin weights must be finite and non-negative".into(),
+        ));
+    }
+    let weight_sum = bone_weights.iter().sum::<f32>();
+    if !weight_sum.is_finite() || weight_sum <= f32::EPSILON {
+        return Err(Error::UnsupportedFormat(
+            "Skinned vertex has no positive bone weight".into(),
+        ));
+    }
+    for weight in &mut bone_weights {
+        *weight /= weight_sum;
+    }
     let mut converted = [0; 4];
     for (output, value) in converted.iter_mut().zip(joint_values) {
-        *output = checked_u16_float(value, "joint index")?.min(max_bone_index);
+        *output = checked_u16_float(value, "joint index")?;
+        if *output > max_bone_index {
+            return Err(Error::UnsupportedFormat(format!(
+                "Joint index {} exceeds the skin's maximum index {max_bone_index}",
+                *output
+            )));
+        }
     }
     let first_valid = converted
         .iter()

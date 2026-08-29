@@ -1,6 +1,7 @@
 //! UGX command-line entry point.
 
 mod cli;
+mod gltf_io;
 mod info;
 mod scan;
 

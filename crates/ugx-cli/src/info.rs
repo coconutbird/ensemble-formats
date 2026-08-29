@@ -3,15 +3,30 @@
 use std::fs;
 use std::path::Path;
 
-use ugx::Reader as UgxReader;
+use ugx::{ReadOptions, Reader as UgxReader, UgxVersion};
 
-pub(crate) fn cmd_info(input: &Path, no_verify: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn cmd_info(
+    input: &Path,
+    no_verify: bool,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let data = fs::read(input)?;
     let geom = if no_verify {
         ugx::UgxGeom::from_bytes_unchecked(&data)?
     } else {
         UgxReader::read(&data)?
     };
+    let options = if no_verify {
+        ReadOptions::unchecked_checksums()
+    } else {
+        ReadOptions::strict()
+    };
+    let version = ugx::detect_version_with_options(&data, options)?;
+
+    if json {
+        print_json_summary(input, &geom, version)?;
+        return Ok(());
+    }
 
     println!("UGX File: {}", input.display());
     println!();
@@ -22,6 +37,32 @@ pub(crate) fn cmd_info(input: &Path, no_verify: bool) -> Result<(), Box<dyn std:
     print_sections(&geom);
     print_geom_summary(&geom);
 
+    Ok(())
+}
+
+fn print_json_summary(
+    input: &Path,
+    geom: &ugx::UgxGeom,
+    version: UgxVersion,
+) -> Result<(), serde_json::Error> {
+    let version_name = match version {
+        UgxVersion::Hw1 => "hw1",
+        UgxVersion::Hw2 => "hw2",
+    };
+    let summary = serde_json::json!({
+        "format": "ugx",
+        "path": input,
+        "version": version_name,
+        "signature": format!("0x{:08X}", version.signature()),
+        "sections": geom.sections.len(),
+        "materials": geom.materials.len(),
+        "bones": geom.bones.len(),
+        "vertices": geom.total_vertices(),
+        "triangles": geom.total_triangles(),
+        "rigid_only": geom.rigid_only,
+        "max_instances": geom.max_instances,
+    });
+    println!("{}", serde_json::to_string(&summary)?);
     Ok(())
 }
 
