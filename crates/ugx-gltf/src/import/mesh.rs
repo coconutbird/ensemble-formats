@@ -4,8 +4,8 @@
 //! `global_bones` heuristic detection, and vertex packer construction.
 
 use ugx::{
-    GrannyBone, GrannyBoneBinding, GrannyMesh, MAX_UV, Section, UgxVersion, UnivertPacker,
-    UnpackedVertex, VertexElementType,
+    GrannyBone, GrannyBoneBinding, GrannyMesh, Hw2SkinOrder, MAX_UV, Section, UgxVersion,
+    UnivertPacker, UnpackedVertex, VertexElementType,
 };
 
 /// Generate `GrannyMesh` entries from vertex skin data and section info.
@@ -20,6 +20,7 @@ use ugx::{
 pub(super) type MeshInfo = (String, usize, usize, usize, usize, Option<usize>);
 
 struct MeshGroup {
+    original_index: Option<usize>,
     name: String,
     ranges: Vec<(usize, usize, usize, usize)>,
 }
@@ -30,105 +31,139 @@ pub(super) fn generate_granny_meshes_from_vertices(
     mesh_infos: &[MeshInfo],
     sections: &[Section],
 ) -> Vec<GrannyMesh> {
+    let groups = group_mesh_infos(mesh_infos);
+    let mut indexed_meshes = std::collections::BTreeMap::new();
+    let mut appended_meshes = Vec::new();
+
+    for group in &groups {
+        let Some(mesh) = build_granny_mesh(group, vertices, granny_bones, sections) else {
+            continue;
+        };
+        if let Some(index) = group.original_index {
+            indexed_meshes.insert(index, mesh);
+        } else {
+            appended_meshes.push(mesh);
+        }
+    }
+
+    let mut granny_meshes = indexed_meshes
+        .last_key_value()
+        .map_or_else(Vec::new, |(&last_index, _)| {
+            vec![GrannyMesh::default(); last_index.saturating_add(1)]
+        });
+    for (index, mesh) in indexed_meshes {
+        granny_meshes[index] = mesh;
+    }
+    granny_meshes.extend(appended_meshes);
+    granny_meshes
+}
+
+fn group_mesh_infos(mesh_infos: &[MeshInfo]) -> Vec<MeshGroup> {
     // Group mesh_infos by granny_mesh_index. If any entry has an explicit index,
     // use that to merge multiple glTF meshes into one GrannyMesh. Otherwise each
     // entry stays separate.
     let has_explicit_indices = mesh_infos.iter().any(|m| m.5.is_some());
 
-    let groups: Vec<MeshGroup> = if has_explicit_indices {
+    if has_explicit_indices {
         let mut map: std::collections::BTreeMap<usize, MeshGroup> =
             std::collections::BTreeMap::new();
+        let mut unindexed = Vec::new();
         for (name, sv, ev, ss, es, idx_opt) in mesh_infos {
-            let idx = idx_opt.unwrap_or(map.len() + 10000);
-            let group = map.entry(idx).or_insert_with(|| MeshGroup {
-                name: name.clone(),
-                ranges: Vec::new(),
-            });
-            group.ranges.push((*sv, *ev, *ss, *es));
+            if let Some(idx) = idx_opt {
+                let group = map.entry(*idx).or_insert_with(|| MeshGroup {
+                    original_index: Some(*idx),
+                    name: name.clone(),
+                    ranges: Vec::new(),
+                });
+                group.ranges.push((*sv, *ev, *ss, *es));
+            } else {
+                unindexed.push(MeshGroup {
+                    original_index: None,
+                    name: name.clone(),
+                    ranges: vec![(*sv, *ev, *ss, *es)],
+                });
+            }
         }
-        map.into_values().collect()
+        map.into_values().chain(unindexed).collect()
     } else {
         mesh_infos
             .iter()
             .map(|(name, sv, ev, ss, es, _)| MeshGroup {
+                original_index: None,
                 name: name.clone(),
                 ranges: vec![(*sv, *ev, *ss, *es)],
             })
             .collect()
-    };
+    }
+}
 
-    let mut granny_meshes = Vec::new();
+fn build_granny_mesh(
+    group: &MeshGroup,
+    vertices: &[UnpackedVertex],
+    granny_bones: &[GrannyBone],
+    sections: &[Section],
+) -> Option<GrannyMesh> {
+    let mut used_bones = std::collections::BTreeSet::new();
+    let mut rigid_bone_indices = std::collections::BTreeSet::new();
 
-    for group in &groups {
-        let mut used_bones: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
-        let mut rigid_bone_indices: std::collections::BTreeSet<u16> =
-            std::collections::BTreeSet::new();
-
-        for &(sv, ev, ss, es) in &group.ranges {
-            for v in &vertices[sv..ev] {
-                for k in 0..4 {
-                    if v.bone_weights[k] > 0.0 {
-                        used_bones.insert(v.bone_indices[k]);
-                    }
-                }
-            }
-            for section in &sections[ss..es] {
-                if (section.global_bones || section.rigid_only)
-                    && let Ok(bone_index) = u16::try_from(section.rigid_bone_index)
-                {
-                    used_bones.insert(bone_index);
-                }
-                if (section.global_bones || section.rigid_only)
-                    && let Ok(bone_index) = u16::try_from(section.rigid_bone_index)
-                {
-                    rigid_bone_indices.insert(bone_index);
+    for &(sv, ev, ss, es) in &group.ranges {
+        for vertex in &vertices[sv..ev] {
+            for influence in 0..4 {
+                if vertex.bone_weights[influence] > 0.0 {
+                    used_bones.insert(vertex.bone_indices[influence]);
                 }
             }
         }
-
-        if used_bones.is_empty() {
-            continue;
-        }
-
-        // Always include the root bone (index 0) in the binding list.
-        // The engine expects meshes to be bound to the skeleton root.
-        if !granny_bones.is_empty() {
-            used_bones.insert(0);
-        }
-
-        let all_group_verts: Vec<&UnpackedVertex> = group
-            .ranges
-            .iter()
-            .flat_map(|&(sv, ev, _, _)| &vertices[sv..ev])
-            .collect();
-
-        let bone_bindings: Vec<GrannyBoneBinding> = used_bones
-            .iter()
-            .filter_map(|&idx| {
-                let idx_0based = usize::from(idx);
-                granny_bones.get(idx_0based).map(|b| {
-                    let owns_all = rigid_bone_indices.contains(&idx);
-                    let (obb_min, obb_max) =
-                        compute_bone_obb(&all_group_verts, idx, &b.inverse_world_matrix, owns_all);
-                    GrannyBoneBinding {
-                        bone_name: b.name.clone(),
-                        obb_min,
-                        obb_max,
-                        triangle_indices: Vec::new(),
-                    }
-                })
-            })
-            .collect();
-
-        if !bone_bindings.is_empty() {
-            granny_meshes.push(GrannyMesh {
-                name: group.name.clone(),
-                bone_bindings,
-            });
+        for section in &sections[ss..es] {
+            if (section.global_bones || section.rigid_only)
+                && let Ok(bone_index) = u16::try_from(section.rigid_bone_index)
+            {
+                used_bones.insert(bone_index);
+                rigid_bone_indices.insert(bone_index);
+            }
         }
     }
 
-    granny_meshes
+    if used_bones.is_empty() {
+        return None;
+    }
+
+    // The engine expects meshes to be bound to the skeleton root.
+    if !granny_bones.is_empty() {
+        used_bones.insert(0);
+    }
+
+    let all_group_vertices: Vec<&UnpackedVertex> = group
+        .ranges
+        .iter()
+        .flat_map(|&(sv, ev, _, _)| &vertices[sv..ev])
+        .collect();
+
+    let bone_bindings: Vec<GrannyBoneBinding> = used_bones
+        .iter()
+        .filter_map(|&index| {
+            granny_bones.get(usize::from(index)).map(|bone| {
+                let owns_all = rigid_bone_indices.contains(&index);
+                let (obb_min, obb_max) = compute_bone_obb(
+                    &all_group_vertices,
+                    index,
+                    &bone.inverse_world_matrix,
+                    owns_all,
+                );
+                GrannyBoneBinding {
+                    bone_name: bone.name.clone(),
+                    obb_min,
+                    obb_max,
+                    triangle_indices: Vec::new(),
+                }
+            })
+        })
+        .collect();
+
+    (!bone_bindings.is_empty()).then(|| GrannyMesh {
+        name: group.name.clone(),
+        bone_bindings,
+    })
 }
 
 /// Compute the OBB (oriented bounding box) for a bone from vertex data.
@@ -248,6 +283,16 @@ pub(super) fn detect_global_bones(
     }
 }
 
+/// Vertex features that determine the binary packing declaration.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct VertexPackingFeatures {
+    pub max_texcoords: usize,
+    pub has_tangents: bool,
+    pub has_skin: bool,
+    pub has_colors: bool,
+    pub hw2_skin_order: Hw2SkinOrder,
+}
+
 /// Build a `UnivertPacker` for the target version.
 ///
 /// HW1 (v4) — `PNA0ST0` byte order, Float3 types:
@@ -257,24 +302,18 @@ pub(super) fn detect_global_bones(
 /// HW2 (v6) — `PT0NA0S` byte order, compact types:
 ///   Position(HalfFloat4, 8B) → UV(HalfFloat2, 4B) → Normal(Dec3N, 4B) →
 ///   Tangent(Dec3N, 4B) → Skin(UByte4+UByte4N, 8B)
-pub(super) fn build_packer(
-    version: UgxVersion,
-    max_texcoords: usize,
-    has_tangents: bool,
-    has_skin: bool,
-    has_colors: bool,
-) -> UnivertPacker {
-    // HW2 vertex declarations live outside the UGX file. Keep the emitted
-    // byte layout canonical so it can be inferred from the section stride:
-    // PT0NA0, optional skin, extra UV sets, then optional diffuse color.
-    // A diffuse element disambiguates multiple UV sets from a lone color.
+pub(super) fn build_packer(version: UgxVersion, features: VertexPackingFeatures) -> UnivertPacker {
+    // HW2 vertex declarations live outside the UGX file. The importer retains
+    // this exact packer as external section context so unpacking and subsequent
+    // exports do not have to infer extra UV, color, or skin ordering from stride.
     let emitted_texcoords = match version {
-        UgxVersion::Hw1 => max_texcoords,
-        UgxVersion::Hw2 => max_texcoords.max(1),
+        UgxVersion::Hw1 => features.max_texcoords,
+        UgxVersion::Hw2 => features.max_texcoords.max(1),
     }
     .min(MAX_UV);
-    let emitted_tangents = has_tangents || version == UgxVersion::Hw2;
-    let emitted_colors = has_colors || (version == UgxVersion::Hw2 && emitted_texcoords > 1);
+    let emitted_tangents = features.has_tangents || version == UgxVersion::Hw2;
+    let emitted_colors =
+        features.has_colors || (version == UgxVersion::Hw2 && emitted_texcoords > 1);
     let mut uv_types = [VertexElementType::Ignore; MAX_UV];
     for uv_type in uv_types.iter_mut().take(emitted_texcoords) {
         *uv_type = VertexElementType::HalfFloat2;
@@ -287,7 +326,7 @@ pub(super) fn build_packer(
             if emitted_tangents {
                 po.push_str("A0");
             }
-            if has_skin {
+            if features.has_skin {
                 po.push('S');
             }
             for digit in "0123456789".chars().take(emitted_texcoords) {
@@ -301,14 +340,22 @@ pub(super) fn build_packer(
         }
         UgxVersion::Hw2 => {
             let mut po = String::from("PT0NA0");
-            if has_skin {
+            if features.hw2_skin_order == Hw2SkinOrder::ColorThenSkin
+                && features.has_skin
+                && emitted_colors
+            {
+                po.push('D');
+            }
+            if features.has_skin {
                 po.push('S');
             }
             for digit in "123456789".chars().take(emitted_texcoords - 1) {
                 po.push('T');
                 po.push(digit);
             }
-            if emitted_colors {
+            if emitted_colors
+                && !(features.hw2_skin_order == Hw2SkinOrder::ColorThenSkin && features.has_skin)
+            {
                 po.push('D');
             }
             po
@@ -328,5 +375,34 @@ pub(super) fn build_packer(
         weights_type: VertexElementType::UByte4N,
         diffuse_type: VertexElementType::D3DColor,
         index_type: VertexElementType::Ignore,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hw2_packer_can_match_both_ufx_skin_orders() {
+        let features = VertexPackingFeatures {
+            max_texcoords: 1,
+            has_tangents: true,
+            has_skin: true,
+            has_colors: true,
+            hw2_skin_order: Hw2SkinOrder::SkinThenColor,
+        };
+        let skin_first = build_packer(UgxVersion::Hw2, features);
+        let color_first = build_packer(
+            UgxVersion::Hw2,
+            VertexPackingFeatures {
+                hw2_skin_order: Hw2SkinOrder::ColorThenSkin,
+                ..features
+            },
+        );
+
+        assert_eq!(skin_first.pack_order, "PT0NA0SD");
+        assert_eq!(color_first.pack_order, "PT0NA0DS");
+        assert_eq!(skin_first.vertex_size(), 32);
+        assert_eq!(color_first.vertex_size(), 32);
     }
 }

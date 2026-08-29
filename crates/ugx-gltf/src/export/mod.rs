@@ -197,7 +197,7 @@ fn export_sections(
         });
         content.meshes.push(json::Mesh {
             extensions: None,
-            extras: build_mesh_extras(geometry, section, mesh_index),
+            extras: build_mesh_extras(geometry, section, section_index, mesh_index)?,
             name: Some(mesh_name(geometry, mesh_index, section_index)),
             primitives: vec![primitive],
             weights: None,
@@ -271,8 +271,29 @@ fn mesh_name(geometry: &UgxGeom, mesh_index: usize, section_index: usize) -> Str
         .map_or_else(|| format!("mesh_{section_index}"), |mesh| mesh.name.clone())
 }
 
-fn build_mesh_extras(geometry: &UgxGeom, section: &Section, mesh_index: usize) -> json::Extras {
+fn build_mesh_extras(
+    geometry: &UgxGeom,
+    section: &Section,
+    section_index: usize,
+    mesh_index: usize,
+) -> Result<json::Extras> {
+    let hw2_has_color = section.base_vert_packer.is_none()
+        && section.external_vert_packer.as_ref().map_or_else(
+            || {
+                if section.rigid_only {
+                    section.vert_size >= 24
+                } else {
+                    section.vert_size >= 32
+                }
+            },
+            |packer| packer.pack_order.contains('D'),
+        );
+    let hw2_color_before_skin = geometry
+        .infer_hw2_skin_order(section_index)?
+        .is_some_and(|order| order == ugx::Hw2SkinOrder::ColorThenSkin);
     let mut extras = MeshExtrasJson {
+        hw2_has_color,
+        hw2_color_before_skin,
         lod_near_distance: section.lod_near_distance,
         lod_far_distance: section.lod_far_distance,
         lod_fade_distance: section.lod_fade_distance,
@@ -290,9 +311,9 @@ fn build_mesh_extras(geometry: &UgxGeom, section: &Section, mesh_index: usize) -
             extras.triangle_indices = Some(triangle_indices);
         }
     }
-    (!extras.is_empty())
+    Ok((!extras.is_empty())
         .then(|| to_raw_value(&extras))
-        .flatten()
+        .flatten())
 }
 
 fn build_nodes(
@@ -465,6 +486,11 @@ fn finish_export(
         extensions: None,
         extras: to_raw_value(&SceneExtrasJson {
             ugx_max_instances: geometry.max_instances,
+            ugx_granny_meshes: geometry
+                .granny_meshes
+                .iter()
+                .map(crate::extras::GrannyMeshJson::from)
+                .collect(),
         }),
         name: None,
         nodes: node_content.scene_nodes,

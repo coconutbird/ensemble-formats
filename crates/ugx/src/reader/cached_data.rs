@@ -137,6 +137,7 @@ fn read_packed_section(data: &[u8], pos: &mut usize, version: UgxVersion) -> Res
         vert_size,
         num_verts,
         base_vert_packer: tail.base_vert_packer,
+        external_vert_packer: None,
         bone_remap: tail.bone_remap,
         rigid_only: tail.rigid_only,
         global_bones: tail.global_bones,

@@ -47,9 +47,9 @@ fn populate_legacy_extras(extras: &mut MaterialExtrasJson, legacy: &LegacyMateri
     if flags_without_two_sided != 0 {
         extras.flags = Some(flags_without_two_sided);
     }
-    if legacy.blend_type >= 4 {
-        extras.blend_type = Some(legacy.blend_type);
-    }
+    // glTF alphaMode cannot distinguish every UGX blend mode (notably
+    // additive from over), so retain the raw byte for lossless round-trips.
+    extras.blend_type = Some(legacy.blend_type);
     if !uses_opacity {
         extras.opacity = Some(legacy.opacity);
     }

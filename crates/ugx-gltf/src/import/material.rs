@@ -88,8 +88,8 @@ fn import_material(root: &gltf_json::Root, mat: &gltf_json::Material) -> Result<
     // Read UGX extras (all material properties + maps)
     let mat_extras = read_material_extras(&mat.extras);
 
-    // blend_type: extras only stores raw values ≥ 4 (no glTF
-    // equivalent).  For 0–3, reconstruct from alphaMode.
+    // Prefer the exact UGX byte from exporter-produced files. For generic
+    // glTF input without UGX extras, derive the closest mode from alphaMode.
     let blend_type = mat_extras.blend_type.unwrap_or({
         match mat.alpha_mode {
             Checked::Valid(gltf_json::material::AlphaMode::Blend) => 2, // Over

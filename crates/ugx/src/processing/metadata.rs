@@ -81,8 +81,7 @@ impl UgxGeom {
         let multiplier = max_verts
             .checked_next_power_of_two()
             .ok_or(Error::SizeOverflow("instance index multiplier"))?;
-        self.instance_index_multiplier = i16::try_from(multiplier)
-            .map_err(|_| Error::SizeOverflow("instance index multiplier"))?;
+        self.instance_index_multiplier = encode_instance_index_multiplier(multiplier)?;
 
         // max_instances is set by artist tooling, not derivable from mesh data.
         // Preserve the existing value if already set (e.g. from glTF extras);
@@ -116,7 +115,9 @@ impl UgxGeom {
     /// cannot be represented by their UGX integer fields.
     pub fn rebuild_instanced_index_buffer(&mut self) -> Result<()> {
         let max_inst = u32::try_from(self.max_instances).unwrap_or_default();
-        let multiplier = u32::try_from(self.instance_index_multiplier).unwrap_or_default();
+        let multiplier = u32::from(decode_instance_index_multiplier(
+            self.instance_index_multiplier,
+        ));
 
         if max_inst <= 1 || multiplier == 0 {
             return Ok(());
@@ -192,5 +193,30 @@ impl UgxGeom {
 
         self.index_buffer = instanced;
         Ok(())
+    }
+}
+
+/// Encode the unsigned on-disk multiplier while preserving the public signed
+/// field used by the existing API. Retail files use `0x8000` for 32,768.
+fn encode_instance_index_multiplier(multiplier: u32) -> Result<i16> {
+    let raw =
+        u16::try_from(multiplier).map_err(|_| Error::SizeOverflow("instance index multiplier"))?;
+    Ok(i16::from_le_bytes(raw.to_le_bytes()))
+}
+
+fn decode_instance_index_multiplier(multiplier: i16) -> u16 {
+    u16::from_le_bytes(multiplier.to_le_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instance_multiplier_preserves_unsigned_16_bit_values() {
+        let encoded = encode_instance_index_multiplier(32_768).unwrap();
+        assert_eq!(encoded, i16::MIN);
+        assert_eq!(decode_instance_index_multiplier(encoded), 32_768);
+        assert!(encode_instance_index_multiplier(65_536).is_err());
     }
 }

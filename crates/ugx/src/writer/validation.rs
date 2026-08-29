@@ -146,6 +146,18 @@ fn validate_section(
                 packer.vertex_size()
             )));
         }
+    } else if let Some(packer) = &section.external_vert_packer {
+        if packer.pack_order.is_empty() {
+            return Err(Error::UnsupportedFormat(format!(
+                "HW2 section {section_index} has an empty external vertex pack order"
+            )));
+        }
+        if packer.vertex_size() != vertex_stride {
+            return Err(Error::UnsupportedFormat(format!(
+                "HW2 section {section_index} vertex stride {vertex_stride} does not match its external packer stride {}",
+                packer.vertex_size()
+            )));
+        }
     }
 
     Ok(())

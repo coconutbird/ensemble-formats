@@ -13,4 +13,6 @@ workspace = true
 [dependencies]
 d3dasm.workspace = true
 cfglib.workspace = true
-nostdio.workspace = true
+
+[dev-dependencies]
+test-utils = { workspace = true }

@@ -5,7 +5,7 @@ use ugx::UgxVersion;
 
 use super::compare::{RoundtripResult, roundtrip_bytes};
 
-const MAX_FILES: usize = 20;
+const MAX_FILES: usize = 100;
 
 #[derive(Default)]
 struct RunStats {
@@ -101,10 +101,25 @@ fn hw2_loose_files_roundtrip() {
     );
 
     let mut stats = RunStats::default();
-    for path in files.iter().take(MAX_FILES) {
+    for path in evenly_spaced(&files, MAX_FILES) {
         stats.record(roundtrip_loose_file(path));
     }
     stats.assert_success("HW2");
+}
+
+fn evenly_spaced<T>(items: &[T], limit: usize) -> Vec<&T> {
+    if items.len() <= limit {
+        return items.iter().collect();
+    }
+    if limit <= 1 {
+        return items.first().into_iter().collect();
+    }
+    (0..limit)
+        .map(|index| {
+            let item_index = index * (items.len() - 1) / (limit - 1);
+            &items[item_index]
+        })
+        .collect()
 }
 
 fn roundtrip_loose_file(path: &Path) -> RoundtripResult {

@@ -91,8 +91,7 @@ impl UgxGeom {
             let rigid_bone = usize::try_from(section.rigid_bone_index).unwrap_or(usize::MAX);
             let bone_remap = section.bone_remap.clone();
             let has_skin = section
-                .base_vert_packer
-                .as_ref()
+                .vertex_packer()
                 .map_or(!section.rigid_only && section.vert_size >= 28, |p| {
                     p.pack_order.contains('S')
                 });

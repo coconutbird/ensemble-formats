@@ -72,6 +72,12 @@ pub struct Section {
     pub num_verts: i32,
     /// Base vertex packer (HW1 only; `None` in HW2 where vertex format is external).
     pub base_vert_packer: Option<UnivertPacker>,
+    /// External vertex packer associated with this HW2 section.
+    ///
+    /// HW2 stores this declaration in the matching UFX rather than the UGX.
+    /// Readers therefore leave it as `None` unless the caller supplies that
+    /// external context. It is not serialized into v6 section records.
+    pub external_vert_packer: Option<UnivertPacker>,
     /// Local-to-global bone remap table.
     /// Maps section-local bone indices to global skeleton indices.
     /// TODO: Entry size assumed u8 — may be u16/u32 for large skeletons. See ugx.rs.
@@ -93,4 +99,14 @@ pub struct Section {
     /// Vertical fade/height distance for atmospheric effects (HW2 only, +0x34).
     /// Only non-zero on fog planes and cloud layers. `0.0` = unused.
     pub lod_fade_distance: f32,
+}
+
+impl Section {
+    /// Return the embedded HW1 or externally supplied HW2 vertex packer.
+    #[must_use]
+    pub fn vertex_packer(&self) -> Option<&UnivertPacker> {
+        self.base_vert_packer
+            .as_ref()
+            .or(self.external_vert_packer.as_ref())
+    }
 }

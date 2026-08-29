@@ -5,6 +5,8 @@ use gltf_json::validation::Checked::Valid;
 use num_traits::ToPrimitive;
 use ugx::{Error, MAX_UV, Result, UnpackedVertex};
 
+use crate::extras::RAW_JOINTS_SEMANTIC;
+
 use super::accessor::read_accessor_f32;
 
 struct PrimitiveAttributes {
@@ -13,6 +15,7 @@ struct PrimitiveAttributes {
     tangents: Option<Vec<f32>>,
     uv_sets: Vec<Vec<f32>>,
     joints: Option<Vec<f32>>,
+    raw_joints: Option<Vec<f32>>,
     weights: Option<Vec<f32>>,
     colors: Option<Vec<f32>>,
     vertex_count: usize,
@@ -119,6 +122,17 @@ fn read_attributes(
         .then(|| read_attribute(primitive, root, buffer_bytes, &Semantic::Weights(0)))
         .transpose()?
         .flatten();
+    let raw_joints = has_skeleton
+        .then(|| {
+            read_attribute(
+                primitive,
+                root,
+                buffer_bytes,
+                &Semantic::Extras(RAW_JOINTS_SEMANTIC.to_string()),
+            )
+        })
+        .transpose()?
+        .flatten();
     match (&joints, &weights) {
         (Some(joints), Some(weights)) => {
             validate_attribute(joints, vertex_count, 4, "JOINTS_0")?;
@@ -130,6 +144,9 @@ fn read_attributes(
                 "Skinned primitive must contain both JOINTS_0 and WEIGHTS_0".into(),
             ));
         }
+    }
+    if let Some(raw_joints) = &raw_joints {
+        validate_attribute(raw_joints, vertex_count, 4, RAW_JOINTS_SEMANTIC)?;
     }
     let colors = read_attribute(primitive, root, buffer_bytes, &Semantic::Colors(0))?;
     if let Some(values) = &colors {
@@ -150,6 +167,7 @@ fn read_attributes(
         tangents,
         uv_sets,
         joints,
+        raw_joints,
         weights,
         colors,
         vertex_count,
@@ -222,6 +240,9 @@ fn validate_attribute_accessor(accessor: &gltf_json::Accessor, semantic: &Semant
         Semantic::Weights(_) => {
             (component_type == F32 && !accessor.normalized)
                 || (matches!(component_type, U8 | U16) && accessor.normalized)
+        }
+        Semantic::Extras(name) if name == RAW_JOINTS_SEMANTIC => {
+            matches!(component_type, U8 | U16) && !accessor.normalized
         }
         Semantic::Extras(_) => false,
     };
@@ -364,6 +385,14 @@ fn read_skin(
                 *output
             )));
         }
+    }
+    if let Some(raw_joints) = &attributes.raw_joints {
+        let raw_values = components_at::<4>(raw_joints, index, RAW_JOINTS_SEMANTIC)?;
+        let mut raw_converted = [0; 4];
+        for (output, value) in raw_converted.iter_mut().zip(raw_values) {
+            *output = checked_u16_float(value, "raw UGX joint index")?;
+        }
+        return Ok((raw_converted, bone_weights));
     }
     let first_valid = converted
         .iter()

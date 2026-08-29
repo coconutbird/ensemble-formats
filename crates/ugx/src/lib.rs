@@ -78,7 +78,7 @@ mod error;
 pub use error::{Error, Result};
 
 pub mod vertex;
-pub use vertex::{MAX_UV, UnivertPacker, UnpackedVertex, VertexElementType};
+pub use vertex::{Hw2SkinOrder, MAX_UV, UnivertPacker, UnpackedVertex, VertexElementType};
 
 pub mod types;
 pub use types::*;

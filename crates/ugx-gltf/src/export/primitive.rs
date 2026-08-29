@@ -6,6 +6,8 @@ use gltf_json as json;
 use json::validation::Checked::Valid;
 use ugx::{Error, MAX_UV, Result, UnpackedVertex};
 
+use crate::extras::RAW_JOINTS_SEMANTIC;
+
 /// Source data and format metadata for one exported primitive.
 pub(crate) struct PrimitiveInput<'a> {
     pub vertices: &'a [UnpackedVertex],
@@ -27,6 +29,7 @@ pub(crate) struct PrimitiveOutput<'a> {
 
 struct SkinData {
     joints: Vec<[u16; 4]>,
+    raw_joints: Option<Vec<[u16; 4]>>,
     weights: Vec<[f32; 4]>,
     use_u16_joints: bool,
 }
@@ -203,11 +206,20 @@ fn append_skin(
         return Ok(());
     }
     let skin = build_skin_data(input)?;
-    let joints_accessor = append_joint_accessor(output, &skin)?;
+    let joints_accessor = append_joint_accessor(output, &skin.joints, skin.use_u16_joints)?;
     attributes.insert(
         Valid(json::mesh::Semantic::Joints(0)),
         json::Index::new(joints_accessor),
     );
+    if let Some(raw_joints) = &skin.raw_joints {
+        let raw_accessor = append_joint_accessor(output, raw_joints, true)?;
+        attributes.insert(
+            Valid(json::mesh::Semantic::Extras(
+                RAW_JOINTS_SEMANTIC.to_string(),
+            )),
+            json::Index::new(raw_accessor),
+        );
+    }
     let weights_accessor = append_f32_accessor(
         output,
         skin.weights,
@@ -223,8 +235,11 @@ fn append_skin(
 }
 
 fn build_skin_data(input: &PrimitiveInput<'_>) -> Result<SkinData> {
-    let max_bone_index =
-        u16::try_from(input.bone_count).map_err(|_| Error::SizeOverflow("primitive bone count"))?;
+    let max_bone_index = input
+        .bone_count
+        .checked_sub(1)
+        .and_then(|index| u16::try_from(index).ok())
+        .ok_or(Error::SizeOverflow("primitive bone count"))?;
     let rigid_index = usize::try_from(input.rigid_bone_index)
         .ok()
         .filter(|&index| index < input.bone_count)
@@ -232,17 +247,23 @@ fn build_skin_data(input: &PrimitiveInput<'_>) -> Result<SkinData> {
             u16::try_from(index).map_err(|_| Error::SizeOverflow("rigid bone index"))
         })?;
     let mut joints = Vec::with_capacity(input.vertices.len());
+    let mut raw_joints = Vec::with_capacity(input.vertices.len());
+    let mut has_out_of_range_joint = false;
     let mut weights = Vec::with_capacity(input.vertices.len());
     for vertex in input.vertices {
         let weight_sum = vertex.bone_weights.iter().sum::<f32>();
         let is_rigid = weight_sum.abs() <= f32::EPSILON;
-        joints.push(resolve_joints(
-            vertex,
-            input.bone_remap,
-            max_bone_index,
-            rigid_index,
-            is_rigid,
-        ));
+        let resolved = resolve_joints(vertex, input.bone_remap, rigid_index, is_rigid);
+        let safe = resolved.map(|index| {
+            if index > max_bone_index {
+                has_out_of_range_joint = true;
+                0
+            } else {
+                index
+            }
+        });
+        joints.push(safe);
+        raw_joints.push(resolved);
         let mut normalized_weights = vertex.bone_weights;
         if is_rigid {
             normalized_weights[0] = 1.0;
@@ -255,6 +276,7 @@ fn build_skin_data(input: &PrimitiveInput<'_>) -> Result<SkinData> {
     }
     Ok(SkinData {
         joints,
+        raw_joints: has_out_of_range_joint.then_some(raw_joints),
         weights,
         use_u16_joints: input.bone_count >= 256,
     })
@@ -263,7 +285,6 @@ fn build_skin_data(input: &PrimitiveInput<'_>) -> Result<SkinData> {
 fn resolve_joints(
     vertex: &UnpackedVertex,
     bone_remap: &[u8],
-    max_bone_index: u16,
     rigid_index: u16,
     is_rigid: bool,
 ) -> [u16; 4] {
@@ -277,9 +298,6 @@ fn resolve_joints(
                 .get(usize::from(*index))
                 .copied()
                 .map_or(0, u16::from);
-        }
-        if *index > max_bone_index {
-            *index = 0;
         }
     }
     indices
@@ -366,13 +384,17 @@ fn append_f32_accessor<const N: usize>(
     )
 }
 
-fn append_joint_accessor(output: &mut PrimitiveOutput<'_>, skin: &SkinData) -> Result<u32> {
-    let alignment = if skin.use_u16_joints { 2 } else { 1 };
+fn append_joint_accessor(
+    output: &mut PrimitiveOutput<'_>,
+    joints: &[[u16; 4]],
+    use_u16_joints: bool,
+) -> Result<u32> {
+    let alignment = if use_u16_joints { 2 } else { 1 };
     align_buffer(output.buffer_data, alignment);
     let byte_offset = output.buffer_data.len();
-    for joints in &skin.joints {
-        for &joint in joints {
-            if skin.use_u16_joints {
+    for vertex_joints in joints {
+        for &joint in vertex_joints {
+            if use_u16_joints {
                 output.buffer_data.extend_from_slice(&joint.to_le_bytes());
             } else {
                 output
@@ -382,7 +404,7 @@ fn append_joint_accessor(output: &mut PrimitiveOutput<'_>, skin: &SkinData) -> R
         }
     }
     let byte_length = output.buffer_data.len() - byte_offset;
-    let (stride, component_type) = if skin.use_u16_joints {
+    let (stride, component_type) = if use_u16_joints {
         (8, json::accessor::ComponentType::U16)
     } else {
         (4, json::accessor::ComponentType::U8)
@@ -397,7 +419,7 @@ fn append_joint_accessor(output: &mut PrimitiveOutput<'_>, skin: &SkinData) -> R
     append_accessor(
         output,
         view_index,
-        skin.joints.len(),
+        joints.len(),
         component_type,
         json::accessor::Type::Vec4,
         None,

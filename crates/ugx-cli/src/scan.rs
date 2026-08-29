@@ -1,4 +1,4 @@
-//! Raw UGX reserved-field scanning.
+//! Raw UGX header, section-flag, and LOD-field scanning.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -31,10 +31,11 @@ struct ScanStats {
     hw1_count: u32,
     hw2_count: u32,
     parse_errors: u32,
-    hw2_reserved: BTreeMap<(u32, u32), Vec<FileSection>>,
+    header_flags: BTreeMap<(u8, u8, u8, u8), Vec<String>>,
     header_padding: BTreeMap<(u16, u32), Vec<String>>,
     hw1_trailing: BTreeMap<(i32, i32, i32), Vec<FileSection>>,
-    hw2_flags: BTreeMap<(i32, i32), Vec<FileSection>>,
+    hw2_non_boolean_rigid: BTreeMap<i32, Vec<FileSection>>,
+    hw2_lod_distances: BTreeMap<(u32, u32, u32), Vec<FileSection>>,
 }
 
 fn scan_file(path: &Path, root: &Path, stats: &mut ScanStats) {
@@ -77,7 +78,23 @@ fn scan_file(path: &Path, root: &Path, stats: &mut ScanStats) {
         .display()
         .to_string();
 
-    let Some(padding_2) = read_u16_at(&cached, 0x38) else {
+    let Some(all_sections_rigid) = read_u8_at(&cached, 0x36) else {
+        stats.parse_errors += 1;
+        return;
+    };
+    let Some(global_bones) = read_u8_at(&cached, 0x37) else {
+        stats.parse_errors += 1;
+        return;
+    };
+    let Some(all_sections_skinned) = read_u8_at(&cached, 0x38) else {
+        stats.parse_errors += 1;
+        return;
+    };
+    let Some(rigid_only) = read_u8_at(&cached, 0x39) else {
+        stats.parse_errors += 1;
+        return;
+    };
+    let Some(padding_2) = read_u16_at(&cached, 0x3A) else {
         stats.parse_errors += 1;
         return;
     };
@@ -85,6 +102,16 @@ fn scan_file(path: &Path, root: &Path, stats: &mut ScanStats) {
         stats.parse_errors += 1;
         return;
     };
+    stats
+        .header_flags
+        .entry((
+            all_sections_rigid,
+            global_bones,
+            all_sections_skinned,
+            rigid_only,
+        ))
+        .or_default()
+        .push(filename.clone());
     stats
         .header_padding
         .entry((padding_2, padding_4))
@@ -115,26 +142,27 @@ fn scan_hw2_sections(
         let Some(section) = section_at(data, section_offset, section_index, 72) else {
             break;
         };
-        let (Some(flag_1), Some(flag_2)) = (read_i32_at(section, 0x28), read_i32_at(section, 0x2C))
-        else {
+        let Some(rigid_only) = read_i32_at(section, 0x28) else {
             break;
         };
-        if flag_1 != 0 && flag_1 != 1 || flag_2 != 0 && flag_2 != 1 {
+        if rigid_only != 0 && rigid_only != 1 {
             stats
-                .hw2_flags
-                .entry((flag_1, flag_2))
+                .hw2_non_boolean_rigid
+                .entry(rigid_only)
                 .or_default()
                 .push((filename.to_owned(), section_index));
         }
 
-        let (Some(reserved_1), Some(reserved_2)) =
-            (read_u32_at(section, 0x30), read_u32_at(section, 0x34))
-        else {
+        let (Some(lod_near), Some(lod_far), Some(lod_fade)) = (
+            read_u32_at(section, 0x2C),
+            read_u32_at(section, 0x30),
+            read_u32_at(section, 0x34),
+        ) else {
             break;
         };
         stats
-            .hw2_reserved
-            .entry((reserved_1, reserved_2))
+            .hw2_lod_distances
+            .entry((lod_near, lod_far, lod_fade))
             .or_default()
             .push((filename.to_owned(), section_index));
     }
@@ -185,6 +213,10 @@ fn read_u16_at(data: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
 }
 
+fn read_u8_at(data: &[u8], offset: usize) -> Option<u8> {
+    data.get(offset).copied()
+}
+
 fn read_u32_at(data: &[u8], offset: usize) -> Option<u32> {
     let end = offset.checked_add(4)?;
     Some(u32::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
@@ -206,14 +238,32 @@ fn print_scan_report(stats: &ScanStats) {
         "HW1 (v4): {} files, HW2 (v6): {} files, errors: {}",
         stats.hw1_count, stats.hw2_count, stats.parse_errors
     );
+    print_header_flags(&stats.header_flags);
     print_header_padding(&stats.header_padding);
-    print_hw2_reserved(&stats.hw2_reserved);
-    print_hw2_flags(&stats.hw2_flags);
+    print_hw2_lod_distances(&stats.hw2_lod_distances);
+    print_hw2_non_boolean_rigid(&stats.hw2_non_boolean_rigid);
     print_hw1_trailing(&stats.hw1_trailing);
 }
 
+fn print_header_flags(flags: &BTreeMap<(u8, u8, u8, u8), Vec<String>>) {
+    println!("\n=== GeomHeader Flags (+0x36 through +0x39) ===");
+    for ((all_rigid, global_bones, all_skinned, rigid_only), files) in flags {
+        println!(
+            "  all_rigid={all_rigid} global_bones={global_bones} \
+             all_skinned={all_skinned} rigid_only={rigid_only}: {} files",
+            files.len()
+        );
+        if [*all_rigid, *global_bones, *all_skinned, *rigid_only]
+            .iter()
+            .any(|value| *value > 1)
+        {
+            print_file_examples(files);
+        }
+    }
+}
+
 fn print_header_padding(padding: &BTreeMap<(u16, u32), Vec<String>>) {
-    println!("\n=== GeomHeader Padding (+0x38 u16, +0x3C u32) ===");
+    println!("\n=== GeomHeader Padding (+0x3A u16, +0x3C u32) ===");
     for ((padding_2, padding_4), files) in padding {
         println!(
             "  pad1=0x{:04X} pad2=0x{:08X}: {} files",
@@ -222,56 +272,36 @@ fn print_header_padding(padding: &BTreeMap<(u16, u32), Vec<String>>) {
             files.len()
         );
         if *padding_2 != 0 || *padding_4 != 0 {
-            for filename in files.iter().take(10) {
-                println!("    {filename}");
-            }
-            if files.len() > 10 {
-                println!("    ... and {} more", files.len() - 10);
-            }
+            print_file_examples(files);
         }
     }
 }
 
-fn print_hw2_reserved(reserved: &BTreeMap<(u32, u32), Vec<FileSection>>) {
-    println!("\n=== HW2 Section Reserved Fields (+0x30, +0x34) ===");
-    for ((reserved_1, reserved_2), entries) in reserved {
-        let reserved_float = f32::from_bits(*reserved_1);
+fn print_hw2_lod_distances(lod: &BTreeMap<(u32, u32, u32), Vec<FileSection>>) {
+    println!("\n=== HW2 Section LOD Distances (+0x2C, +0x30, +0x34) ===");
+    for ((near, far, fade), entries) in lod {
         println!(
-            "  reserved1=0x{:08X} ({:e}), reserved2=0x{:08X}: {} sections",
-            reserved_1,
-            reserved_float,
-            reserved_2,
+            "  near={:e} (0x{near:08X}), far={:e} (0x{far:08X}), \
+             fade={:e} (0x{fade:08X}): {} sections",
+            f32::from_bits(*near),
+            f32::from_bits(*far),
+            f32::from_bits(*fade),
             entries.len()
         );
-        if *reserved_1 != 0x7F7F_FFFF || *reserved_2 != 0 {
-            for (filename, section) in entries.iter().take(10) {
-                println!("    {filename}[sec{section}]");
-            }
-            if entries.len() > 10 {
-                println!("    ... and {} more", entries.len() - 10);
-            }
-        }
     }
 }
 
-fn print_hw2_flags(flags: &BTreeMap<(i32, i32), Vec<FileSection>>) {
+fn print_hw2_non_boolean_rigid(flags: &BTreeMap<i32, Vec<FileSection>>) {
     if !flags.is_empty() {
-        println!("\n=== HW2 Section Flags (non-boolean values at +0x28, +0x2C) ===");
-        for ((flag_1, flag_2), entries) in flags {
+        println!("\n=== HW2 Section rigid_only (non-boolean values at +0x28) ===");
+        for (rigid_only, entries) in flags {
             println!(
-                "  flags1={} (0x{:08X}), flags2={} (0x{:08X}): {} sections",
-                flag_1,
-                flag_1.cast_unsigned(),
-                flag_2,
-                flag_2.cast_unsigned(),
+                "  rigid_only={} (0x{:08X}): {} sections",
+                rigid_only,
+                rigid_only.cast_unsigned(),
                 entries.len()
             );
-            for (filename, section) in entries.iter().take(10) {
-                println!("    {filename}[sec{section}]");
-            }
-            if entries.len() > 10 {
-                println!("    ... and {} more", entries.len() - 10);
-            }
+            print_section_examples(entries);
         }
     }
 }
@@ -287,13 +317,26 @@ fn print_hw1_trailing(trailing: &BTreeMap<(i32, i32, i32), Vec<FileSection>>) {
                 padding.cast_unsigned(),
                 entries.len()
             );
-            for (filename, section) in entries.iter().take(10) {
-                println!("    {filename}[sec{section}]");
-            }
-            if entries.len() > 10 {
-                println!("    ... and {} more", entries.len() - 10);
-            }
+            print_section_examples(entries);
         }
+    }
+}
+
+fn print_file_examples(files: &[String]) {
+    for filename in files.iter().take(10) {
+        println!("    {filename}");
+    }
+    if files.len() > 10 {
+        println!("    ... and {} more", files.len() - 10);
+    }
+}
+
+fn print_section_examples(entries: &[FileSection]) {
+    for (filename, section) in entries.iter().take(10) {
+        println!("    {filename}[sec{section}]");
+    }
+    if entries.len() > 10 {
+        println!("    ... and {} more", entries.len() - 10);
     }
 }
 

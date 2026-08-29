@@ -11,6 +11,7 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 | `pkg`     | PKG archive format (HW2 capack)         |
 | `xmb`     | XMB binary XML parser                   |
 | `ugx`     | UGX 3D model geometry parser            |
+| `ufx`     | HW2 UFXS compiled-shader parser         |
 | `uax`     | UAX animation format parser             |
 | `ddx`     | DDX/DDS texture format reader/writer    |
 | `bdt`     | BDT binary data tree (packed documents) |
@@ -18,6 +19,21 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 | `pkg-cli` | CLI tool for PKG archives               |
 | `xmb-cli` | CLI tool for XMB files                  |
 | `ugx-cli` | CLI tool for UGX models                 |
+| `ufx-cli` | CLI tool for HW2 UFX shaders            |
+
+## Blender UGX extension
+
+`blender/ugx_gltf` is a Blender 4.2+ import/export extension backed by the Rust
+`ugx-gltf` converter. It supports editable UGX meshes, materials, skeletons,
+skin weights, and UGX-specific glTF metadata. Build an installable archive for
+the current platform with:
+
+```text
+python blender/package_extension.py
+```
+
+See [`blender/ugx_gltf/README.md`](blender/ugx_gltf/README.md) for installation,
+development, metadata, and format details.
 
 ## File Formats
 
@@ -31,13 +47,14 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 
 ### Binary Data Formats
 
-| Format  | Extension | ECF File ID  | Description                                                                                           | Status                    |
-| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------------- |
-| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ Implemented            |
-| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ HW1 DE validated       |
-| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented            |
-| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ⚠️ Untested (see below)  |
-| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented            |
+| Format  | Extension | ECF File ID  | Description                                                                                           | Status                         |
+| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------ |
+| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ HW1 v4 + HW2 v6 validated   |
+| **UFX** | `.ufx`    | —            | HW2 UFXS container with D3D12 root signature and DXBC shader stages                                   | ✅ HW2 retail validated        |
+| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ HW1 DE validated            |
+| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented                 |
+| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ⚠️ Untested (see below)       |
+| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented                 |
 
 ### XML-Based Formats
 
@@ -62,7 +79,16 @@ Most game data files are XML stored as XMB with specific schemas:
 
 The **UAX** crate has been checked against the Halo Wars DE loader in IDA and exhaustively tested against all 2,301 UAX files in a complete HW1 DE installation. HW2 UAX data has not yet received the same corpus-level verification. The **XTD** crate remains experimental and untested against real game data.
 
-All other formats (ECF, ERA, PKG, XMB, UGX, DDX, XTT, BDT) have been tested and confirmed working with both HW1 DE and HW2 data where applicable.
+The **UGX** v4 and v6 paths are deliberately versioned side by side. Corpus
+tests cover 2,468 HW1 v4 files (18,411 sections) and 15,632 HW2 v6 files
+(92,726 sections), including index ranges and decoded vertex layouts. The v6
+glTF path retains both retail color/skin byte orders and does not reinterpret
+trailing vertex-stride payload as texture coordinates. The **UFX** parser is
+checked against all 2,893 retail HW2 shaders; the corpus contains UFXS versions
+5, 6, 7, and 9, 13,412 D3D12 vertex-input records, and vertex, hull, domain,
+pixel, and compute programs.
+
+All other formats (ECF, ERA, PKG, XMB, DDX, XTT, BDT) have been tested and confirmed working with both HW1 DE and HW2 data where applicable.
 
 ### Third-Party Formats
 
@@ -113,6 +139,10 @@ ECF-based 3D model format containing:
 - **Chunk 0x703**: GRX data (Granny skeleton reference)
 - **Chunk 0x704**: Material data
 - **Chunk 0x705**: Bounding tree
+
+HW1 cached data uses v4 152-byte sections with embedded vertex packers. HW2
+uses v6 72-byte sections and external UFX vertex declarations; both layouts
+remain independently readable and writable.
 
 ### UAX (Animation)
 

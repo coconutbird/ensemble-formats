@@ -25,3 +25,4 @@ zerocopy.workspace = true
 ufx.workspace = true
 
 [dev-dependencies]
+test-utils = { workspace = true }

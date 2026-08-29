@@ -51,7 +51,7 @@ fn print_batch_inference(name: &str, file: &ufx::UfxFile<'_>) {
         .and_then(|stem| stem.rsplit('_').next())
         .unwrap_or("?");
     let mut parameters = Vec::new();
-    if let Some(program) = file.pixel_shaders.first().and_then(ufx::Shader::program) {
+    if let Some(program) = file.pixel_shader().and_then(ufx::Shader::program) {
         parameters.extend(ufx::cb_infer::infer_cb_params(
             program,
             HOGAN_PS_SLOT,
@@ -114,7 +114,7 @@ fn print_flags(name: &str) {
 fn print_parameters(file: &ufx::UfxFile<'_>) {
     use ufx::cb_infer::{HOGAN_PS_SLOT, HOGAN_VS_SLOT};
 
-    if let Some(program) = file.pixel_shaders.first().and_then(ufx::Shader::program) {
+    if let Some(program) = file.pixel_shader().and_then(ufx::Shader::program) {
         let parameters = ufx::cb_infer::infer_cb_params(program, HOGAN_PS_SLOT, HOGAN_VS_SLOT);
         if parameters.is_empty() {
             println!("  (no cb8/cb7 params detected)");
@@ -152,31 +152,19 @@ fn print_parameter_rows<'a>(parameters: impl IntoIterator<Item = &'a ufx::cb_inf
 }
 
 fn print_cfg(file: &ufx::UfxFile<'_>) {
-    if let Some(program) = file.vertex_shader.as_ref().and_then(ufx::Shader::program) {
+    for stage in ufx::ShaderStage::ALL {
+        let Some(program) = file.shader(stage).and_then(ufx::Shader::program) else {
+            continue;
+        };
         match ufx::cb_infer::cfg_report(program) {
             Ok(report) => {
                 println!(
-                    "\n  -- Vertex Shader CFG ({} blocks, {} edges) --",
+                    "\n  -- {stage} CFG ({} blocks, {} edges) --",
                     report.block_count, report.edge_count,
                 );
                 println!("{}", report.dot);
             }
-            Err(error) => eprintln!("  VS CFG error: {error}"),
-        }
-    }
-
-    for (index, shader) in file.pixel_shaders.iter().enumerate() {
-        if let Some(program) = shader.program() {
-            match ufx::cb_infer::cfg_report(program) {
-                Ok(report) => {
-                    println!(
-                        "\n  -- Pixel Shader {index} CFG ({} blocks, {} edges) --",
-                        report.block_count, report.edge_count,
-                    );
-                    println!("{}", report.dot);
-                }
-                Err(error) => eprintln!("  PS {index} CFG error: {error}"),
-            }
+            Err(error) => eprintln!("  {stage} CFG error: {error}"),
         }
     }
 }
@@ -213,31 +201,54 @@ fn main() {
 
         println!("=== {name} ===");
         println!("  version: {}  hash: 0x{:08X}", ufx.version, ufx.hash);
-        println!(
-            "  PS slots: [{:#X}, {:#X}, {:#X}, {:#X}]",
-            ufx.ps_offsets[0], ufx.ps_offsets[1], ufx.ps_offsets[2], ufx.ps_offsets[3]
-        );
+        println!("  stages:");
+        for stage in ufx::ShaderStage::ALL {
+            let range = ufx.stage_ranges.get(stage);
+            if range.is_present() {
+                println!(
+                    "    {stage}: offset {:#X}, {} bytes",
+                    range.offset, range.size
+                );
+            }
+        }
+        if !ufx.vertex_inputs.is_empty() {
+            println!("  vertex inputs:");
+            for input in &ufx.vertex_inputs {
+                let rate = if input.per_instance {
+                    "per-instance"
+                } else {
+                    "per-vertex"
+                };
+                println!(
+                    "    {}{}: {} at byte {} (slot {}, {}, {} components)",
+                    input.semantic,
+                    input.semantic_index,
+                    input.format,
+                    input.byte_offset,
+                    input.input_slot,
+                    rate,
+                    input.component_count(),
+                );
+            }
+            if let Some(stride) = ufx.vertex_stride(0) {
+                println!("    slot 0 consumed stride: {stride} bytes");
+            }
+        }
 
         if cli.display.flags {
             print_flags(&name);
         }
 
-        if let Some(ref vs) = ufx.vertex_shader {
+        for stage in ufx::ShaderStage::ALL {
+            let Some(shader) = ufx.shader(stage) else {
+                continue;
+            };
             println!(
-                "\n-- Vertex Shader (offset {:#X}, {} bytes) --",
-                vs.offset(),
-                vs.size()
+                "\n-- {stage} (offset {:#X}, {} bytes) --",
+                shader.offset(),
+                shader.size()
             );
-            print_shader_info(vs, cli.display.cb_only, cli.display.disasm);
-        }
-
-        for (i, ps) in ufx.pixel_shaders.iter().enumerate() {
-            println!(
-                "\n-- Pixel Shader {i} (offset {:#X}, {} bytes) --",
-                ps.offset(),
-                ps.size()
-            );
-            print_shader_info(ps, cli.display.cb_only, cli.display.disasm);
+            print_shader_info(shader, cli.display.cb_only, cli.display.disasm);
         }
 
         if cli.analysis.infer_params {

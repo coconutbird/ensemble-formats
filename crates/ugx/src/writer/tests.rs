@@ -74,6 +74,7 @@ fn make_test_section(vert_size: i32, vb_bytes: i32) -> Section {
         vert_size,
         num_verts: 3,
         base_vert_packer: None,
+        external_vert_packer: None,
         bone_remap: Vec::new(),
         rigid_only: true,
         global_bones: false,
@@ -86,7 +87,7 @@ fn make_test_section(vert_size: i32, vb_bytes: i32) -> Section {
 /// Create a minimal HW2-format test `UgxGeom` with one section and two bones.
 ///
 /// Uses `HalfFloat4` positions, `Dec3N` normals, `HalfFloat2` UVs (20-byte vertex)
-/// matching HW2 vertex layout. Section has `base_vert_packer: None`.
+/// matching HW2 vertex layout. The section has no embedded or external packer.
 fn make_test_geom() -> UgxGeom {
     let packer = make_test_packer();
     let vertex_buffer = make_test_vertex_buffer(&packer);
@@ -387,6 +388,19 @@ fn hw1_writer_rejects_a_missing_vertex_packer() {
     let error = Writer::write(&geom, UgxVersion::Hw1).unwrap_err();
 
     assert!(error.to_string().contains("missing its vertex packer"));
+}
+
+#[test]
+fn hw2_writer_rejects_an_external_packer_stride_mismatch() {
+    let mut geom = make_test_geom();
+    let mut packer = make_test_packer();
+    packer.pack_order.push('D');
+    packer.diffuse_type = VertexElementType::D3DColor;
+    geom.sections[0].external_vert_packer = Some(packer);
+
+    let error = Writer::write(&geom, UgxVersion::Hw2).unwrap_err();
+
+    assert!(error.to_string().contains("external packer stride 24"));
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 use gltf_json as json;
 use json::validation::Checked::Valid;
-use ugx::UnpackedVertex;
+use ugx::{Material, UnpackedVertex};
 
 use super::*;
 
@@ -228,6 +228,32 @@ fn preserves_zero_based_joint_indices() {
     let built = build_primitive(&vertices, true, 10, -1);
     let offset = accessor_offset(&built, json::mesh::Semantic::Joints(0));
     assert_eq!(&built.buffer[offset..offset + 4], &[3, 1, 0, 0]);
+}
+
+#[test]
+fn clamps_a_joint_equal_to_the_bone_count() {
+    let mut vertices = vec![vertex([0.0; 3])];
+    vertices[0].bone_indices = [3, 1, 0, 0];
+    vertices[0].bone_weights = [0.8, 0.2, 0.0, 0.0];
+    let built = build_primitive(&vertices, true, 3, -1);
+    let offset = accessor_offset(&built, json::mesh::Semantic::Joints(0));
+    assert_eq!(&built.buffer[offset..offset + 4], &[0, 1, 0, 0]);
+    let raw_semantic = json::mesh::Semantic::Extras(crate::extras::RAW_JOINTS_SEMANTIC.to_string());
+    let raw_offset = accessor_offset(&built, raw_semantic);
+    assert_eq!(
+        &built.buffer[raw_offset..raw_offset + 8],
+        &[3, 0, 1, 0, 0, 0, 0, 0]
+    );
+}
+
+#[test]
+fn preserves_legacy_blend_mode_in_material_extras() {
+    let mut material = Material::default();
+    material.legacy_mut().unwrap().blend_type = 1;
+    let extras = material::build_material_extras(&material);
+    let parsed: crate::extras::MaterialExtrasJson =
+        serde_json::from_str(extras.as_ref().unwrap().get()).unwrap();
+    assert_eq!(parsed.blend_type, Some(1));
 }
 
 #[test]

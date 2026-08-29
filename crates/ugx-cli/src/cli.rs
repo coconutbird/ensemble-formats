@@ -81,7 +81,7 @@ enum Commands {
         #[arg(short = 'b', long)]
         roundtrip: PathBuf,
     },
-    /// Scan a directory of UGX files and report raw reserved/padding field values
+    /// Scan a directory of UGX files and report raw header, flag, and LOD values
     Scan {
         /// Directory containing UGX files (searched recursively)
         #[arg(short, long)]

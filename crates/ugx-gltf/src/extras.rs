@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
+/// Application-specific glTF attribute used to retain UGX joint indices that
+/// cannot be represented by a skin's valid zero-based joint range.
+pub(crate) const RAW_JOINTS_SEMANTIC: &str = "_UGX_JOINTS_0";
+
 /// Top-level material extras stored in glTF.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct MaterialExtrasJson {
@@ -21,8 +25,8 @@ pub(crate) struct MaterialExtrasJson {
     /// `doubleSided`.  Only present when non-zero remaining bits exist.
     #[serde(rename = "ugx_flags", default, skip_serializing_if = "Option::is_none")]
     pub flags: Option<u32>,
-    /// Raw blend type byte — only stored when ≥ 4 (no glTF equivalent).
-    /// Values 0–3 are reconstructed from `alphaMode` on import.
+    /// Raw blend type byte. glTF `alphaMode` cannot distinguish every UGX
+    /// mode, so exporter-produced files always retain this value.
     #[serde(
         rename = "ugx_blend_type",
         default,
@@ -358,6 +362,22 @@ pub(crate) struct MeshExtrasJson {
     )]
     pub granny_mesh_index: Option<usize>,
 
+    /// Preserve an HW2 COLOR input even when every encoded component is zero.
+    #[serde(
+        rename = "ugx_hw2_has_color",
+        default,
+        skip_serializing_if = "is_default"
+    )]
+    pub hw2_has_color: bool,
+
+    /// The matching UFX declaration places COLOR before BLENDINDICES/WEIGHT.
+    #[serde(
+        rename = "ugx_hw2_color_before_skin",
+        default,
+        skip_serializing_if = "is_default"
+    )]
+    pub hw2_color_before_skin: bool,
+
     /// LOD near transition distance (HW2 section +0x2C).
     /// Omitted when `0.0` (default for single-LOD or closest LOD).
     #[serde(
@@ -389,16 +409,81 @@ impl MeshExtrasJson {
     pub fn is_empty(&self) -> bool {
         self.triangle_indices.is_none()
             && self.granny_mesh_index.is_none()
+            && !self.hw2_has_color
+            && !self.hw2_color_before_skin
             && is_zero(self.lod_near_distance)
             && is_f32_max(self.lod_far_distance)
             && is_zero(self.lod_fade_distance)
     }
 }
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
+}
+
 /// Scene-level extras stored in glTF scene `extras`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SceneExtrasJson {
     pub ugx_max_instances: i16,
+    /// Full original Granny mesh metadata. Generated meshes take precedence on
+    /// import, while unreferenced meshes and non-geometric binding data are
+    /// restored from this list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ugx_granny_meshes: Vec<GrannyMeshJson>,
+}
+
+/// Serializable Granny mesh metadata retained at scene scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GrannyMeshJson {
+    pub name: String,
+    #[serde(default)]
+    pub bone_bindings: Vec<GrannyBoneBindingJson>,
+}
+
+/// Serializable Granny bone binding metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GrannyBoneBindingJson {
+    pub bone_name: String,
+    pub obb_min: [f32; 3],
+    pub obb_max: [f32; 3],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triangle_indices: Vec<i32>,
+}
+
+impl From<&ugx::GrannyMesh> for GrannyMeshJson {
+    fn from(mesh: &ugx::GrannyMesh) -> Self {
+        Self {
+            name: mesh.name.clone(),
+            bone_bindings: mesh
+                .bone_bindings
+                .iter()
+                .map(|binding| GrannyBoneBindingJson {
+                    bone_name: binding.bone_name.clone(),
+                    obb_min: binding.obb_min,
+                    obb_max: binding.obb_max,
+                    triangle_indices: binding.triangle_indices.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<GrannyMeshJson> for ugx::GrannyMesh {
+    fn from(mesh: GrannyMeshJson) -> Self {
+        Self {
+            name: mesh.name,
+            bone_bindings: mesh
+                .bone_bindings
+                .into_iter()
+                .map(|binding| ugx::GrannyBoneBinding {
+                    bone_name: binding.bone_name,
+                    obb_min: binding.obb_min,
+                    obb_max: binding.obb_max,
+                    triangle_indices: binding.triangle_indices,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Serialize a value to a `Box<RawValue>` suitable for glTF `extras`.

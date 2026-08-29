@@ -11,7 +11,7 @@
 //!
 //! ```ignore
 //! let ufx = ufx::parse(&data)?;
-//! if let Some(ps) = ufx.pixel_shaders.first()
+//! if let Some(ps) = ufx.pixel_shader()
 //!     && let Some(prog) = ps.program()
 //! {
 //!     let params = ufx::cb_infer::infer_cb_params(prog, HOGAN_PS_SLOT, HOGAN_VS_SLOT);

@@ -21,7 +21,10 @@ use crate::extras::{MeshExtrasJson, SceneExtrasJson};
 use accessor::resolve_buffer;
 use bounds::compute_bounds;
 use material::import_materials;
-use mesh::{MeshInfo, build_packer, detect_global_bones, generate_granny_meshes_from_vertices};
+use mesh::{
+    MeshInfo, VertexPackingFeatures, build_packer, detect_global_bones,
+    generate_granny_meshes_from_vertices,
+};
 use primitive::import_primitive;
 use skeleton::import_skeleton;
 
@@ -37,7 +40,7 @@ pub struct GltfImportOptions {
     /// - `Hw1`: Float3 positions, Float3 normals/tangents, PNA0ST0 byte order,
     ///   embedded `base_vert_packer` in sections.
     /// - `Hw2`: `HalfFloat4` positions, `Dec3N` normals/tangents, PT0NA0S byte order,
-    ///   `base_vert_packer: None`.
+    ///   and an in-memory external packer matching the UFX declaration.
     pub version: UgxVersion,
 }
 
@@ -539,6 +542,7 @@ fn import_mesh_primitive(
         &kind,
         context.options.version,
         context.world_matrices,
+        extras,
     );
     append_section(
         imported,
@@ -580,18 +584,9 @@ fn apply_node_transform(
         let source_tangent = [vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]];
         if squared_length(source_tangent) > 1.0e-12 {
             let transformed = transform_direction(source_tangent, transform);
-            let projection = transformed
-                .iter()
-                .zip(normal)
-                .map(|(tangent, normal)| tangent * normal)
-                .sum::<f32>();
-            let orthogonal = [
-                transformed[0] - normal[0] * projection,
-                transformed[1] - normal[1] * projection,
-                transformed[2] - normal[2] * projection,
-            ];
             let fallback = fallback_tangent(normal);
-            let tangent = normalized_direction(orthogonal, [fallback[0], fallback[1], fallback[2]]);
+            let tangent =
+                normalized_direction(transformed, [fallback[0], fallback[1], fallback[2]]);
             vertex.tangent = [
                 tangent[0],
                 tangent[1],
@@ -719,14 +714,24 @@ fn prepare_section_vertices(
     kind: &SectionKind,
     version: UgxVersion,
     world_matrices: &[Matrix4x4],
+    extras: Option<&MeshExtrasJson>,
 ) -> (ugx::UnivertPacker, Vec<UnpackedVertex>) {
     let rigid = kind.global_bones || kind.rigid_only;
+    let has_colors = features.has_colors || extras.is_some_and(|value| value.hw2_has_color);
+    let hw2_skin_order = if extras.is_some_and(|value| value.hw2_color_before_skin) {
+        ugx::Hw2SkinOrder::ColorThenSkin
+    } else {
+        ugx::Hw2SkinOrder::SkinThenColor
+    };
     let packer = build_packer(
         version,
-        features.max_texcoords,
-        features.has_tangents,
-        features.has_skin && !rigid,
-        features.has_colors,
+        VertexPackingFeatures {
+            max_texcoords: features.max_texcoords,
+            has_tangents: features.has_tangents,
+            has_skin: features.has_skin && !rigid,
+            has_colors,
+            hw2_skin_order,
+        },
     );
     if version == UgxVersion::Hw2 {
         canonicalize_hw2_vertices(&mut vertices, features);
@@ -834,6 +839,7 @@ fn append_section(imported: &mut ImportedMeshes, input: SectionInput<'_>) -> Res
         vert_size: checked_i32(input.packer.vertex_size(), "packed vertex size")?,
         num_verts: checked_i32(input.vertices.len(), "section vertex count")?,
         base_vert_packer: (input.version == UgxVersion::Hw1).then(|| input.packer.clone()),
+        external_vert_packer: (input.version == UgxVersion::Hw2).then(|| input.packer.clone()),
         bone_remap: Vec::new(),
         rigid_only: input.kind.rigid_only,
         global_bones: input.kind.global_bones,
@@ -860,26 +866,16 @@ fn finish_geometry(
     let all_rigid = imported.sections.iter().all(|section| section.rigid_only);
     let all_skinned = imported.sections.iter().all(|section| !section.rigid_only);
     let global_bones = imported.sections.iter().any(|section| section.global_bones);
-    let granny_meshes = generate_granny_meshes_from_vertices(
+    let mut granny_meshes = generate_granny_meshes_from_vertices(
         &imported.vertices,
         &granny_bones,
         &imported.mesh_info,
         &imported.sections,
     );
-    let max_vertex_count = imported
-        .sections
-        .iter()
-        .map(|section| {
-            u32::try_from(section.num_verts)
-                .map_err(|_| Error::UnsupportedFormat("Section has a negative vertex count".into()))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .max()
-        .unwrap_or(1);
-    let multiplier = max_vertex_count
-        .checked_next_power_of_two()
-        .ok_or(Error::SizeOverflow("instance-index multiplier"))?;
+    let scene_extras = read_scene_extras(root)?;
+    if let Some(extras) = &scene_extras {
+        merge_preserved_granny_meshes(&mut granny_meshes, &extras.ugx_granny_meshes);
+    }
     let mut geometry = UgxGeom {
         bounding_sphere,
         bounds,
@@ -896,9 +892,9 @@ fn finish_geometry(
         index_buffer: imported.index_buffer,
         rigid_only: all_rigid,
         rigid_bone_index: 0,
-        max_instances: scene_max_instances(root)?,
-        instance_index_multiplier: i16::try_from(multiplier)
-            .map_err(|_| Error::SizeOverflow("instance-index multiplier"))?,
+        max_instances: scene_extras.map_or(1, |extras| extras.ugx_max_instances),
+        // Recomputed by `rebuild_derived_data` after the geometry is assembled.
+        instance_index_multiplier: 0,
         large_geom_bone_index: i16::MAX,
         flags: GeometryFlags {
             all_sections_rigid: all_rigid,
@@ -912,12 +908,48 @@ fn finish_geometry(
     Ok(geometry)
 }
 
-fn scene_max_instances(root: &gltf_json::Root) -> Result<i16> {
+fn read_scene_extras(root: &gltf_json::Root) -> Result<Option<SceneExtrasJson>> {
     Ok(active_scene_index(root)?
         .and_then(|index| root.scenes.get(index))
         .and_then(|scene| scene.extras.as_ref())
-        .and_then(|raw| serde_json::from_str::<SceneExtrasJson>(raw.get()).ok())
-        .map_or(1, |extras| extras.ugx_max_instances))
+        .and_then(|raw| serde_json::from_str::<SceneExtrasJson>(raw.get()).ok()))
+}
+
+fn merge_preserved_granny_meshes(
+    generated: &mut Vec<ugx::GrannyMesh>,
+    preserved: &[crate::extras::GrannyMeshJson],
+) {
+    if generated.len() < preserved.len() {
+        generated.resize_with(preserved.len(), ugx::GrannyMesh::default);
+    }
+    for (mesh_index, preserved_json) in preserved.iter().cloned().enumerate() {
+        let preserved_mesh = ugx::GrannyMesh::from(preserved_json);
+        let generated_mesh = &mut generated[mesh_index];
+        if generated_mesh.bone_bindings.is_empty() {
+            *generated_mesh = preserved_mesh;
+            continue;
+        }
+        for preserved_binding in preserved_mesh.bone_bindings {
+            if let Some(binding) = generated_mesh
+                .bone_bindings
+                .iter_mut()
+                .find(|binding| binding.bone_name == preserved_binding.bone_name)
+            {
+                binding.triangle_indices = preserved_binding.triangle_indices;
+                let generated_has_obb = binding
+                    .obb_min
+                    .iter()
+                    .chain(&binding.obb_max)
+                    .any(|value| value.to_bits() != 0.0f32.to_bits());
+                if !generated_has_obb {
+                    binding.obb_min = preserved_binding.obb_min;
+                    binding.obb_max = preserved_binding.obb_max;
+                }
+            } else {
+                generated_mesh.bone_bindings.push(preserved_binding);
+            }
+        }
+    }
 }
 
 fn convert_materials_for_version(geometry: &mut UgxGeom, version: UgxVersion) {
