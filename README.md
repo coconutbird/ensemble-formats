@@ -27,9 +27,9 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 `ugx-gltf` converter. It supports editable UGX meshes, materials, skeletons,
 skin weights, and UGX-specific glTF metadata. Its Blender panels expose legacy
 render flags and all texture bindings, Hogan shader metadata and parameters,
-section binding/LOD/layout controls, model instance settings, and a legacy
-Stumpy/3ds Max coordinate-and-weight repair. Build an installable archive for
-the current platform with:
+section binding/LOD/layout controls, model instance settings, and safe automatic
+Stumpy/3ds Max coordinate, material, and verified-binding repair. Build an
+installable archive for the current platform with:
 
 ```text
 mise run blender:package
@@ -53,6 +53,18 @@ metadata, bounds, accessories, and acceleration data. The command verifies the
 written version and strictly reads the output before returning success. For an
 editable workflow, import either version with the Blender extension, modify the
 scene, and choose Halo Wars DE or Halo Wars 2 as the export target.
+
+To perform the same editable round-trip explicitly on the command line:
+
+```text
+ugx to-gltf --input model.ugx --output model.gltf
+ugx from-gltf --input model.gltf --output rebuilt.ugx --version hw1
+ugx diff --original model.ugx --roundtrip rebuilt.ugx
+```
+
+Use `--version hw2` on `from-gltf` when targeting Halo Wars 2. The `diff`
+command compares container chunks, parsed materials and sections, and unpacked
+vertex data so expected packing differences are visible.
 
 The formats do not carry identical information: v6-only LOD distances cannot be
 stored in a v4 section, and Hogan/legacy material conversion necessarily uses

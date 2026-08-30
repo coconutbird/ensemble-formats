@@ -19,8 +19,9 @@ and serialization.
   in the Properties editor.
 - Preserve or override each section's skinned, rigid, or GlobalBones binding,
   binding bone, and `MaxBones` value without destructive weight editing.
-- Detect legacy Stumpy/3ds Max scenes and apply their required 1.575 scale,
-  X reflection, winding correction, and skeleton bind-matrix conversion.
+- Detect legacy Stumpy/3ds Max scenes and automatically apply their required
+  1.575 scale, X reflection, winding correction, skeleton bind-matrix
+  conversion, saved material metadata, and verified binding repairs.
 - Edit Hogan texture patterns, render booleans, up to four shader
   name/hash/feature-mask permutations, and named or raw constant-buffer values.
 - Validate source ECF checksums and remember the detected source game version.
@@ -49,14 +50,19 @@ and skeleton translations by 1.575 during conversion; the `.blend` is not
 modified.
 
 Some Max-imported meshes are incorrectly weighted entirely to
-`GrannyRootBone`. When an `AttachBone` is present, the exporter stops with an
-actionable message instead of writing a misleading model. Select the affected
-mesh and armature, then use **Scene Properties > UGX glTF > Apply Stumpy
-Compatibility**. The operator sets an export-only `AttachBone` override and
-`MaxBones=4`, and migrates the saved Stumpy material flags, texture paths,
-channels, and UVW velocities to the active Blender material; original vertex
-groups remain untouched. The same binding fields can be edited manually under
-**Mesh Data Properties > UGX Metadata > Section Binding**.
+`GrannyRootBone`, but root-bound sections are also common in retail HW1 assets.
+**Automatic** therefore repairs a binding only when the complete hierarchy
+matches a retail-verified model. The HW1 rocket launcher is exported with its
+verified `AttachBone` override and `MaxBones=4` without a setup button. Every
+unrecognized root binding is preserved instead of guessed or rejected.
+
+Saved Stumpy material flags, texture paths, channels, and UVW velocities are
+also migrated automatically the first time they are needed. To intentionally
+change a preserved binding, choose **Override All Weights** under **Mesh Data
+Properties > UGX Metadata > Section Binding**, or supply proper vertex groups.
+An explicit binding always takes precedence. **Apply Stumpy Compatibility**
+remains available for previewing/migrating selected legacy objects. Original
+coordinates and vertex groups remain untouched.
 
 ## Install a bundled build
 

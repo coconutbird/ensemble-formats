@@ -23,12 +23,33 @@ VERSION_ITEMS = (
 )
 
 STUMPY_MODEL_SCALE = 1.575
+STUMPY_ROOT_BONE = "GrannyRootBone"
+
+# The retail HW1 rocket launcher proves that this complete hierarchy is bound
+# to AttachBone. Keep automatic weight replacement evidence-based: any other
+# hierarchy keeps its existing root weights instead of receiving a guessed repair.
+STUMPY_VERIFIED_BINDINGS = (
+    (
+        "Halo Wars 1 rocket launcher",
+        "AttachBone",
+        {
+            "GrannyRootBone": None,
+            "AttachBone": "GrannyRootBone",
+            "Bone.006": "AttachBone",
+            "Bone.001": "AttachBone",
+            "Bone.002": "AttachBone",
+            "Bone.003": "AttachBone",
+            "Bone.004": "AttachBone",
+            "Bone.005": "AttachBone",
+        },
+    ),
+)
 
 COORDINATE_PRESET_ITEMS = (
     (
         "AUTO",
         "Automatic",
-        "Use legacy Stumpy correction only for scenes carrying both Stumpy and 3ds Max markers",
+        "Detect legacy Stumpy scenes, correct their coordinates, migrate saved materials, and apply only verified binding repairs",
     ),
     ("STANDARD", "Blender / UGX", "Export Blender model space without correction"),
     (
@@ -995,6 +1016,53 @@ def armature_for_mesh_object(obj):
     return None
 
 
+def has_explicit_section_binding(obj) -> bool:
+    """Return whether a user or imported UGX already chose section binding."""
+    if getattr(obj, "type", None) != "MESH":
+        return False
+    mesh = obj.data
+    settings = mesh.ugx_gltf
+    if settings.initialized and (
+        settings.section_mode != "AUTO"
+        or bool(settings.binding_bone)
+        or bool(settings.force_bone)
+    ):
+        return True
+    return any(
+        key in mesh
+        for key in ("ugx_section_mode", "ugx_binding_bone", "ugx_force_bone")
+    )
+
+
+def diagnose_stumpy_binding(obj) -> tuple[str, str, str]:
+    """Classify a legacy root-only mesh as verified, preserved, or unaffected.
+
+    The returned tuple is ``(status, target_bone, detail)``. ``VERIFIED`` is
+    reserved for a hierarchy whose intended retail binding has been checked.
+    Every other root binding is ``PRESERVED`` because root-bound sections are
+    common in retail HW1 data and the Blender scene cannot prove a replacement.
+    """
+    if getattr(obj, "type", None) != "MESH":
+        return "NONE", "", ""
+    if exclusively_weighted_bone(obj) != STUMPY_ROOT_BONE:
+        return "NONE", "", ""
+    armature = armature_for_mesh_object(obj)
+    if armature is None:
+        return "PRESERVED", STUMPY_ROOT_BONE, "no armature hierarchy"
+    parent_map = {
+        bone.name: bone.parent.name if bone.parent is not None else None
+        for bone in armature.data.bones
+    }
+    for label, target_bone, verified_parent_map in STUMPY_VERIFIED_BINDINGS:
+        if parent_map == verified_parent_map:
+            return "VERIFIED", target_bone, label
+    named_bones = sorted(
+        name for name in parent_map if name not in {STUMPY_ROOT_BONE, "AttachBone"}
+    )
+    detail = ", ".join(named_bones) if named_bones else "unverified hierarchy"
+    return "PRESERVED", STUMPY_ROOT_BONE, detail
+
+
 def exclusively_weighted_bone(obj) -> str | None:
     """Return a bone name when every mesh vertex has exactly that full weight."""
     if obj.type != "MESH" or not obj.data.vertices:
@@ -1015,6 +1083,20 @@ def exclusively_weighted_bone(obj) -> str | None:
         elif common != name:
             return None
     return common
+
+
+def needs_stumpy_material_migration(scene, obj) -> bool:
+    """Return whether saved Stumpy material data has not been imported yet."""
+    if _stumpy_material_record(scene, obj) is None:
+        return False
+    materials = [material for material in obj.data.materials if material is not None]
+    if not materials:
+        return True
+    return all(
+        not material.ugx_gltf.initialized
+        and not any(key.startswith("ugx_") for key in material.keys())
+        for material in materials
+    )
 
 
 def prepare_objects_for_export(scene, objects) -> None:

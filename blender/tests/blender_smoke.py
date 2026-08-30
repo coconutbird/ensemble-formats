@@ -116,85 +116,164 @@ def assert_positions_near(
             )
 
 
-def verify_stumpy_compatibility_operator(
+def verify_stumpy_automatic_compatibility(
     converter: Path, temporary_path: Path
 ) -> None:
-    """Exercise legacy-scene detection and its non-destructive binding repair."""
-    clear_scene()
-    armature_data = bpy.data.armatures.new("stumpy_armature")
-    armature = bpy.data.objects.new("stumpy_armature", armature_data)
-    bpy.context.collection.objects.link(armature)
-    bpy.context.view_layer.objects.active = armature
-    armature.select_set(True)
-    bpy.ops.object.mode_set(mode="EDIT")
-    root = armature.data.edit_bones.new("GrannyRootBone")
-    root.head = (0.0, 0.0, 0.0)
-    root.tail = (0.0, 1.0, 0.0)
-    attach = armature.data.edit_bones.new("AttachBone")
-    attach.head = (0.0, 1.0, 0.0)
-    attach.tail = (0.0, 2.0, 0.0)
-    attach.parent = root
-    bpy.ops.object.mode_set(mode="OBJECT")
+    """Exercise verified AUTO repair, root preservation, and manual override."""
 
-    mesh = bpy.data.meshes.new("stumpy_mesh")
-    mesh.from_pydata(
-        [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 1.0, 0.0)],
-        [],
-        [(0, 1, 2)],
+    def build_fixture(label: str, child_bones: tuple[str, ...]):
+        clear_scene()
+        armature_data = bpy.data.armatures.new(f"{label}_armature")
+        armature = bpy.data.objects.new(f"{label}_armature", armature_data)
+        bpy.context.collection.objects.link(armature)
+        bpy.context.view_layer.objects.active = armature
+        armature.select_set(True)
+        bpy.ops.object.mode_set(mode="EDIT")
+        root = armature.data.edit_bones.new("GrannyRootBone")
+        root.head = (0.0, 0.0, 0.0)
+        root.tail = (0.0, 1.0, 0.0)
+        attach = armature.data.edit_bones.new("AttachBone")
+        attach.head = (0.0, 1.0, 0.0)
+        attach.tail = (0.0, 2.0, 0.0)
+        attach.parent = root
+        for index, name in enumerate(child_bones):
+            child = armature.data.edit_bones.new(name)
+            child.head = (float(index), 2.0, 0.0)
+            child.tail = (float(index), 3.0, 0.0)
+            child.parent = attach
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+        mesh = bpy.data.meshes.new(f"{label}_mesh")
+        mesh.from_pydata(
+            [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0), (1.0, 1.0, 0.0)],
+            [],
+            [(0, 1, 2)],
+        )
+        material = bpy.data.materials.new(f"{label}_material")
+        mesh.materials.append(material)
+        obj = bpy.data.objects.new(f"{label}_mesh", mesh)
+        bpy.context.collection.objects.link(obj)
+        obj.parent = armature
+        modifier = obj.modifiers.new("Armature", "ARMATURE")
+        modifier.object = armature
+        group = obj.vertex_groups.new(name="GrannyRootBone")
+        group.add([0, 1, 2], 1.0, "REPLACE")
+        obj["MaxHandle"] = 7
+        obj["ugxMatIndex"] = 1
+        bpy.context.scene["ugxMats"] = [
+            {
+                "path_df": rf"\unsc\smoke\{label}_df",
+                "chan_df": "1",
+                "cFlagTwoSided": True,
+            }
+        ]
+        armature.select_set(False)
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        return obj, armature, material
+
+    launcher_bones = (
+        "Bone.006",
+        "Bone.001",
+        "Bone.002",
+        "Bone.003",
+        "Bone.004",
+        "Bone.005",
     )
-    material = bpy.data.materials.new("stumpy_material")
-    mesh.materials.append(material)
-    obj = bpy.data.objects.new("stumpy_mesh", mesh)
-    bpy.context.collection.objects.link(obj)
-    modifier = obj.modifiers.new("Armature", "ARMATURE")
-    modifier.object = armature
-    group = obj.vertex_groups.new(name="GrannyRootBone")
-    group.add([0, 1, 2], 1.0, "REPLACE")
-    obj["MaxHandle"] = 7
-    obj["ugxMatIndex"] = 1
-    bpy.context.scene["ugxMats"] = [
-        {
-            "path_df": r"\unsc\smoke\stumpy_df",
-            "chan_df": "1",
-            "cFlagTwoSided": True,
-        }
-    ]
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
-
+    obj, armature, material = build_fixture("stumpy_launcher", launcher_bones)
     assert properties.is_stumpy_max_scene(bpy.context.scene, [obj, armature])
-    assert bpy.ops.ugx_gltf.apply_stumpy_compatibility() == {"FINISHED"}
-    settings = mesh.ugx_gltf
-    assert bpy.context.scene.ugx_gltf.coordinate_preset == "STUMPY"
-    assert settings.section_mode == "SKINNED"
-    assert settings.force_bone == "AttachBone"
-    assert settings.max_bones == 4
-    assert mesh["ugx_section_mode"] == "SKINNED"
-    assert mesh["ugx_force_bone"] == "AttachBone"
-    assert mesh["ugx_max_bones"] == 4
-    material_settings = material.ugx_gltf
-    assert material_settings.two_sided
-    diffuse = next(item for item in material_settings.maps if item.map_type == "diffuse")
-    assert diffuse.texture_path == r"\unsc\smoke\stumpy_df"
-    assert diffuse.channel == 1
+    assert properties.diagnose_stumpy_binding(obj) == (
+        "VERIFIED",
+        "AttachBone",
+        "Halo Wars 1 rocket launcher",
+    )
 
-    armature.select_set(False)
     armature.hide_set(True)
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
-    destination = temporary_path / "hidden_stumpy_armature.ugx"
+    destination = temporary_path / "automatic_stumpy_launcher.ugx"
     result = bpy.ops.export_scene.ugx(
         filepath=str(destination),
         version="HW1",
         include_skeleton=True,
         selected_only=True,
         apply_modifiers=False,
-        coordinate_preset="STUMPY",
+        coordinate_preset="AUTO",
     )
     assert result == {"FINISHED"}, result
     assert armature.hide_get(), "export did not restore the hidden armature state"
+    settings = obj.data.ugx_gltf
+    assert settings.section_mode == "SKINNED"
+    assert settings.force_bone == "AttachBone"
+    assert settings.max_bones == 4
+    assert obj.data["ugx_force_bone"] == "AttachBone"
+    material_settings = material.ugx_gltf
+    assert material_settings.two_sided
+    diffuse = next(item for item in material_settings.maps if item.map_type == "diffuse")
+    assert diffuse.texture_path == r"\unsc\smoke\stumpy_launcher_df"
+    assert diffuse.channel == 1
     summary = bridge.inspect_ugx(converter, destination)
-    assert summary["bones"] == 2, summary
+    assert summary["bones"] == 8, summary
+    assert summary["vertices"] == 3, summary
+
+    preserved, _armature, _material = build_fixture(
+        "stumpy_turret",
+        ("PitchBone", "b_rocket_turret_hatch_left"),
+    )
+    status, target_bone, detail = properties.diagnose_stumpy_binding(preserved)
+    assert status == "PRESERVED"
+    assert target_bone == "GrannyRootBone"
+    assert "PitchBone" in detail
+
+    static_destination = temporary_path / "preserved_stumpy_without_skeleton.ugx"
+    result = bpy.ops.export_scene.ugx(
+        filepath=str(static_destination),
+        version="HW1",
+        include_skeleton=False,
+        selected_only=True,
+        apply_modifiers=False,
+        coordinate_preset="AUTO",
+    )
+    assert result == {"FINISHED"}, result
+    static_summary = bridge.inspect_ugx(converter, static_destination)
+    assert static_summary["bones"] == 1, static_summary
+    assert static_summary["vertices"] == 3, static_summary
+
+    assert bpy.ops.ugx_gltf.apply_stumpy_compatibility() == {"FINISHED"}
+    preserved_settings = preserved.data.ugx_gltf
+    assert preserved_settings.section_mode == "AUTO"
+    assert preserved_settings.force_bone == ""
+
+    preserved_destination = temporary_path / "preserved_stumpy_turret.ugx"
+    result = bpy.ops.export_scene.ugx(
+        filepath=str(preserved_destination),
+        version="HW1",
+        include_skeleton=True,
+        selected_only=True,
+        apply_modifiers=False,
+        coordinate_preset="AUTO",
+    )
+    assert result == {"FINISHED"}, result
+    summary = bridge.inspect_ugx(converter, preserved_destination)
+    assert summary["bones"] == 4, summary
+    assert summary["vertices"] == 3, summary
+    assert preserved_settings.section_mode == "AUTO"
+    assert preserved_settings.force_bone == ""
+
+    preserved_settings.section_mode = "SKINNED"
+    preserved_settings.force_bone = "PitchBone"
+    preserved_settings.max_bones = 4
+    properties.save_mesh_metadata(preserved.data)
+    overridden = temporary_path / "overridden_stumpy_turret.ugx"
+    result = bpy.ops.export_scene.ugx(
+        filepath=str(overridden),
+        version="HW1",
+        include_skeleton=True,
+        selected_only=True,
+        apply_modifiers=False,
+        coordinate_preset="AUTO",
+    )
+    assert result == {"FINISHED"}, result
+    summary = bridge.inspect_ugx(converter, overridden)
+    assert summary["bones"] == 4, summary
     assert summary["vertices"] == 3, summary
 
 
@@ -456,7 +535,7 @@ def main() -> None:
                 "HW1",
                 verify_checksums=True,
             )
-            verify_stumpy_compatibility_operator(converter, temporary_path)
+            verify_stumpy_automatic_compatibility(converter, temporary_path)
     finally:
         ugx_gltf.unregister()
 

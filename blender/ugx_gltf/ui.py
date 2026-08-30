@@ -167,6 +167,30 @@ class SCENE_PT_ugx_gltf(bpy.types.Panel):
         )
         if properties.is_stumpy_max_scene(context.scene, objects):
             target.label(text="Legacy Stumpy / 3ds Max scene detected", icon="INFO")
+            verified = []
+            preserved = []
+            for obj in objects:
+                if (
+                    getattr(obj, "type", None) != "MESH"
+                    or "MaxHandle" not in obj
+                    or properties.has_explicit_section_binding(obj)
+                ):
+                    continue
+                status, target_bone, _detail = properties.diagnose_stumpy_binding(obj)
+                if status == "VERIFIED":
+                    verified.append(f"{obj.name} -> {target_bone}")
+                elif status == "PRESERVED":
+                    preserved.append(obj.name)
+            if verified:
+                target.label(
+                    text="AUTO binding: " + ", ".join(verified),
+                    icon="CHECKMARK",
+                )
+            if preserved:
+                target.label(
+                    text=f"AUTO preserves root binding on {len(preserved)} mesh(es)",
+                    icon="LOCKED",
+                )
             target.operator("ugx_gltf.apply_stumpy_compatibility", icon="MODIFIER")
 
         model = layout.box()
@@ -256,6 +280,23 @@ class DATA_PT_ugx_gltf(bpy.types.Panel):
             weighted_bone = properties.exclusively_weighted_bone(context.object)
             if weighted_bone:
                 binding.label(text=f"Current weights: 100% {weighted_bone}", icon="INFO")
+            if (
+                "MaxHandle" in context.object
+                and not properties.has_explicit_section_binding(context.object)
+            ):
+                status, target_bone, _detail = properties.diagnose_stumpy_binding(
+                    context.object
+                )
+                if status == "VERIFIED":
+                    binding.label(
+                        text=f"AUTO verified binding: {target_bone}",
+                        icon="CHECKMARK",
+                    )
+                elif status == "PRESERVED":
+                    binding.label(
+                        text=f"AUTO preserves current binding: {target_bone}",
+                        icon="LOCKED",
+                    )
 
         structure = layout.box()
         structure.label(text="Preserved / Derived Structure", icon="LOCKED")

@@ -60,23 +60,49 @@ def _active_material(context):
     return obj.active_material if obj is not None else None
 
 
-def _stumpy_binding_issues(objects):
-    issues = []
+def _set_forced_binding(obj, target_bone: str) -> None:
+    """Store an export-only full-weight override without editing vertex groups."""
+    settings = obj.data.ugx_gltf
+    if not settings.initialized:
+        properties.initialize_mesh_metadata(obj.data)
+    settings.section_mode = "SKINNED"
+    settings.force_bone = target_bone
+    settings.max_bones = 4
+    properties.save_mesh_metadata(obj.data)
+
+
+def _prepare_stumpy_compatibility(
+    scene,
+    objects,
+    *,
+    remigrate_materials: bool,
+    process_bindings: bool,
+):
+    """Migrate legacy metadata and apply only evidence-backed binding repairs."""
+    stumpy_objects = []
+    verified = []
+    preserved = []
     for obj in objects:
-        if getattr(obj, "type", None) != "MESH":
+        if getattr(obj, "type", None) != "MESH" or "MaxHandle" not in obj:
             continue
-        settings = obj.data.ugx_gltf
-        if not settings.initialized:
-            properties.initialize_mesh_metadata(obj.data)
-        armature = properties.armature_for_mesh_object(obj)
-        has_attach = armature is not None and "AttachBone" in armature.data.bones
-        if (
-            has_attach
-            and properties.exclusively_weighted_bone(obj) == "GrannyRootBone"
-            and not settings.force_bone
-        ):
-            issues.append(obj.name)
-    return issues
+        stumpy_objects.append(obj)
+        if not process_bindings or properties.has_explicit_section_binding(obj):
+            continue
+        status, target_bone, _detail = properties.diagnose_stumpy_binding(obj)
+        if status == "VERIFIED":
+            verified.append((obj, target_bone))
+        elif status == "PRESERVED":
+            preserved.append(obj.name)
+
+    migrated_materials = 0
+    for obj in stumpy_objects:
+        if remigrate_materials or properties.needs_stumpy_material_migration(scene, obj):
+            migrated_materials += properties.apply_stumpy_material(scene, obj)
+    repaired = []
+    for obj, target_bone in verified:
+        _set_forced_binding(obj, target_bone)
+        repaired.append(f"{obj.name} -> {target_bone}")
+    return repaired, preserved, migrated_materials
 
 
 @contextmanager
@@ -314,17 +340,17 @@ class EXPORT_SCENE_OT_ugx(bpy.types.Operator, ExportHelper):
             self.model_scale,
             self.mirror_x,
         )
-        if transform_label == "Stumpy 3ds Max":
-            issues = _stumpy_binding_issues(objects)
-            if issues:
-                self.report(
-                    {"ERROR"},
-                    "Legacy Max import is root-weighted despite having AttachBone: "
-                    + ", ".join(issues)
-                    + ". Run Apply Stumpy Compatibility in Scene > UGX glTF.",
-                )
-                return {"CANCELLED"}
+        repaired = []
+        preserved = []
+        migrated_materials = 0
         try:
+            if transform_label == "Stumpy 3ds Max":
+                repaired, preserved, migrated_materials = _prepare_stumpy_compatibility(
+                    context.scene,
+                    objects,
+                    remigrate_materials=False,
+                    process_bindings=self.include_skeleton,
+                )
             properties.prepare_objects_for_export(context.scene, objects)
             material_extras = properties.material_extras_for_objects(objects)
             executable, timeout = _converter(context)
@@ -396,12 +422,25 @@ class EXPORT_SCENE_OT_ugx(bpy.types.Operator, ExportHelper):
         settings.coordinate_preset = self.coordinate_preset
         settings.model_scale = self.model_scale
         settings.mirror_x = self.mirror_x
-        self.report({"INFO"}, f"Exported {destination} ({transform_label} coordinates)")
+        compatibility = []
+        if repaired:
+            compatibility.append("automatic binding: " + ", ".join(repaired))
+        if preserved:
+            compatibility.append(
+                f"preserved {len(preserved)} existing root binding(s)"
+            )
+        if migrated_materials:
+            compatibility.append(f"migrated {migrated_materials} material(s)")
+        suffix = "; " + "; ".join(compatibility) if compatibility else ""
+        self.report(
+            {"INFO"},
+            f"Exported {destination} ({transform_label} coordinates){suffix}",
+        )
         return {"FINISHED"}
 
 
 class UGX_GLTF_OT_apply_stumpy_compatibility(bpy.types.Operator):
-    """Configure legacy Stumpy/3ds Max coordinates and repair its root-weight bug."""
+    """Configure legacy coordinates, materials, and verified binding repairs."""
 
     bl_idname = "ugx_gltf.apply_stumpy_compatibility"
     bl_label = "Apply Stumpy Compatibility"
@@ -412,38 +451,21 @@ class UGX_GLTF_OT_apply_stumpy_compatibility(bpy.types.Operator):
         scene_settings = context.scene.ugx_gltf
         scene_settings.coordinate_preset = "STUMPY"
         objects = context.selected_objects or context.scene.objects
-        repaired = []
-        migrated_materials = 0
-        for obj in objects:
-            if getattr(obj, "type", None) != "MESH":
-                continue
-            migrated_materials += properties.apply_stumpy_material(context.scene, obj)
-            armature = properties.armature_for_mesh_object(obj)
-            if armature is None or "AttachBone" not in armature.data.bones:
-                continue
-            if properties.exclusively_weighted_bone(obj) != "GrannyRootBone":
-                continue
-            mesh_settings = obj.data.ugx_gltf
-            if not mesh_settings.initialized:
-                properties.initialize_mesh_metadata(obj.data)
-            mesh_settings.section_mode = "SKINNED"
-            mesh_settings.force_bone = "AttachBone"
-            mesh_settings.max_bones = 4
-            properties.save_mesh_metadata(obj.data)
-            repaired.append(obj.name)
+        repaired, preserved, migrated_materials = _prepare_stumpy_compatibility(
+            context.scene,
+            objects,
+            remigrate_materials=True,
+            process_bindings=True,
+        )
+        message = (
+            "Enabled Stumpy coordinates; "
+            f"migrated {migrated_materials} material(s)"
+        )
         if repaired:
-            self.report(
-                {"INFO"},
-                "Enabled Stumpy coordinates and AttachBone binding for "
-                + ", ".join(repaired)
-                + f"; migrated {migrated_materials} material(s)",
-            )
-        else:
-            self.report(
-                {"INFO"},
-                "Enabled Stumpy coordinates; "
-                f"migrated {migrated_materials} material(s), and no bindings needed repair",
-            )
+            message += "; verified binding: " + ", ".join(repaired)
+        if preserved:
+            message += f"; preserved {len(preserved)} existing root binding(s)"
+        self.report({"INFO"}, message)
         return {"FINISHED"}
 
 
