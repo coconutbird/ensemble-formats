@@ -32,8 +32,8 @@ pub(crate) struct GeomHeaderRaw {
     pub global_bones: u8,
     pub all_sections_skinned: u8,
     pub rigid_only: u8,
-    pub _padding: [u8; 2],
-    pub _padding2: [u8; 4],
+    pub padding: [u8; 2],
+    pub padding2: [u8; 4],
 }
 
 /// Raw on-disk `BPackedArray` header (16 bytes, little-endian).
@@ -98,6 +98,28 @@ pub(crate) struct PackedSectionFixedRaw {
     pub vert_size: [u8; 4],
     pub num_verts: [u8; 4],
 }
+
+/// Raw on-disk HW2 section fields after the fixed fields (16 bytes, little-endian).
+///
+/// The bone remap packed array follows these fields.
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone)]
+#[repr(C)]
+pub(crate) struct Hw2SectionTailRaw {
+    pub rigid_only: [u8; 4],
+    pub lod_near_distance: [u8; 4],
+    pub lod_far_distance: [u8; 4],
+    pub lod_fade_distance: [u8; 4],
+}
+
+/// Raw on-disk HW1 section flags at the end of the record (12 bytes, little-endian).
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug, Clone)]
+#[repr(C)]
+pub(crate) struct Hw1SectionFlagsRaw {
+    pub rigid_only: [u8; 4],
+    pub global_bones: [u8; 4],
+    pub padding: [u8; 4],
+}
+
 /// Raw on-disk `BVector3` (12 bytes, little-endian).
 ///
 /// Used for bone-bounds min/max arrays in `BCachedData`.

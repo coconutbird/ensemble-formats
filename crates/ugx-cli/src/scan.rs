@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ecf::Reader as EcfReader;
+use ugx::UgxVersion;
+use ugx::inspect::{CACHED_DATA_CHUNK_ID, CachedDataView, SectionArray};
 
 pub(crate) fn cmd_scan(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut ugx_paths: Vec<PathBuf> = Vec::new();
@@ -47,28 +49,15 @@ fn scan_file(path: &Path, root: &Path, stats: &mut ScanStats) {
         stats.parse_errors += 1;
         return;
     };
-    let Ok(cached) = ecf.chunk_data_by_id(0x700) else {
+    let Ok(cached) = ecf.chunk_data_by_id(CACHED_DATA_CHUNK_ID) else {
         stats.parse_errors += 1;
         return;
     };
-    if cached.len() < 0x50 {
-        stats.parse_errors += 1;
-        return;
-    }
-
-    let Some(signature) = read_u32_at(&cached, 0) else {
+    let Some(view) = CachedDataView::new(&cached) else {
         stats.parse_errors += 1;
         return;
     };
-    let Some(section_count) =
-        read_u32_at(&cached, 0x40).and_then(|count| usize::try_from(count).ok())
-    else {
-        stats.parse_errors += 1;
-        return;
-    };
-    let Some(section_offset) =
-        read_u64_at(&cached, 0x48).and_then(|offset| usize::try_from(offset).ok())
-    else {
+    let Some(sections) = view.section_array() else {
         stats.parse_errors += 1;
         return;
     };
@@ -78,114 +67,71 @@ fn scan_file(path: &Path, root: &Path, stats: &mut ScanStats) {
         .display()
         .to_string();
 
-    let Some(all_sections_rigid) = read_u8_at(&cached, 0x36) else {
-        stats.parse_errors += 1;
-        return;
-    };
-    let Some(global_bones) = read_u8_at(&cached, 0x37) else {
-        stats.parse_errors += 1;
-        return;
-    };
-    let Some(all_sections_skinned) = read_u8_at(&cached, 0x38) else {
-        stats.parse_errors += 1;
-        return;
-    };
-    let Some(rigid_only) = read_u8_at(&cached, 0x39) else {
-        stats.parse_errors += 1;
-        return;
-    };
-    let Some(padding_2) = read_u16_at(&cached, 0x3A) else {
-        stats.parse_errors += 1;
-        return;
-    };
-    let Some(padding_4) = read_u32_at(&cached, 0x3C) else {
-        stats.parse_errors += 1;
-        return;
-    };
+    let flags = view.header_flags();
+    let padding = view.header_padding();
     stats
         .header_flags
         .entry((
-            all_sections_rigid,
-            global_bones,
-            all_sections_skinned,
-            rigid_only,
+            flags.all_sections_rigid,
+            flags.global_bones,
+            flags.all_sections_skinned,
+            flags.rigid_only,
         ))
         .or_default()
         .push(filename.clone());
     stats
         .header_padding
-        .entry((padding_2, padding_4))
+        .entry((padding.padding, padding.padding2))
         .or_default()
         .push(filename.clone());
 
-    match signature {
-        0xC234_0006 => {
+    match view.version() {
+        Some(UgxVersion::Hw2) => {
             stats.hw2_count += 1;
-            scan_hw2_sections(&cached, section_count, section_offset, &filename, stats);
+            scan_hw2_sections(&view, sections, &filename, stats);
         }
-        0xC234_0004 => {
+        Some(UgxVersion::Hw1) => {
             stats.hw1_count += 1;
-            scan_hw1_sections(&cached, section_count, section_offset, &filename, stats);
+            scan_hw1_sections(&view, sections, &filename, stats);
         }
-        _ => stats.parse_errors += 1,
+        None => stats.parse_errors += 1,
     }
 }
 
 fn scan_hw2_sections(
-    data: &[u8],
-    section_count: usize,
-    section_offset: usize,
+    view: &CachedDataView<'_>,
+    sections: SectionArray,
     filename: &str,
     stats: &mut ScanStats,
 ) {
-    for section_index in 0..section_count {
-        let Some(section) = section_at(data, section_offset, section_index, 72) else {
-            break;
-        };
-        let Some(rigid_only) = read_i32_at(section, 0x28) else {
-            break;
-        };
-        if rigid_only != 0 && rigid_only != 1 {
+    for (section_index, tail) in view.hw2_section_tails(sections).enumerate() {
+        if tail.rigid_only != 0 && tail.rigid_only != 1 {
             stats
                 .hw2_non_boolean_rigid
-                .entry(rigid_only)
+                .entry(tail.rigid_only)
                 .or_default()
                 .push((filename.to_owned(), section_index));
         }
-
-        let (Some(lod_near), Some(lod_far), Some(lod_fade)) = (
-            read_u32_at(section, 0x2C),
-            read_u32_at(section, 0x30),
-            read_u32_at(section, 0x34),
-        ) else {
-            break;
-        };
         stats
             .hw2_lod_distances
-            .entry((lod_near, lod_far, lod_fade))
+            .entry((
+                tail.lod_near_distance_bits,
+                tail.lod_far_distance_bits,
+                tail.lod_fade_distance_bits,
+            ))
             .or_default()
             .push((filename.to_owned(), section_index));
     }
 }
 
 fn scan_hw1_sections(
-    data: &[u8],
-    section_count: usize,
-    section_offset: usize,
+    view: &CachedDataView<'_>,
+    sections: SectionArray,
     filename: &str,
     stats: &mut ScanStats,
 ) {
-    for section_index in 0..section_count {
-        let Some(section) = section_at(data, section_offset, section_index, 152) else {
-            break;
-        };
-        let (Some(rigid), Some(global), Some(padding)) = (
-            read_i32_at(section, 0x8C),
-            read_i32_at(section, 0x90),
-            read_i32_at(section, 0x94),
-        ) else {
-            break;
-        };
+    for (section_index, flags) in view.hw1_section_flags(sections).enumerate() {
+        let (rigid, global, padding) = (flags.rigid_only, flags.global_bones, flags.padding);
         if rigid != 0 && rigid != 1 || global != 0 && global != 1 || padding != 0 {
             stats
                 .hw1_trailing
@@ -194,42 +140,6 @@ fn scan_hw1_sections(
                 .push((filename.to_owned(), section_index));
         }
     }
-}
-
-fn section_at(
-    data: &[u8],
-    array_offset: usize,
-    index: usize,
-    section_size: usize,
-) -> Option<&[u8]> {
-    let relative_offset = index.checked_mul(section_size)?;
-    let start = array_offset.checked_add(relative_offset)?;
-    let end = start.checked_add(section_size)?;
-    data.get(start..end)
-}
-
-fn read_u16_at(data: &[u8], offset: usize) -> Option<u16> {
-    let end = offset.checked_add(2)?;
-    Some(u16::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_u8_at(data: &[u8], offset: usize) -> Option<u8> {
-    data.get(offset).copied()
-}
-
-fn read_u32_at(data: &[u8], offset: usize) -> Option<u32> {
-    let end = offset.checked_add(4)?;
-    Some(u32::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_i32_at(data: &[u8], offset: usize) -> Option<i32> {
-    let end = offset.checked_add(4)?;
-    Some(i32::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
-}
-
-fn read_u64_at(data: &[u8], offset: usize) -> Option<u64> {
-    let end = offset.checked_add(8)?;
-    Some(u64::from_le_bytes(data.get(offset..end)?.try_into().ok()?))
 }
 
 fn print_scan_report(stats: &ScanStats) {

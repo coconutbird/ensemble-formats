@@ -77,6 +77,8 @@ mod constants;
 mod error;
 pub use error::{Error, Result};
 
+pub mod inspect;
+
 pub mod vertex;
 pub use vertex::{Hw2SkinOrder, MAX_UV, UnivertPacker, UnpackedVertex, VertexElementType};
 

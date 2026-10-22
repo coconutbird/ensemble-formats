@@ -155,8 +155,8 @@ fn write_header(
         global_bones: u8::from(geom.flags.global_bones),
         all_sections_skinned: u8::from(geom.flags.all_sections_skinned),
         rigid_only: u8::from(geom.rigid_only),
-        _padding: [0; 2],
-        _padding2: [0; 4],
+        padding: [0; 2],
+        padding2: [0; 4],
     };
     cursor.write_all(header.as_bytes())?;
 
