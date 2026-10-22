@@ -81,7 +81,7 @@ The crates of this repository are in four layers:
 1. Base crates: `bdt`, `binary-support`, `ecf`, `fxb`, `pkg`, `ufx` and `xml`.
 2. Format crates: `ddx`, `era`, `lgt`, `uax`, `ugx`, `xmb`, `xtd` and `xtt`.
 3. Adapter crates: `bdt-serde`, `xmb-serde` and `ugx-gltf`.
-4. Tool crates: the `*-cli` crates and `test-utils`.
+4. Tool crates: the `*-cli` crates, `cli-support` and `test-utils`.
 
 - Make a crate depend only on crates in the same layer or in lower layers.
 - A dev-dependency on `test-utils` is permitted in all layers.

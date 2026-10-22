@@ -16,6 +16,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+cli-support.workspace = true
 era.workspace = true
 clap.workspace = true
 serde.workspace = true

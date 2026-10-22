@@ -1,0 +1,17 @@
+[package]
+name = "cli-support"
+description = "Shared helpers for the command-line tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+d3dasm.workspace = true
+glob.workspace = true
+serde.workspace = true
+serde_json.workspace = true

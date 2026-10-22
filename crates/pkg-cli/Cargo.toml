@@ -16,6 +16,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+cli-support.workspace = true
 pkg = { workspace = true, features = ["std"] }
 clap.workspace = true
 serde.workspace = true

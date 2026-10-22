@@ -5,44 +5,12 @@ use std::io::BufReader;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
+use cli_support::extract::{
+    EntryName, EntrySelector, Extraction, ExtractionOptions, ExtractionStyle, NameDisplay,
+    normalize_path,
+};
+use cli_support::{exit_code, format_size};
 use serde::Serialize;
-
-/// Exit codes for scripting.
-pub mod exit_code {
-    /// The command succeeds.
-    pub const SUCCESS: i32 = 0;
-    /// The command fails with a general error.
-    pub const ERROR: i32 = 1;
-    /// The input file does not exist.
-    pub const FILE_NOT_FOUND: i32 = 2;
-    /// The input file is not a valid PKG archive.
-    pub const INVALID_FORMAT: i32 = 3;
-    /// An I/O operation fails.
-    pub const IO_ERROR: i32 = 4;
-    /// Some operations succeed and some fail.
-    pub const PARTIAL_FAILURE: i32 = 5;
-}
-
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
-    if bytes >= GB {
-        format_scaled_size(bytes, GB, "GB")
-    } else if bytes >= MB {
-        format_scaled_size(bytes, MB, "MB")
-    } else if bytes >= KB {
-        format_scaled_size(bytes, KB, "KB")
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-fn format_scaled_size(bytes: u64, unit: u64, suffix: &str) -> String {
-    let whole = bytes / unit;
-    let tenths = (bytes % unit) * 10 / unit;
-    format!("{whole}.{tenths} {suffix}")
-}
 
 #[derive(Parser)]
 #[command(name = "pkg")]
@@ -160,24 +128,6 @@ struct InfoOutput {
     total_entries: usize,
     total_data_size: u64,
 }
-
-#[derive(Serialize)]
-struct ExtractOutput {
-    archive: String,
-    output_dir: String,
-    extracted: usize,
-    errors: usize,
-    files: Vec<ExtractedFile>,
-}
-
-#[derive(Serialize)]
-struct ExtractedFile {
-    filename: String,
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
 fn err_exit(msg: &str, json: bool, code: i32) -> i32 {
     if json {
         eprintln!(r#"{{"error": "{msg}"}}"#);
@@ -299,96 +249,13 @@ fn info_archive(path: &str, json: bool) -> i32 {
     exit_code::SUCCESS
 }
 
-fn entries_to_extract(
-    archive: &pkg::Reader<BufReader<fs::File>>,
-    pattern: Option<&glob::Pattern>,
-    specific_files: &[String],
-) -> Vec<(usize, String)> {
-    archive
-        .entries()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| {
-            let normalized = entry.filename.replace('\\', "/");
-            let selected = if specific_files.is_empty() {
-                pattern.is_none_or(|candidate| candidate.matches(&normalized))
-            } else {
-                specific_files.iter().any(|filename| {
-                    let filename = filename.replace('\\', "/");
-                    normalized == filename || normalized.ends_with(&format!("/{filename}"))
-                })
-            };
-            selected.then_some((index, normalized))
-        })
-        .collect()
-}
-
-fn extract_entry(
-    archive: &mut pkg::Reader<BufReader<fs::File>>,
-    index: usize,
-    normalized: &str,
-    outdir: &Path,
-    json: bool,
-    quiet: bool,
-    files: &mut Vec<ExtractedFile>,
-) -> bool {
-    let filename = archive.entries()[index].filename.clone();
-    let data = match archive.read_entry(index) {
-        Ok(data) => data,
-        Err(error) => {
-            if json {
-                files.push(ExtractedFile {
-                    filename,
-                    success: false,
-                    error: Some(error.to_string()),
-                });
-            } else if !quiet {
-                eprintln!("  Error reading {normalized}: {error}");
-            }
-            return false;
-        }
-    };
-
-    let file_path = outdir.join(normalized);
-    if let Some(parent) = file_path.parent()
-        && let Err(error) = fs::create_dir_all(parent)
-    {
-        if json {
-            files.push(ExtractedFile {
-                filename,
-                success: false,
-                error: Some(format!("mkdir: {error}")),
-            });
-        } else if !quiet {
-            eprintln!("  Error creating directory for {normalized}: {error}");
-        }
-        return false;
-    }
-
-    if let Err(error) = fs::write(&file_path, data) {
-        if json {
-            files.push(ExtractedFile {
-                filename,
-                success: false,
-                error: Some(format!("write: {error}")),
-            });
-        } else if !quiet {
-            eprintln!("  Error writing {normalized}: {error}");
-        }
-        return false;
-    }
-
-    if json {
-        files.push(ExtractedFile {
-            filename,
-            success: true,
-            error: None,
-        });
-    } else if !quiet {
-        println!("  {normalized}");
-    }
-    true
-}
+/// Extraction text of the PKG tool.
+const EXTRACTION_STYLE: ExtractionStyle = ExtractionStyle {
+    display: NameDisplay::Normalized,
+    read_error_prefix: "",
+    create_dir_error_prefix: "mkdir: ",
+    write_error_prefix: "write: ",
+};
 
 fn extract_archive(
     path: &str,
@@ -403,72 +270,41 @@ fn extract_archive(
         Err(e) => return err_exit(&e, json, exit_code::FILE_NOT_FOUND),
     };
 
-    let pattern = filter.map(|f| {
-        glob::Pattern::new(f).unwrap_or_else(|e| {
-            eprintln!("Invalid glob pattern '{f}': {e}");
-            std::process::exit(exit_code::ERROR);
-        })
+    let selector = EntrySelector::new(filter, specific_files).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(exit_code::ERROR);
     });
 
-    let default_outdir = Path::new(path)
-        .file_stem()
-        .map_or_else(|| "output".to_string(), |s| s.to_string_lossy().to_string());
-    let outdir_str = outdir.unwrap_or(&default_outdir);
-    let outdir = Path::new(outdir_str);
+    let options = ExtractionOptions { json, quiet };
+    let mut extraction = match Extraction::start(path, outdir, options, EXTRACTION_STYLE) {
+        Ok(extraction) => extraction,
+        Err(e) => {
+            return err_exit(
+                &format!("Failed to create output directory: {e}"),
+                json,
+                exit_code::IO_ERROR,
+            );
+        }
+    };
 
-    if let Err(e) = fs::create_dir_all(outdir) {
-        return err_exit(
-            &format!("Failed to create output directory: {e}"),
-            json,
-            exit_code::IO_ERROR,
+    for index in 0..archive.entries().len() {
+        let filename = archive.entries()[index].filename.clone();
+        let normalized = normalize_path(&filename);
+        if !selector.matches(&normalized) {
+            continue;
+        }
+
+        let data = archive.read_entry(index);
+        extraction.write_entry(
+            EntryName {
+                original: &filename,
+                normalized: &normalized,
+            },
+            data,
         );
     }
 
-    if !quiet && !json {
-        println!("Extracting {} to {}...", path, outdir.display());
-    }
-
-    let mut success = 0;
-    let mut errors = 0;
-    let mut files = Vec::new();
-
-    let to_extract = entries_to_extract(&archive, pattern.as_ref(), specific_files);
-
-    for (index, normalized) in &to_extract {
-        if extract_entry(
-            &mut archive,
-            *index,
-            normalized,
-            outdir,
-            json,
-            quiet,
-            &mut files,
-        ) {
-            success += 1;
-        } else {
-            errors += 1;
-        }
-    }
-
-    if json {
-        let output = ExtractOutput {
-            archive: path.to_string(),
-            output_dir: outdir_str.to_string(),
-            extracted: success,
-            errors,
-            files,
-        };
-        println!("{}", serde_json::to_string(&output).unwrap());
-    } else if !quiet {
-        println!();
-        println!("Extracted {success} files ({errors} errors)");
-    }
-
-    if errors > 0 {
-        exit_code::PARTIAL_FAILURE
-    } else {
-        exit_code::SUCCESS
-    }
+    extraction.finish()
 }
 
 #[derive(Serialize)]

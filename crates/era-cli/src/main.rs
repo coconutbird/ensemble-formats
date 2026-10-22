@@ -4,51 +4,17 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
+use cli_support::extract::{
+    EntryName, EntrySelector, Extraction, ExtractionOptions, ExtractionStyle, NameDisplay,
+    normalize_path,
+};
+use cli_support::{exit_code, format_size};
 use era::{Reader, TeaKeys, Writer};
 use serde::Serialize;
-
-/// Exit codes for scripting
-pub mod exit_code {
-    /// Success
-    pub const SUCCESS: i32 = 0;
-    /// General error
-    pub const ERROR: i32 = 1;
-    /// File not found
-    pub const FILE_NOT_FOUND: i32 = 2;
-    /// Invalid archive format
-    pub const INVALID_FORMAT: i32 = 3;
-    /// I/O error
-    pub const IO_ERROR: i32 = 4;
-    /// Partial failure (some files failed)
-    pub const PARTIAL_FAILURE: i32 = 5;
-}
 
 /// Convert a byte slice to a lowercase hex string
 fn bytes_to_hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
-}
-
-/// Format a byte size as a human-readable string
-fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
-
-    if bytes >= GB {
-        format_scaled_size(bytes, GB, "GB")
-    } else if bytes >= MB {
-        format_scaled_size(bytes, MB, "MB")
-    } else if bytes >= KB {
-        format_scaled_size(bytes, KB, "KB")
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-fn format_scaled_size(bytes: u64, unit: u64, suffix: &str) -> String {
-    let whole = bytes / unit;
-    let tenths = (bytes % unit) * 10 / unit;
-    format!("{whole}.{tenths} {suffix}")
 }
 
 fn format_ratio(numerator: u64, denominator: u64) -> String {
@@ -388,105 +354,13 @@ fn info_archive(path: &str, json: bool) -> i32 {
     exit_code::SUCCESS
 }
 
-/// JSON output for extract command
-#[derive(Serialize)]
-struct ExtractOutput {
-    archive: String,
-    output_dir: String,
-    extracted: usize,
-    errors: usize,
-    files: Vec<ExtractedFile>,
-}
-
-#[derive(Serialize)]
-struct ExtractedFile {
-    filename: String,
-    success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-fn matches_filter(
-    filename: &str,
-    pattern: Option<&glob::Pattern>,
-    specific_files: &[String],
-) -> bool {
-    let normalized = filename.replace('\\', "/");
-    if specific_files.is_empty() {
-        pattern.is_none_or(|candidate| candidate.matches(&normalized))
-    } else {
-        specific_files.iter().any(|candidate| {
-            let candidate = candidate.replace('\\', "/");
-            normalized == candidate || normalized.ends_with(&format!("/{candidate}"))
-        })
-    }
-}
-
-fn extract_entry(
-    archive: &mut ArchiveReader,
-    index: usize,
-    filename: &str,
-    outdir: &Path,
-    json: bool,
-    quiet: bool,
-    files: &mut Vec<ExtractedFile>,
-) -> bool {
-    let data = match archive.read_entry(index) {
-        Ok(data) => data,
-        Err(error) => {
-            if json {
-                files.push(ExtractedFile {
-                    filename: filename.to_string(),
-                    success: false,
-                    error: Some(format!("Read error: {error}")),
-                });
-            } else if !quiet {
-                eprintln!("  Error reading {filename}: {error}");
-            }
-            return false;
-        }
-    };
-
-    let file_path = outdir.join(filename.replace('\\', "/"));
-    if let Some(parent) = file_path.parent()
-        && let Err(error) = fs::create_dir_all(parent)
-    {
-        if json {
-            files.push(ExtractedFile {
-                filename: filename.to_string(),
-                success: false,
-                error: Some(format!("Directory creation error: {error}")),
-            });
-        } else if !quiet {
-            eprintln!("  Error creating directory for {filename}: {error}");
-        }
-        return false;
-    }
-
-    if let Err(error) = fs::write(&file_path, data) {
-        if json {
-            files.push(ExtractedFile {
-                filename: filename.to_string(),
-                success: false,
-                error: Some(format!("Write error: {error}")),
-            });
-        } else if !quiet {
-            eprintln!("  Error writing {filename}: {error}");
-        }
-        return false;
-    }
-
-    if json {
-        files.push(ExtractedFile {
-            filename: filename.to_string(),
-            success: true,
-            error: None,
-        });
-    } else if !quiet {
-        println!("  {filename}");
-    }
-    true
-}
+/// Extraction text of the ERA tool.
+const EXTRACTION_STYLE: ExtractionStyle = ExtractionStyle {
+    display: NameDisplay::Original,
+    read_error_prefix: "Read error: ",
+    create_dir_error_prefix: "Directory creation error: ",
+    write_error_prefix: "Write error: ",
+};
 
 fn extract_archive(
     path: &str,
@@ -508,38 +382,23 @@ fn extract_archive(
         }
     };
 
-    // Compile glob pattern if provided
-    let pattern = filter.map(|f| {
-        glob::Pattern::new(f).unwrap_or_else(|e| {
-            eprintln!("Invalid glob pattern '{f}': {e}");
-            std::process::exit(exit_code::ERROR);
-        })
+    let selector = EntrySelector::new(filter, specific_files).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(exit_code::ERROR);
     });
 
-    // Default output directory is the archive name without extension
-    let default_outdir = Path::new(path)
-        .file_stem()
-        .map_or_else(|| "output".to_string(), |s| s.to_string_lossy().to_string());
-    let outdir_str = outdir.unwrap_or(&default_outdir);
-    let outdir = Path::new(outdir_str);
-
-    // Create output directory
-    if let Err(e) = fs::create_dir_all(outdir) {
-        if json {
-            eprintln!(r#"{{"error": "Failed to create output directory: {e}"}}"#);
-        } else {
-            eprintln!("Error creating output directory: {e}");
+    let options = ExtractionOptions { json, quiet };
+    let mut extraction = match Extraction::start(path, outdir, options, EXTRACTION_STYLE) {
+        Ok(extraction) => extraction,
+        Err(e) => {
+            if json {
+                eprintln!(r#"{{"error": "Failed to create output directory: {e}"}}"#);
+            } else {
+                eprintln!("Error creating output directory: {e}");
+            }
+            return exit_code::IO_ERROR;
         }
-        return exit_code::IO_ERROR;
-    }
-
-    if !quiet && !json {
-        println!("Extracting {} to {}...", path, outdir.display());
-    }
-
-    let mut success = 0;
-    let mut errors = 0;
-    let mut files = Vec::new();
+    };
 
     // Skip entry 0 (filename table)
     for i in 1..archive.len() {
@@ -547,37 +406,23 @@ fn extract_archive(
             continue;
         };
         let filename = entry.filename.as_deref().unwrap_or("<unnamed>").to_string();
+        let normalized = normalize_path(&filename);
 
-        if !matches_filter(&filename, pattern.as_ref(), specific_files) {
+        if !selector.matches(&normalized) {
             continue;
         }
 
-        if extract_entry(&mut archive, i, &filename, outdir, json, quiet, &mut files) {
-            success += 1;
-        } else {
-            errors += 1;
-        }
+        let data = archive.read_entry(i);
+        extraction.write_entry(
+            EntryName {
+                original: &filename,
+                normalized: &normalized,
+            },
+            data,
+        );
     }
 
-    if json {
-        let output = ExtractOutput {
-            archive: path.to_string(),
-            output_dir: outdir_str.to_string(),
-            extracted: success,
-            errors,
-            files,
-        };
-        println!("{}", serde_json::to_string(&output).unwrap());
-    } else if !quiet {
-        println!();
-        println!("Extracted {success} files ({errors} errors)");
-    }
-
-    if errors > 0 {
-        exit_code::PARTIAL_FAILURE
-    } else {
-        exit_code::SUCCESS
-    }
+    extraction.finish()
 }
 
 /// JSON output for create command

@@ -14,6 +14,7 @@ members = [
     "crates/ugx-gltf",
     "crates/xtd",
     "crates/xtt",
+    "crates/cli-support",
     "crates/era-cli",
     "crates/xmb-cli",
     "crates/ugx-cli",
@@ -52,6 +53,7 @@ xmb-serde = { path = "crates/xmb-serde" }
 ugx = { path = "crates/ugx" }
 ugx-gltf = { path = "crates/ugx-gltf" }
 test-utils = { path = "crates/test-utils" }
+cli-support = { path = "crates/cli-support" }
 xtd = { path = "crates/xtd" }
 xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }
