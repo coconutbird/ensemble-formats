@@ -224,31 +224,30 @@ mod tests {
             vertices.num_verts_per_axis * vertices.num_verts_per_axis
         );
 
-        // A non-diagonal source patch independently verifies the atlas layout,
-        // the `.zyx` position swizzle, and the complete source-to-world X/Z
-        // conversion. Source patch (1, 0) becomes viewer patch (0, 1).
+        // A non-diagonal patch independently verifies the atlas layout, the
+        // `.zyx` position swizzle and the frame. Patch (1, 0) covers grid X
+        // 16 to 32 and grid Z 0 to 16, with no axis swap.
         let tessellation = file
             .decode_tessellation()
             .expect("Failed to decode tessellation")
             .expect("Missing tessellation chunk");
         let bbox = tessellation
             .get_patch_bbox(1, 0)
-            .expect("Missing source patch bounding box");
+            .expect("Missing patch bounding box");
         let mut decoded_min = [f32::INFINITY; 3];
         let mut decoded_max = [f32::NEG_INFINITY; 3];
-        for z in 16..=32 {
-            for x in 0..=16 {
-                let position = vertices.positions[z * vertices.num_verts_per_axis + x];
+        for x in 16..=32 {
+            for z in 0..=16 {
+                let position = vertices.positions[x * vertices.num_verts_per_axis + z];
                 for axis in 0..3 {
                     decoded_min[axis] = decoded_min[axis].min(position[axis]);
                     decoded_max[axis] = decoded_max[axis].max(position[axis]);
                 }
             }
         }
-        let source_axis_for_world = [2, 1, 0];
-        for (world_axis, &source_axis) in source_axis_for_world.iter().enumerate() {
-            assert!((decoded_min[world_axis] - bbox.min[source_axis]).abs() < 0.5);
-            assert!((decoded_max[world_axis] - bbox.max[source_axis]).abs() < 0.5);
+        for axis in 0..3 {
+            assert!((decoded_min[axis] - bbox.min[axis]).abs() < 0.5);
+            assert!((decoded_max[axis] - bbox.max[axis]).abs() < 0.5);
         }
 
         // Check normals are normalized (approximately)
@@ -472,6 +471,49 @@ mod tests {
             lighting_data,
             ao_data,
             alpha_data,
+        }
+    }
+
+    #[test]
+    fn decoded_vertices_keep_the_x_major_retail_frame() {
+        let mut file = make_test_xtd();
+        let width = 128;
+        // A zero midpoint and a 102.3 range decode each 10-bit component to a tenth of its value.
+        let mut header = Vec::new();
+        for value in [0.0_f32, 0.0, 0.0, 0.0, 102.3, 102.3, 102.3, 0.0] {
+            header.extend_from_slice(&value.to_be_bytes());
+        }
+        let mut atlas_data = header;
+        let mut positions = alloc::vec![0_u32; width * width];
+        // Grid point (x = 1, z = 0): X displacement 5 (blue), height 9 (green).
+        positions[width] = (5 << 20) | (9 << 10);
+        // Grid point (x = 0, z = 1): Z displacement 3 (red), height 7 (green).
+        positions[1] = (7 << 10) | 3;
+        for word in positions {
+            atlas_data.extend_from_slice(&word.to_le_bytes());
+        }
+        atlas_data.extend_from_slice(&alloc::vec![0; width * width * 4]);
+        file.atlas_data = atlas_data;
+
+        let vertices = file.decode_vertices().expect("decode vertices");
+        let height_bias = 102.3 / 2048.0;
+        let x_neighbor = vertices.positions[width];
+        assert!((x_neighbor[0] - (2.0 + 0.5)).abs() < 1.0e-4);
+        assert!((x_neighbor[1] - (0.9 - height_bias)).abs() < 1.0e-4);
+        assert!(x_neighbor[2].abs() < 1.0e-4);
+        let z_neighbor = vertices.positions[1];
+        assert!(z_neighbor[0].abs() < 1.0e-4);
+        assert!((z_neighbor[1] - (0.7 - height_bias)).abs() < 1.0e-4);
+        assert!((z_neighbor[2] - (2.0 + 0.3)).abs() < 1.0e-4);
+
+        let indices = vertices.generate_indices().expect("generate indices");
+        for triangle in indices.as_chunks::<3>().0.iter().take(4) {
+            let [a, b, c] = triangle
+                .map(|index| vertices.positions[usize::try_from(index).expect("vertex index")]);
+            let first = [b[0] - a[0], b[2] - a[2]];
+            let second = [c[0] - a[0], c[2] - a[2]];
+            let up = first[1] * second[0] - first[0] * second[1];
+            assert!(up > 0.0, "terrain triangle {triangle:?} faces down");
         }
     }
 

@@ -160,7 +160,7 @@ mod normal_tests {
 pub struct TerrainVertices {
     /// Atlas encoding header.
     pub header: AtlasHeader,
-    /// Decoded vertex positions.
+    /// Decoded vertex positions. Grid point `(x, z)` is at index `x * num_verts_per_axis + z`.
     pub positions: Vec<[f32; 3]>,
     /// Decoded vertex normals.
     pub normals: Vec<[f32; 3]>,
@@ -176,7 +176,8 @@ pub struct TerrainVertices {
 /// and decoded in the vertex shader for GPU-based tessellation.
 #[derive(Debug, Clone)]
 pub struct RawTerrainData {
-    /// Packed position data (R10G10B10A2 format, one u32 per vertex).
+    /// Packed position data (R10G10B10A2 format, one u32 per vertex). Grid point `(x, z)` is
+    /// at index `x * num_verts_per_axis + z`.
     pub packed_positions: Vec<u32>,
     /// Packed normal data (one u32 per vertex).
     pub packed_normals: Vec<u32>,
@@ -285,7 +286,9 @@ impl XtdFile {
 
     /// Decode terrain vertices from the atlas chunk.
     ///
-    /// Returns positions and normals as Vec<[f32; 3]>.
+    /// Returns positions and normals as Vec<[f32; 3]>. The output keeps the native X-major
+    /// order of the atlas: world grid point `(x, z)` is at index `x * width + z`. The world
+    /// frame is the retail frame of the scenario `.scn` and the simulation XSD terrain.
     ///
     /// # Errors
     ///
@@ -312,51 +315,35 @@ impl XtdFile {
             .to_f32()
             .ok_or(Error::SizeOverflow("terrain width"))?;
 
-        for world_z_index in 0..width {
-            for world_x_index in 0..width {
-                // The XTD source axes are diagonally mirrored relative to the
-                // XTT material world: viewer (x, z) is source (z, x). The PC
-                // byte stream stores source (x, z) at x * width + z, so this
-                // conversion reads source (world_z, world_x).
-                let source_index = world_z_index * width + world_x_index;
-                let world_x = world_x_index
-                    .to_f32()
-                    .ok_or(Error::SizeOverflow("terrain X coordinate"))?;
-                let world_z = world_z_index
+        // The PC byte stream stores world grid point (x, z) at x * width + z. The
+        // retail domain shader samples the atlas at texture coordinate (z, x) and
+        // adds the `.zyx` displacement. The decoder keeps that order and frame.
+        for x_index in 0..width {
+            let world_x = x_index
+                .to_f32()
+                .ok_or(Error::SizeOverflow("terrain X coordinate"))?;
+            for z_index in 0..width {
+                let source_index = x_index * width + z_index;
+                let world_z = z_index
                     .to_f32()
                     .ok_or(Error::SizeOverflow("terrain Z coordinate"))?;
 
-                // The packed data contains position data that needs to be combined with grid position.
-                // X/Z: grid position provides the base, packed data adds displacement
-                // Y: comes entirely from the packed data (height)
-                let unpacked = unpack_position(
+                // X/Z: grid position provides the base, packed data adds displacement.
+                // Y: comes entirely from the packed data (height).
+                let displacement = unpack_position(
                     packed.positions[source_index],
                     &packed.header.mid,
                     &packed.header.range,
                 );
-
-                // Mirror the complete position, including the packed X/Z
-                // displacement. Moving only the height texel applies lateral
-                // displacement in the wrong orientation and can fold terrain.
                 positions.push([
-                    world_x * tile_scale + unpacked[2],
-                    unpacked[1],
-                    world_z * tile_scale + unpacked[0],
+                    world_x * tile_scale + displacement[0],
+                    displacement[1],
+                    world_z * tile_scale + displacement[2],
                 ]);
+                normals.push(unpack_normal(packed.normals[source_index]));
 
-                let source_normal = unpack_normal(packed.normals[source_index]);
-                normals.push([source_normal[2], source_normal[1], source_normal[0]]);
-
-                // UV coordinates: Z→U, X→V (matching the game's convention).
-                //
-                // The original Halo Wars shaders consistently use world Z for the U axis
-                // and world X for the V axis (e.g. the roads shader samples `gPos.zx`).
-                // All terrain textures — splat alpha, albedo, AO — are authored for this
-                // convention, so we adopt it here at the source rather than compensating
-                // with rotation/transpose hacks downstream.
-                let u = world_z / width_f;
-                let v = world_x / width_f;
-                uvs.push([u, v]);
+                // The composited terrain textures use U along world X and V along world Z.
+                uvs.push([world_x / width_f, world_z / width_f]);
             }
         }
 
@@ -374,7 +361,9 @@ impl TerrainVertices {
     /// Generate triangle indices for rendering the terrain as a triangle list.
     ///
     /// The terrain is a regular grid, so we generate 2 triangles per quad.
-    /// Returns indices in counter-clockwise winding order.
+    /// The vertices use the X-major order of [`XtdFile::decode_vertices`].
+    /// Seen from above (+Y), each triangle has counter-clockwise winding in a
+    /// right-handed frame.
     ///
     /// # Errors
     ///
@@ -394,24 +383,25 @@ impl TerrainVertices {
             .ok_or(Error::SizeOverflow("terrain index count"))?;
         let mut indices = Vec::with_capacity(index_count);
 
-        for z in 0..(n - 1) {
-            for x in 0..(n - 1) {
-                let top_left_index = z
+        for x in 0..(n - 1) {
+            for z in 0..(n - 1) {
+                let top_left_index = x
                     .checked_mul(n)
-                    .and_then(|row| row.checked_add(x))
+                    .and_then(|row| row.checked_add(z))
                     .ok_or(Error::SizeOverflow("terrain vertex index"))?;
-                let bottom_left_index = (z + 1)
+                let top_right_index = (x + 1)
                     .checked_mul(n)
-                    .and_then(|row| row.checked_add(x))
+                    .and_then(|row| row.checked_add(z))
                     .ok_or(Error::SizeOverflow("terrain vertex index"))?;
+                // Corner names: left/right is -X/+X, top/bottom is -Z/+Z.
                 let top_left = u32::try_from(top_left_index)
                     .map_err(|_| Error::SizeOverflow("terrain vertex index"))?;
-                let bottom_left = u32::try_from(bottom_left_index)
+                let top_right = u32::try_from(top_right_index)
                     .map_err(|_| Error::SizeOverflow("terrain vertex index"))?;
-                let top_right = top_left
+                let bottom_left = top_left
                     .checked_add(1)
                     .ok_or(Error::SizeOverflow("terrain vertex index"))?;
-                let bottom_right = bottom_left
+                let bottom_right = top_right
                     .checked_add(1)
                     .ok_or(Error::SizeOverflow("terrain vertex index"))?;
 
@@ -574,11 +564,11 @@ impl TessellationBuffers {
         }
 
         let mut grid_vertices = BTreeMap::new();
-        for z in 0..n {
-            for x in 0..n {
-                let index = z
+        for x in 0..n {
+            for z in 0..n {
+                let index = x
                     .checked_mul(n)
-                    .and_then(|row| row.checked_add(x))
+                    .and_then(|row| row.checked_add(z))
                     .ok_or(Error::SizeOverflow("terrain vertex index"))?;
                 grid_vertices.insert((x, z), index);
             }
