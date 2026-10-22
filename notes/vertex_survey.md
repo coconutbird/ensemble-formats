@@ -23,9 +23,11 @@
 Normalizing tangents/normals during glTF roundtrip is safe — magnitudes
 are Dec3N encoding artifacts, not meaningful scale data.
 
-## HW2 (2,862 sections from loose .ugx files)
+## HW2 (sample of 2,862 sections from loose .ugx files)
 
-HW2 does NOT use UnivertPacker — uses fixed vertex layouts based on vert_size.
+HW2 sections do not embed a `UnivertPacker`. The matching UFX vertex declaration gives the
+layout. If the caller does not supply that declaration, `ugx` infers the layout from `vert_size`
+(`crates/ugx/src/vertex.rs`).
 
 | Vert Size | Rigid | Global Bones | Count | Notes |
 |-----------|-------|-------------|-------|-------|

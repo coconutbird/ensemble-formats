@@ -1,62 +1,73 @@
-# ensemble-rs
+# ensemble-formats
 
-A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file formats.
+Rust crates that read and write the binary file formats of Halo Wars: Definitive Edition (HW1)
+and Halo Wars 2 (HW2). `ensemble-assets` and `openensemble` use these crates.
+
+[`AGENTS.md`](AGENTS.md) gives the rules for changes: writing style, lints, layout, crate layers
+and checks.
 
 ## Crates
 
-| Crate     | Description                             |
-| --------- | --------------------------------------- |
-| `ecf`     | ECF container format parser             |
-| `era`     | ERA archive format (encrypted ECF)      |
-| `pkg`     | PKG archive format (HW2 capack)         |
-| `xmb`     | XMB binary XML parser                   |
-| `ugx`     | UGX 3D model geometry parser            |
-| `ufx`     | HW2 UFXS compiled-shader parser         |
-| `uax`     | UAX animation format parser             |
-| `ddx`     | DDX/DDS texture format reader/writer    |
-| `lgt`     | LGT animated light-scene parser         |
-| `bdt`     | BDT binary data tree (packed documents) |
-| `xsd`     | XSD simulation terrain parser           |
-| `era-cli` | CLI tool for ERA archives               |
-| `pkg-cli` | CLI tool for PKG archives               |
-| `xmb-cli` | CLI tool for XMB files                  |
-| `ugx-cli` | CLI tool for UGX models                 |
-| `ufx-cli` | CLI tool for HW2 UFX shaders            |
+"R" is read support and "W" is write support. "no_std" crates use `alloc` and `nostdio`.
 
-## Blender UGX extension
+| Crate            | Format or purpose                                                                    | R   | W   | Game | no_std |
+| ---------------- | ------------------------------------------------------------------------------------ | --- | --- | ---- | ------ |
+| `bdt`            | `BBinaryDataTree` packed document tree (inside XMB and UGX materials)                | yes | yes | both | yes    |
+| `bdt-serde`      | Serde mapping between Rust types and `bdt` nodes                                     | yes | yes | both | yes    |
+| `binary-support` | String table and pointer fix-up helpers for binary writers                           | —   | —   | both | yes    |
+| `cli-support`    | Exit codes, size format, archive extraction and shader output for the CLI tools      | —   | —   | both | no     |
+| `ddx`            | DDX textures: DDS files (DE) and ECF-wrapped Xbox 360 DDX; decode to RGBA            | yes | DDS | HW1  | yes    |
+| `ecf`            | ECF chunk container, checksums and deflate streams                                   | yes | yes | both | yes    |
+| `era`            | ERA archives: ECF with TEA encryption and Merkle signatures                          | yes | yes | HW1  | yes    |
+| `era-cli`        | `era` tool                                                                           | —   | —   | HW1  | no     |
+| `fxb`            | FXB0 compiled effect files (`*.bin` in `shader.era`) with DXBC shaders               | yes | yes | HW1  | yes    |
+| `fxb-cli`        | `fxb` tool                                                                           | —   | —   | HW1  | no     |
+| `lgt`            | LGT animated light scenes from the 3ds Max light exporter                            | yes | no  | HW1  | yes    |
+| `pkg`            | PKG (`capack`) archives with FNV-1a name hashes, versions 1 and 2                    | yes | yes | HW2  | yes    |
+| `pkg-cli`        | `pkg` tool                                                                           | —   | —   | HW2  | no     |
+| `test-utils`     | Game directory, file discovery and ERA helpers for tests                             | —   | —   | both | no     |
+| `uax`            | UAX animations: ECF with a packed x64 Granny `file_info` graph                       | yes | yes | both | yes    |
+| `uax-cli`        | `uax` tool                                                                           | —   | —   | both | no     |
+| `ufx`            | UFXS compiled shaders: D3D12 root signature, DXBC stages, vertex input, CB inference | yes | no  | HW2  | yes    |
+| `ufx-cli`        | `ufx` tool                                                                           | —   | —   | HW2  | no     |
+| `ugx`            | UGX models: v4 (HW1) and v6 (HW2) geometry, materials, Granny skeleton, AABB tree    | yes | yes | both | yes    |
+| `ugx-cli`        | `ugx` tool                                                                           | —   | —   | both | no     |
+| `ugx-gltf`       | UGX to glTF 2.0 and back; v4 to v6 conversion                                        | yes | yes | both | no     |
+| `xmb`            | XMB binary XML (ECF with a `bdt` tree), PC and Xbox 360 layouts                      | yes | yes | both | yes    |
+| `xmb-cli`        | `xmb` tool                                                                           | —   | —   | both | no     |
+| `xmb-serde`      | Deserialize XMB or text XML into Rust types                                          | yes | no  | both | yes    |
+| `xml`            | Small text XML reader, writer and escape helpers                                     | yes | yes | both | yes    |
+| `xsd`            | XSD simulation terrain: header, height grid, tile types                              | yes | no  | HW1  | yes    |
+| `xtd`            | XTD terrain visual data: atlas, tessellation, lighting, AO, alpha                    | yes | yes | HW1  | yes    |
+| `xtt`            | XTT terrain textures: atlas links, albedo, decals, roads, foliage                    | yes | yes | HW1  | yes    |
 
-`blender/ugx_gltf` is a Blender 4.2+ import/export extension backed by the Rust
-`ugx-gltf` converter. It supports editable UGX meshes, materials, skeletons,
-skin weights, and UGX-specific glTF metadata. Its Blender panels expose legacy
-render flags and all texture bindings, Hogan shader metadata and parameters,
-section binding/LOD/layout controls, model instance settings, and safe automatic
-Stumpy/3ds Max coordinate, material, and verified-binding repair. Build an
-installable archive for the current platform with:
+`era`, `ecf`, `pkg`, `ugx`, `bdt-serde` and `xmb-serde` put their `std` code behind a `std`
+feature. `era` also has a `rayon` feature.
 
-```text
-mise run blender:package
-```
+## Command-line tools
 
-See [`blender/ugx_gltf/README.md`](blender/ugx_gltf/README.md) for installation,
-development, metadata, and format details.
+| Binary | Crate     | Commands                                                                                             |
+| ------ | --------- | ---------------------------------------------------------------------------------------------------- |
+| `era`  | `era-cli` | `list`, `info`, `extract`, `create`, `verify` (Merkle signature)                                     |
+| `pkg`  | `pkg-cli` | `list`, `info`, `extract`, `create`                                                                  |
+| `xmb`  | `xmb-cli` | `to-xml`, `to-xmb`, `info`; a file argument without a command selects the direction                  |
+| `ugx`  | `ugx-cli` | `info`, `to-gltf`, `from-gltf`, `convert`, `dump`, `diff`, `scan`                                    |
+| `uax`  | `uax-cli` | `info`, `dump`                                                                                       |
+| `fxb`  | `fxb-cli` | `list`, `info`, `extract`                                                                            |
+| `ufx`  | `ufx-cli` | no subcommands; flags `--disasm`, `--cb-only`, `--flags`, `--infer-params`, `--cfg`, `--batch-infer` |
 
-## UGX version conversion
+### UGX version conversion
 
-The `ugx` command can repack a model directly between the Halo Wars DE v4 and
-Halo Wars 2 v6 representations:
+`ugx convert` repacks a model between HW1 v4 and HW2 v6:
 
 ```text
 ugx convert --input model_v4.ugx --output model_v6.ugx --version hw2
 ugx convert --input model_v6.ugx --output model_v4.ugx --version hw1
 ```
 
-Conversion rebuilds target-specific vertex packing, materials, skeleton/section
-metadata, bounds, accessories, and acceleration data. The command verifies the
-written version and strictly reads the output before returning success. For an
-editable workflow, import either version with the Blender extension, modify the
-scene, and choose Halo Wars DE or Halo Wars 2 as the export target.
-
-To perform the same editable round-trip explicitly on the command line:
+The command rebuilds vertex packing, materials, skeleton and section data, bounds, accessories
+and the AABB tree. Then it reads the output again in strict mode. For an editable round trip,
+use glTF:
 
 ```text
 ugx to-gltf --input model.ugx --output model.gltf
@@ -64,238 +75,208 @@ ugx from-gltf --input model.gltf --output rebuilt.ugx --version hw1
 ugx diff --original model.ugx --roundtrip rebuilt.ugx
 ```
 
-Use `--version hw2` on `from-gltf` when targeting Halo Wars 2. The `diff`
-command compares container chunks, parsed materials and sections, and unpacked
-vertex data so expected packing differences are visible.
+`from-gltf` writes v6 (`hw2`) if you do not give `--version`. `diff` compares the two files chunk
+by chunk. The two versions do not hold the same data. A v4 section cannot store the v6 LOD
+distances. Material conversion between legacy and Hogan materials uses the nearest texture and
+shader mapping.
 
-The formats do not carry identical information: v6-only LOD distances cannot be
-stored in a v4 section, and Hogan/legacy material conversion necessarily uses
-the closest available texture and shader mapping. Geometry, topology, skinning,
-and shared skeleton metadata are retained within the target packing precision.
+### Blender extension
 
-## File Formats
+`blender/ugx_gltf` is a Blender 4.2+ import and export extension. It calls the `ugx` tool. To
+make an installable archive for the current platform, run `mise run blender:package`. See
+[`blender/ugx_gltf/README.md`](blender/ugx_gltf/README.md).
 
-### Container/Archive Formats
+## Tests and verification
 
-| Format  | Extension   | Description                                                                                                                 | Status         |
-| ------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| **ECF** | (container) | Ensemble Common Format - base container wrapping various file types. Uses big-endian byte order. Header magic: `0xDABA7737` | ✅ Implemented |
-| **ERA** | `.era`      | Encrypted Resource Archive. ECF container with TEA encryption. Header ID: `0x17FDBA9C`                                      | ✅ Implemented |
-| **PKG** | `.pkg`      | Packed File Archive (HW2 "capack"). Unencrypted archive with FNV-1a hashed filenames                                        | ✅ Implemented |
+Run the normal tests:
 
-### Binary Data Formats
+```sh
+cargo test --workspace --all-features
+```
 
-| Format  | Extension | ECF File ID  | Description                                                                                           | Status                         |
-| ------- | --------- | ------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------ |
-| **UGX** | `.ugx`    | `0xAAC93746` | 3D model geometry (vertices, indices, materials, bones, bounding volumes)                             | ✅ HW1 v4 + HW2 v6 validated   |
-| **UFX** | `.ufx`    | —            | HW2 UFXS container with D3D12 root signature and DXBC shader stages                                   | ✅ HW2 retail validated        |
-| **UAX** | `.uax`    | `0xAAC93747` | Skeletal animation data (Granny format wrapper with duration, name, track groups)                     | ✅ HW1 DE validated            |
-| **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented                 |
-| **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ⚠️ Untested (see below)       |
-| **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented                 |
-| **LGT** | `.lgt`    | —            | Animated light scenes: timed frames of lights, objects and cameras from the 3ds Max light exporter    | ✅ Implemented                 |
+Tests that need game files have `#[ignore = "requires ..."]`. To run them:
 
-### XML-Based Formats
+1. Copy `.env.example` to `.env`.
+2. Set `HW1_GAME_DIR` to the Halo Wars: Definitive Edition directory (the directory with the
+   `.era` files).
+3. Set `HW2_GAME_DIR` to an extracted Halo Wars 2 directory (loose `.ugx`, `.uax`, `.ufx` files).
+4. Run `cargo test --workspace --all-features -- --ignored`.
 
-| Format  | Extension | Description                                          | Status         |
-| ------- | --------- | ---------------------------------------------------- | -------------- |
-| **XMB** | `.xmb`    | Binary XML format - compressed representation of XML | ✅ Implemented |
-| **BDT** | (packed)  | Binary Data Tree - packed document format            | ✅ Implemented |
+`test_utils::env::require_game_dir` reads the variable from the environment or from `.env`. It
+panics if the variable is not set or is not a directory. Thus an ignored test does not skip
+silently. Some ignored tests use local fixtures, not a game directory:
 
-Most game data files are XML stored as XMB with specific schemas:
+- `ddx`: `root.era` in the workspace root or in `crates/ddx`.
+- `xtd`, `xtt`: extracted files below `test_extract/scenario/skirmish/design/blood_gulch/`. One
+  `xtt` test reads `--filter/scenario/skirmish/design/release/release.xtt`.
 
-| Schema         | Extension        | Description                             |
-| -------------- | ---------------- | --------------------------------------- |
-| Visual         | `.vis.xmb`       | Model variants, attachments, animations |
-| Particle       | `.pfx.xmb`       | Particle effect definitions             |
-| Terrain Effect | `.tfx`           | Impact effects per terrain type         |
-| Tactics        | `.tactics.xmb`   | Unit AI and combat behavior             |
-| Physics        | `.physics.xmb`   | Physics simulation parameters           |
-| Blueprint      | `.blueprint.xmb` | Object blueprints                       |
-| Shape          | `.shp.xmb`       | Collision shapes                        |
+### Status
 
-### HW2 Compatibility Notes
+| Format                        | What the tests check                                                                                        | Result                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| UAX                           | All UAX files in all HW1 ERAs: strict parse, semantic write and read, byte-exact raw round trip             | 2,301 files pass                                 |
+| UGX v4                        | All UGX files in all HW1 ERAs parse and validate as v4                                                      | 2,468 files, 18,411 sections pass                |
+| UGX v6                        | All loose HW2 UGX files parse and validate as v6                                                            | Last recorded run: 15,632 files, 92,726 sections |
+| UGX to glTF                   | 100 HW1 models per test: same-version round trip and v4 to v6 conversion                                    | Fails: see [Known defects](#known-defects)       |
+| FXB                           | Up to 500 FXB files from shader directories in the HW1 ERAs round trip byte-exact                           | 66 files pass (all such files)                   |
+| UFX                           | All loose HW2 UFX files: stage table, DXBC ranges, vertex-input strides                                     | Last recorded run: 2,893 files                   |
+| UAX (HW2)                     | First 50 loose HW2 UAX files round trip byte-exact                                                          | Not recorded                                     |
+| DDX                           | All DDX files in a local `root.era` parse; write each as DDS, parse again, compare size and payload         | Local fixture only                               |
+| XTD, XTT                      | One Blood Gulch file (and one Release XTT): parse, decode, round trip of the common prefix without checksum | Fixture only; no corpus test                     |
+| ECF, ERA, BDT, XMB, bdt-serde | Synthetic unit tests                                                                                        | No corpus test                                   |
+| XSD, LGT                      | Synthetic unit tests                                                                                        | No test with game files                          |
+| PKG                           | No tests                                                                                                    | Round trip fails: [#4]                           |
 
-The **UAX** crate has been checked against the Halo Wars DE loader in IDA and exhaustively tested against all 2,301 UAX files in a complete HW1 DE installation. HW2 UAX data has not yet received the same corpus-level verification. The **XTD** crate remains experimental and untested against real game data.
+The HW1 rows with numbers come from a run against the Steam release of Halo Wars: Definitive
+Edition. The HW2 numbers come from an earlier run; no HW2 directory was available for the latest
+run.
 
-The **UGX** v4 and v6 paths are deliberately versioned side by side. Corpus
-tests cover 2,468 HW1 v4 files (18,411 sections) and 15,632 HW2 v6 files
-(92,726 sections), including index ranges and decoded vertex layouts. The v6
-glTF path retains both retail color/skin byte orders and does not reinterpret
-trailing vertex-stride payload as texture coordinates. The **UFX** parser is
-checked against all 2,893 retail HW2 shaders; the corpus contains UFXS versions
-5, 6, 7, and 9, 13,412 D3D12 vertex-input records, and vertex, hull, domain,
-pixel, and compute programs.
+## Format coverage and gaps
 
-All other formats (ECF, ERA, PKG, XMB, DDX, XTT, BDT) have been tested and confirmed working with both HW1 DE and HW2 data where applicable.
+The engine evidence comes from the retail `xgameFinal.exe` (x64, base `0x140000000`). Names
+such as `BTerrainIOLoader_loadXTDInternal` are names in the shared IDA database. The file counts
+come from the 46 ERA archives of the Steam release.
 
-### Third-Party Formats
+### Binary formats in HW1
 
-| Format      | Extension      | Description                                                  | Status             |
-| ----------- | -------------- | ------------------------------------------------------------ | ------------------ |
-| **GFX**     | `.gfx`         | Scaleform/Flash UI files                                     | ❌ Not implemented |
-| **GR2**     | (internal)     | Granny 3D animation (RAD Game Tools) - loaded via Granny SDK | N/A (proprietary)  |
-| **TTF/TTC** | `.ttf`, `.ttc` | TrueType fonts                                               | Standard format    |
-| **TGA**     | `.tga`         | Targa images                                                 | Standard format    |
+| Format                     | Engine reader                                                                                          | Status in this repository                                                                                                                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ECF                        | `ECF_ReadAndValidateStream` @ `0x140686530`, `ECFArchive__load_FromStream` @ `0x140685a30`             | Done: `ecf`                                                                                                                                                                                                                                                                                 |
+| ERA (`.era`)               | header check `sub_1406846C0` (`0x17FDBA9C`), `BArchiveManager_reloadRootArchive` @ `0x14017ce90`       | Done: `era` (read, write, encrypt, sign, verify)                                                                                                                                                                                                                                            |
+| XMB (`*.xmb`)              | `BXMLReader_load` @ `0x140620eb0`                                                                      | Done: `xmb`. The XML schemas are in `ensemble-assets`.                                                                                                                                                                                                                                      |
+| UGX (`.ugx`)               | `BGrannyModel__load_UGX_File` @ `0x14073d6f0` (chunks `0x700`–`0x705`)                                 | Done: `ugx`, including the Granny chunk `0x703`                                                                                                                                                                                                                                             |
+| UAX (`.uax`)               | `BGrannyAnimation__load_UAX_File` @ `0x140735a30` (chunk `0x700`)                                      | Done: `uax`                                                                                                                                                                                                                                                                                 |
+| DDX (`.ddx`), XPR (`.xpr`) | `BD3DTextureManager_BManagedTexture_load` @ `0x1407c22e0`                                              | Done: `ddx`. The 10 retail `.xpr` files are DDS files, so `ddx` reads them too.                                                                                                                                                                                                             |
+| FXB (`*.bin`)              | `BFXLEffectFileLoader_createEffect` @ `0x1407c87b0`, magic `fxb0` @ `0x1411e4ce8`                      | Done: `fxb`                                                                                                                                                                                                                                                                                 |
+| XTD (`.xtd`)               | `BTerrainIOLoader_loadXTDInternal` @ `0x140668db0`                                                     | Done: `xtd` reads all chunks that the engine reads (`0x1111`, `0x2222`, `0x8888`, `0xAAAA`–`0xDDDD`)                                                                                                                                                                                        |
+| XTT (`.xtt`)               | `BTerrainIOLoader_loadXTTInternal` @ `0x14066afa0`                                                     | Done: `xtt` reads all chunks that the engine reads (`0x1111`, `0x2222`, `0x6666`, `0x8888`, `0xAAAA`, `0xBBBB`)                                                                                                                                                                             |
+| XSD (`.xsd`)               | `BTerrainSimRep_loadECFXSDInternal` @ `0x1400657e0`                                                    | Partial: `xsd` reads `0x1111`, `0x2222`, `0x8888`. It skips `0x4444` and `0xCCCC` (byte grids, one byte for each data tile), `0xAAAA` and `0xABBB` (16-bit height grids with their own header). `BUnitActionMoveAir_computeFlightStep` reads the `0xABBB` grid (flight heights). No writer. |
+| XSD delta (`.xsddelta`)    | suffix `.XSDDelta` @ `0x1411b78c8`, used by `sub_14037D240` (terrain load in `BScenario_load`)         | Missing. Two retail files (`crevice`, `exile`); not ECF.                                                                                                                                                                                                                                    |
+| XTH (`.xth`)               | `BTerrainHeightField_loadECFXTH` @ `0x140667a90`                                                       | Missing. ECF file with precomputed height-field data; 35 retail files.                                                                                                                                                                                                                      |
+| LRP (`.lrp`)               | `BLrpTree_loadECFLRP` @ `0x140255590`, called from `BScenario_load`                                    | Missing. ECF long-range pathing tree; 35 retail files.                                                                                                                                                                                                                                      |
+| LGT (`.lgt`)               | `BLightEffectManager_init` @ `0x1407100f0`                                                             | Partial: `lgt` reads; no writer; no test with the 127 retail files.                                                                                                                                                                                                                         |
+| ABC font (`.abc`)          | `courier_10.abc` @ `0x1411b43e0` (`sub_14035F890`), `courier_12.abc` @ `0x1411dbc50` (`sub_1406E9850`) | Missing. Glyph metrics next to a `.tga` page; 8 retail files in `fonts\`.                                                                                                                                                                                                                   |
+| Save game (`.sav`)         | `BSaveGame` writer `sub_140366C70`, reader `sub_14036DD30`; path `cache:\savegame` (`sub_140365DC0`)   | Missing                                                                                                                                                                                                                                                                                     |
+| Recorded game (`.rec`)     | path `cache:\recordgame` (`sub_1403585F0`)                                                             | Missing                                                                                                                                                                                                                                                                                     |
 
-## File Format Details
+The engine also reads text and XML files: XMB-wrapped `.vis`, `.pfx`, `.dmg`, `.tfx`, `.cin`,
+`.scn`, `.sc2`, `.sc3`, `.gls`, `.tactics`, `.physics`, `.blueprint`, `.shp`, the database
+files, the text `.fls` SH fill files and the `startup\*.cfg` files. `xmb` reads and writes the
+container. `ensemble-assets` owns the schemas; see its
+[data coverage](https://github.com/coconutbird/ensemble-assets#data-coverage) and
+[asset resolution](https://github.com/coconutbird/ensemble-assets/blob/main/docs/asset-resolution.md)
+documents.
 
-### ECF (Ensemble Common Format)
+### Third-party formats
 
-The base container format used by most Halo Wars binary files. Structure:
+| Format                                     | Engine evidence                                                                    | Status                                                                |
+| ------------------------------------------ | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Granny data                                | Granny 2.11 runtime (`granny_file_format.cpp` @ `0x140f1b930`)                     | Only inside UGX and UAX (`ugx`, `uax`). The game has no loose `.gr2`. |
+| Wwise banks (`Sounds.pck`, `.bnk`, `.wem`) | `init.bnk` (`sub_140007CE0`), `%u.bnk` (`sub_1407FD9A0`), `%u.wem` @ `0x1411e7d18` | Missing                                                               |
+| Scaleform (`.gfx`, `.swf`)                 | `scaleform.gfx` @ `0x140f7f448`; 138 `.gfx` and 19 `.swf` retail files             | Missing                                                               |
+| Bink video (`.bik`)                        | `video\%s.bik` @ `0x14119b9d8`; 367 retail files                                   | Missing                                                               |
+| TGA, TTF, TTC, WAV                         | standard formats                                                                   | Not in scope                                                          |
 
-- Header (32 bytes, big-endian)
-- Chunk headers array
-- Aligned chunk data
+### HW2
 
-Key fields:
+HW2 is not in the IDA database. `pkg`, `ufx` and the v6 paths of `ugx` and `uax` cover the HW2
+files that the tests use. [`notes/hw2_asset_resolution.md`](notes/hw2_asset_resolution.md) gives
+the HW2 asset layout.
 
-- Magic: `0xDABA7737`
-- File ID: Identifies the file type (e.g., `0xAAC93746` for UGX)
-- Chunks: Each chunk has a 64-bit ID, offset, size, and alignment
+### Known defects
 
-### ERA (Encrypted Resource Archive)
+- `ugx-gltf`: the HW1 corpus tests fail. On 100 sampled models, the same-version round trip fails
+  for 1 model and the v4 to v6 conversion fails for 8 models. The writer rejects sections whose
+  `MaxBones` (3) is smaller than the 4 influences in the vertex data, for example
+  `art\unsc\vehicle\warthog_01\warthogmarine_02.ugx`. In three other models (for example
+  `art\covenant\vehicle\wraith_01\shield_01.ugx`), the conversion changes bone weight 0 of vertex
+  0 from 0 to 1.
+- `pkg`: `pkg extract` cannot read the last entry of an archive that `pkg create` made ([#4]).
+- Workspace: the `cfglib` dependency of `ufx` points at a deleted branch ([#5]).
+- `bdt`: the little-endian and big-endian readers repeat the node decoding ([#6]).
+- `xtd`, `xtt`: the readers drop chunks with unknown IDs, and the writers reject them.
+- `ugx`: the section bone remap assumes one byte for each entry
+  (`crates/ugx/src/types/section.rs`).
 
-ECF container with TEA block encryption and optional Merkle One-Time Signature verification.
+[#4]: https://github.com/coconutbird/ensemble-formats/issues/4
+[#5]: https://github.com/coconutbird/ensemble-formats/issues/5
+[#6]: https://github.com/coconutbird/ensemble-formats/issues/6
 
-**Encryption**: TEA (Tiny Encryption Algorithm) in CBC mode with IV `0x15EF0AF334248FE2` and the archive password `3zDdptN*rV=qOkRbE*NAuWM6`.
+## Format details
 
-**Digital Signatures**: ERA archives may contain a Merkle OTS signature block at offset 48 (after the ECF + ERA headers). The signature is verified against a public key (Merkle tree root hash) using a KISS PRNG-driven tree walk seeded by the header hash.
+### ECF
 
-Known public keys:
+ECF is the base container of most binary files. The header is 32 bytes, big-endian, with magic
+`0xDABA7737` and a file ID (for example `0xAAC93746` for UGX). Each chunk has a 64-bit ID, an
+offset, a size, an alignment and flags. A chunk can be a deflate stream.
 
-| Game                          | Public Key (hex)                           |
-| ----------------------------- | ------------------------------------------ |
-| Halo Wars: Definitive Edition | `FD016BE719C21BD14F84CA9961A3F3CB18221F25` |
+### ERA
 
-### UGX (Model Geometry)
+ERA is an ECF container (file ID `0x17FDBA9C`) with TEA encryption in CBC mode. The IV is
+`0x15EF0AF334248FE2` and the archive password is `3zDdptN*rV=qOkRbE*NAuWM6`. An archive can have a
+Merkle one-time signature at offset 48. The verifier walks the Merkle tree with a KISS PRNG
+that the header hash seeds. The HW1 public key (tree root hash) is
+`FD016BE719C21BD14F84CA9961A3F3CB18221F25`.
 
-ECF-based 3D model format containing:
+### UGX
 
-- **Chunk 0x700**: Cached geometry data (header, sections, bones, accessories)
-- **Chunk 0x701**: Index buffer
-- **Chunk 0x702**: Vertex buffer
-- **Chunk 0x703**: GRX data (Granny skeleton reference)
-- **Chunk 0x704**: Material data
-- **Chunk 0x705**: Bounding tree
+| Chunk   | Content                                              |
+| ------- | ---------------------------------------------------- |
+| `0x700` | Cached data: header, sections, bones, accessories    |
+| `0x701` | Index buffer                                         |
+| `0x702` | Vertex buffer                                        |
+| `0x703` | Granny data: skeleton and mesh bindings (`"gr2ugx"`) |
+| `0x704` | Materials (`bdt` tree)                               |
+| `0x705` | AABB tree (v4 only)                                  |
 
-HW1 cached data uses v4 152-byte sections with embedded vertex packers. HW2
-uses v6 72-byte sections and external UFX vertex declarations; both layouts
-remain independently readable and writable.
+v4 sections are 152 bytes and embed a `UnivertPacker`. v6 sections are 72 bytes. The matching
+UFX vertex declaration gives the v6 vertex layout.
 
-### UAX (Animation)
+### UAX
 
-ECF-based animation format using RAD Game Tools' Granny SDK internally.
+Chunk `0x700` holds a packed x64 Granny `file_info` graph of `0x94` bytes. It has no separate
+Granny section header. Pointers are 64-bit little-endian offsets from the start of the chunk.
+The semantic reader and writer support all 19 curve formats of the game, and vector, transform,
+text and loop data.
 
-- **Chunk 0x700**: packed x64 Granny `file_info` object graph
+### DDX
 
-The chunk begins directly with the 0x94-byte packed `file_info`; there is no separate Granny section header. All pointers in the graph are 64-bit little-endian offsets from the start of the chunk until the engine rebases them. The semantic reader and writer support all 19 curve formats defined by the game, along with vector, transform, text, and loop data.
+DE `.ddx` files are DDS files (magic `DDS `). Xbox 360 DDX files are ECF containers (file ID
+`0x13CF5D01`) with a header chunk and deflated mip chunks. The writer writes DDS. A DDS file
+whose `caps2` declares six faces is a cubemap; `DdxTexture::subresources` splits faces and mips.
 
-Key animation fields:
+### Terrain
 
-- Name (partial path from original .max file)
-- Duration (seconds)
-- TimeStep (keyframe interval)
-- Oversampling
-- TrackGroupCount
-
-### DDX (Texture)
-
-DDX files come in two variants:
-
-**Definitive Edition**: Standard DDS files (DirectDraw Surface) with `.ddx` extension. Magic: `0x20534444` ("DDS ").
-
-**Xbox 360 (original)**: ECF container with:
-
-- File ID: `0x13CF5D01`
-- Header chunk: `0x1D8828C6ECAF45F2`
-- Mip0 chunk: `0x3F74B8E87D2B44BF`
-- MipChain chunk: `0x46F1FD3F394348B8`
-- Deflate-compressed mip data
-
-Supported formats: A8R8G8B8, A8B8G8R8, A8, DXT1/3/5, DXN, DXT5N, DXT5Y, DXT5H, A16B16G16R16F, and DXTQ variants.
-
-DDS files can use the numeric D3D9 `FourCC` 113 for `A16B16G16R16F`. A DDS file whose `caps2` declares all six faces is a cubemap. `DdxTexture::subresources` splits the payload into faces and mips. DDS payloads are face-major. ECF payloads store mip 0 of each face first.
-
-### XTD/XTT (Terrain)
-
-Terrain is split into two files:
-
-- **XTD**: Height field, visual chunks, lighting, ambient occlusion
-- **XTT**: Texture atlas, roads, foliage
-
-## Architecture
-
-All core crates (`ecf`, `era`, `xmb`, `bdt`, `xml`, `xtd`, `xtt`) are `no_std + alloc` compatible. They use slice-based APIs (`&[u8]` in, `Vec<u8>` out) with zero-copy header parsing via `zerocopy`. The `era` crate gates `std` streaming I/O and `rayon` parallelism behind opt-in features.
+| File   | Content                                                                     |
+| ------ | --------------------------------------------------------------------------- |
+| `.xtd` | Visual chunks, position and normal atlas, tessellation, lighting, AO, alpha |
+| `.xtt` | Texture atlas links, albedo atlas, decals, roads, foliage                   |
+| `.xsd` | Simulation height grid and tile types                                       |
 
 ## Usage
 
-### Reading an ERA archive
-
 ```rust
-// Open and decrypt an ERA archive
+// Open and decrypt an ERA archive, then read one entry.
 let file = std::io::BufReader::new(std::fs::File::open("root.era")?);
 let mut archive = era::Reader::from_encrypted(file, era::TeaKeys::default_archive_keys())?;
-
-// List files
-for entry in archive.iter() {
-    println!("{}", entry.filename.as_deref().unwrap_or("<unnamed>"));
+if let Some(index) = archive.find_by_name("data\\objects.xml.xmb") {
+    let bytes = archive.read_entry(index)?;
+    // XMB to XML and back.
+    let doc = xmb::Reader::read(&bytes)?;
+    let xml = doc.to_xml();
+    let xmb_bytes = xmb::Writer::write(&xmb::Document::from_xml(&xml)?, xmb::Format::PC)?;
 }
 
-// Extract a file by name
-if let Some(idx) = archive.find_by_name("data\\objects.xml.xmb") {
-    let data = archive.read_entry(idx)?;
-}
-```
-
-### Parsing XMB / XML
-
-```rust
-use xmb::{Reader, Writer, Document, Format};
-
-// XMB -> Document -> XML string
-let doc = Reader::read(&xmb_bytes)?;
-let xml_string = doc.to_xml();
-
-// XML string -> Document -> XMB bytes
-let doc = Document::from_xml(&xml_string)?;
-let xmb_bytes = Writer::write(&doc, Format::PC)?;
-```
-
-### Reading ECF containers
-
-```rust
-use ecf::Reader;
-
-let ecf = Reader::new(&data)?;
+// Read the chunks of an ECF file.
+let ecf = ecf::Reader::new(&data)?;
 for (i, chunk) in ecf.chunks().iter().enumerate() {
-    let decompressed = ecf.chunk_data(i)?;
-    println!("Chunk {:016X}: {} bytes", chunk.id, decompressed.len());
+    println!("chunk {:016X}: {} bytes", chunk.id, ecf.chunk_data(i)?.len());
 }
-```
 
-### Parsing DDX textures
-
-```rust
-use ddx::DdxTexture;
-
-let texture = DdxTexture::from_bytes(&texture_data)?;
-println!("{}x{} {:?}", texture.info.width, texture.info.height, texture.info.data_format);
-```
-
-### Reading terrain data (XTD / XTT)
-
-```rust
-use xtd::Reader as XtdReader;
-use xtt::Reader as XttReader;
-
-// Parse terrain displacement
-let xtd = XtdReader::read(&xtd_bytes)?;
-println!("XTD version: 0x{:04X}", xtd.header.version);
-
-// Parse terrain textures
-let xtt = XttReader::read(&xtt_bytes)?;
-println!("Active textures: {}", xtt.header.num_active_textures);
+// Read a texture and terrain files.
+let texture = ddx::DdxTexture::from_bytes(&texture_bytes)?;
+let xtd = xtd::Reader::read(&xtd_bytes)?;
+let xtt = xtt::Reader::read(&xtt_bytes)?;
 ```
 
 ## License

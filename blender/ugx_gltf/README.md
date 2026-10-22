@@ -73,8 +73,9 @@ mise run blender:package
 ```
 
 The script builds the Rust `ugx` executable in release mode and creates a
-platform-specific archive under `dist/`. In Blender, choose **Edit > Preferences
-> Get Extensions > Install from Disk**, select that zip, and enable **UGX glTF**.
+platform-specific archive under `dist/`. In Blender, choose
+**Edit > Preferences > Get Extensions > Install from Disk**, select that zip, and enable
+**UGX glTF**.
 
 The generated manifest is restricted to the platform used to build it because
 the archive contains a native Rust executable.
@@ -88,8 +89,9 @@ cargo build -p ugx-cli
 ```
 
 Install or symlink `blender/ugx_gltf` as a local extension. Then open the UGX
-glTF preferences and select `target/debug/ugx` (or `ugx.exe` on Windows). The
-extension also checks `UGX_CLI` and `PATH` when the preference is empty.
+glTF preferences and select `target/debug/ugx` (or `ugx.exe` on Windows). If the
+preference is empty, the extension looks for the converter in this order: the
+bundled `bin/ugx`, the `UGX_CLI` environment variable, then `PATH`.
 
 Use **Validate Rust Converter** in the extension preferences before importing.
 

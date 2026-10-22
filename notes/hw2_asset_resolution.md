@@ -44,7 +44,7 @@ all_objects.xml.xmb          "give me cov_veh_gorgon_01"
 
 ### 1. `all_objects.xml.xmb` — Master Object List
 
-Packed inside `data/db/lists/lists.pkg`. Equivalent to HW1's `proto.xml`.
+Packed inside `data/db/lists/lists.pkg`. It has the same function as the HW1 `objects.xml`.
 Each `<Object>` entry defines a game entity with inheritance:
 
 ```xml
@@ -248,5 +248,5 @@ To collect every file needed to render a unit:
 | `.hkt`         | Havok        | Physics collision/debris shapes                   |
 | `.physics.xmb` | ECF+XMB      | Physics metadata                                  |
 | `.ddx`         | ECF          | Textures (DDS variant)                            |
-| `.ufx`         | ECF          | Visual effects                                    |
+| `.ufx`         | UFXS         | Compiled shader permutation (crate `ufx`)         |
 | `.pkg`         | Ensemble PKG | Archive bundling multiple `.xmb` files            |
