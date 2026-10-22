@@ -1,6 +1,6 @@
 //! Encrypting writer wrapper for ERA files.
 
-use ecf::io::{IoError, Read, Seek, SeekFrom, Write, invalid_seek, is_unexpected_eof};
+use nostdio::{IoError, Read, Seek, SeekFrom, Write, invalid_seek, is_unexpected_eof};
 
 use super::tea::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64, tea_encrypt_block64};
 

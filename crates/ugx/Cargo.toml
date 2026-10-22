@@ -12,7 +12,7 @@ workspace = true
 
 [features]
 default = ["std"]
-std = ["ecf/std"]
+std = ["ecf/std", "nostdio/std"]
 
 [dependencies]
 bdt = { workspace = true }

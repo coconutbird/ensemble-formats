@@ -126,7 +126,7 @@ pub enum Error {
 
     /// I/O error.
     #[error("I/O error: {0}")]
-    Io(#[from] ecf::io::IoError),
+    Io(#[from] nostdio::IoError),
 
     /// A size or offset cannot be represented on the target platform.
     #[error("{0} is too large for the target platform")]

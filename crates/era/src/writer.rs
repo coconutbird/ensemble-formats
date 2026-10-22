@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::io::{NoProgress, Progress, Read, Seek, Write};
+use nostdio::{NoProgress, Progress, Read, Seek, Write};
 use tiger::{Digest, Tiger};
 
 use crate::error::{Error, Result};

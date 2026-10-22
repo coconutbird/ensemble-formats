@@ -1,14 +1,14 @@
 //! Decrypting reader wrapper for encrypted ERA files.
 //!
-//! [`Reader`] is generic over [`ecf::io::Read`] + [`ecf::io::Seek`].
+//! [`Reader`] is generic over [`nostdio::Read`] + [`nostdio::Seek`].
 //! When the `std` feature is enabled, those traits *are* `std::io::Read` /
 //! `std::io::Seek`, so a `File` or `BufReader` works directly.  In `no_std`
-//! mode they are minimal replacements defined in `ecf::io`.
+//! mode they are minimal replacements that `nostdio` defines.
 
 #[cfg(feature = "std")]
 extern crate std;
 
-use ecf::io::{IoError, Read, Seek, SeekFrom, invalid_seek};
+use nostdio::{IoError, Read, Seek, SeekFrom, invalid_seek};
 
 use super::tea::{TEA_BLOCK_SIZE, TeaKeys, tea_decrypt_block64};
 

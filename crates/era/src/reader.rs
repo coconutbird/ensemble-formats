@@ -29,8 +29,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ecf::io::{Cursor, NoProgress, Progress, Read, Seek, SeekFrom};
 use ecf::{EcfChunkHeader, EcfHeader};
+use nostdio::{Cursor, NoProgress, Progress, Read, Seek, SeekFrom};
 
 use crate::error::{Error, Result};
 use crate::header::{EraArchiveHeader, EraChunkExtra, EraEntry, resolve_filename};

@@ -12,11 +12,12 @@ workspace = true
 
 [features]
 default = ["std"]
-std = ["rayon", "ecf/std"]
+std = ["rayon", "ecf/std", "nostdio/std"]
 rayon = ["dep:rayon"]
 
 [dependencies]
 ecf.workspace = true
+nostdio.workspace = true
 thiserror.workspace = true
 zerocopy.workspace = true
 sha1 = { workspace = true, default-features = false }
