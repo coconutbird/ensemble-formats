@@ -190,7 +190,7 @@ the HW2 asset layout.
   `MaxBones` (3) is smaller than the 4 influences in the vertex data, for example
   `art\unsc\vehicle\warthog_01\warthogmarine_02.ugx`. In three other models (for example
   `art\covenant\vehicle\wraith_01\shield_01.ugx`), the conversion changes bone weight 0 of vertex
-  0 from 0 to 1.
+  0 from 0 to 1 ([#7]).
 - `pkg`: `pkg extract` cannot read the last entry of an archive that `pkg create` made ([#4]).
 - Workspace: the `cfglib` dependency of `ufx` points at a deleted branch ([#5]).
 - `bdt`: the little-endian and big-endian readers repeat the node decoding ([#6]).
@@ -201,6 +201,7 @@ the HW2 asset layout.
 [#4]: https://github.com/coconutbird/ensemble-formats/issues/4
 [#5]: https://github.com/coconutbird/ensemble-formats/issues/5
 [#6]: https://github.com/coconutbird/ensemble-formats/issues/6
+[#7]: https://github.com/coconutbird/ensemble-formats/issues/7
 
 ## Format details
 
