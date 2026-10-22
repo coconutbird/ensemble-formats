@@ -3,6 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use binary_support::StringTable;
+
 use crate::constants::GRANNY_TYPE_DEF_STRIDE;
 use crate::error::{Error, Result};
 use crate::types::{GrannyMemberType, GrannyTypeMember, GrannyVariant};
@@ -65,7 +67,7 @@ pub(super) fn type_defs_equal(a: &[GrannyTypeMember], b: &[GrannyTypeMember]) ->
 /// `ReferenceType` pointers.
 pub(super) fn emit_type_def_array(
     buf: &mut Vec<u8>,
-    strings: &mut crate::writer::string_table::StringTable,
+    strings: &mut StringTable,
     members: &[GrannyTypeMember],
 ) -> Result<()> {
     // Pass 1: emit all 44-byte entries contiguously + End terminator.
@@ -249,7 +251,7 @@ fn emit_numeric_member(
 /// Emit pointer-based, inline, and opaque member data.
 fn emit_complex_member<'a>(
     buf: &mut Vec<u8>,
-    strings: &mut crate::writer::string_table::StringTable,
+    strings: &mut StringTable,
     value: Option<&'a GrannyVariant>,
     member: &'a GrannyTypeMember,
     width: usize,
@@ -342,7 +344,7 @@ fn emit_complex_member<'a>(
 /// and patch pointers back.
 pub(super) fn emit_variant_data(
     buf: &mut Vec<u8>,
-    strings: &mut crate::writer::string_table::StringTable,
+    strings: &mut StringTable,
     variant: &GrannyVariant,
     members: &[GrannyTypeMember],
 ) -> Result<()> {

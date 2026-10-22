@@ -13,6 +13,7 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use binary_support::{StringTable, StringTableError};
 use nostdio::{Cursor, Seek, SeekFrom, WriteLe};
 
 use crate::constants::{
@@ -118,7 +119,7 @@ fn collect_mesh_data(geom: &UgxGeom) -> (Vec<Vec<GrannyBoneBinding>>, Vec<String
 fn write_skeleton_and_bones(
     geom: &UgxGeom,
     buf: &mut Vec<u8>,
-    strings: &mut super::string_table::StringTable,
+    strings: &mut StringTable,
     skeleton_pointer_array: usize,
     skeleton_structure: usize,
     bones_start: usize,
@@ -218,7 +219,7 @@ fn write_skeleton_and_bones(
 fn write_bone_extended_data(
     geom: &UgxGeom,
     buf: &mut Vec<u8>,
-    strings: &mut super::string_table::StringTable,
+    strings: &mut StringTable,
     bones_start: usize,
 ) -> Result<()> {
     let mut unique_type_defs: Vec<Vec<crate::types::GrannyTypeMember>> = Vec::new();
@@ -291,7 +292,7 @@ fn write_bone_extended_data(
 /// Emit one mesh's contiguous bone-binding records.
 fn write_bone_binding_records(
     buf: &mut Vec<u8>,
-    strings: &mut super::string_table::StringTable,
+    strings: &mut StringTable,
     start: usize,
     bindings: &[GrannyBoneBinding],
 ) -> Result<usize> {
@@ -333,7 +334,7 @@ fn write_bone_binding_records(
 /// Emit mesh pointer, mesh structure, and bone-binding arrays.
 fn write_mesh_structures(
     buf: &mut Vec<u8>,
-    strings: &mut super::string_table::StringTable,
+    strings: &mut StringTable,
     mesh_bone_bindings: &[Vec<GrannyBoneBinding>],
     mesh_names: &[String],
 ) -> Result<(usize, usize)> {
@@ -431,7 +432,7 @@ fn write_mesh_structures(
 /// Emit the single model structure and its mesh-binding pointer array.
 fn write_model_structures(
     buf: &mut Vec<u8>,
-    strings: &mut super::string_table::StringTable,
+    strings: &mut StringTable,
     mesh_count: usize,
     mesh_structs_start: usize,
     skeleton_structure: usize,
@@ -543,7 +544,7 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
         "Granny bone array",
     )?;
     let mut buf = vec![0u8; bones_end];
-    let mut strings = super::string_table::StringTable::new();
+    let mut strings = StringTable::new();
 
     write_skeleton_and_bones(
         geom,
@@ -575,7 +576,18 @@ pub(super) fn build_granny_data(geom: &UgxGeom) -> Result<Vec<u8>> {
     emit_type_def_array(&mut buf, &mut strings, &file_info_type)?;
 
     // ---- Phase 6: Final string table (all names) ----
-    strings.write(&mut buf)?;
+    strings.write(&mut buf).map_err(string_table_error)?;
 
     Ok(buf)
+}
+
+/// Maps a string table error to the UGX error type.
+fn string_table_error(error: StringTableError) -> Error {
+    match error {
+        StringTableError::PositionOverflow { .. } => Error::SizeOverflow("string-table fixup"),
+        StringTableError::PositionOutOfRange { .. } => Error::UnexpectedEof {
+            context: "string-table fixup".into(),
+        },
+        StringTableError::OffsetOverflow { .. } => Error::SizeOverflow("string-table offset"),
+    }
 }

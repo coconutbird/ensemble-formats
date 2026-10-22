@@ -12,11 +12,10 @@ use crate::types::{
 use crate::{Error, Result, UAX_CHUNK_ID, UAX_FILE_ID, UAX_FROM_FILENAME};
 
 mod curve;
-mod string_table;
 mod type_tree;
 
+use binary_support::{StringTable, StringTableError};
 use curve::CurveLayout;
-use string_table::StringTable;
 
 /// UAX file writer.
 pub struct Writer;
@@ -405,8 +404,18 @@ fn build_file_info(animation: &Animation) -> Result<Vec<u8>> {
     for &(format, offset) in &layout.type_trees {
         type_tree::write_curve_type_tree(&mut output, &mut strings, format, offset)?;
     }
-    strings.write(&mut output)?;
+    strings.write(&mut output).map_err(string_table_error)?;
     Ok(output)
+}
+
+/// Maps a string table error to the UAX error type.
+fn string_table_error(error: StringTableError) -> Error {
+    match error {
+        StringTableError::PositionOverflow { .. } | StringTableError::PositionOutOfRange { .. } => {
+            Error::SizeOverflow("string pointer fixup")
+        }
+        StringTableError::OffsetOverflow { .. } => Error::SizeOverflow("string table offset"),
+    }
 }
 
 fn write_track_group(

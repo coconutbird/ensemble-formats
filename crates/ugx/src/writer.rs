@@ -14,7 +14,6 @@ mod aabb_tree;
 mod cached_data;
 mod granny;
 mod material;
-pub(crate) mod string_table;
 mod validation;
 
 use alloc::vec::Vec;

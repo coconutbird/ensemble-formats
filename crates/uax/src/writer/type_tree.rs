@@ -7,7 +7,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::string_table::StringTable;
+use binary_support::StringTable;
+
 use crate::{Error, Result};
 
 const MEMBER_SIZE: usize = 44;

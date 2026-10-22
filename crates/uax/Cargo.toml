@@ -11,6 +11,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+binary-support.workspace = true
 ecf = { workspace = true }
 nostdio = { workspace = true }
 thiserror = { workspace = true }

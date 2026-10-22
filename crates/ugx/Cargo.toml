@@ -16,6 +16,7 @@ std = ["ecf/std"]
 
 [dependencies]
 bdt = { workspace = true }
+binary-support.workspace = true
 ecf = { workspace = true }
 nostdio = { workspace = true }
 num-traits = { workspace = true }
