@@ -15,6 +15,7 @@ members = [
     "crates/xtd",
     "crates/xtt",
     "crates/cli-support",
+    "crates/xsd",
     "crates/era-cli",
     "crates/xmb-cli",
     "crates/ugx-cli",
@@ -57,6 +58,7 @@ cli-support = { path = "crates/cli-support" }
 xtd = { path = "crates/xtd" }
 xml = { path = "crates/xml" }
 xtt = { path = "crates/xtt" }
+xsd = { path = "crates/xsd" }
 ugx-cli = { path = "crates/ugx-cli" }
 pkg = { path = "crates/pkg" }
 ufx = { path = "crates/ufx" }

@@ -16,6 +16,7 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 | `ddx`     | DDX/DDS texture format reader/writer    |
 | `lgt`     | LGT animated light-scene parser         |
 | `bdt`     | BDT binary data tree (packed documents) |
+| `xsd`     | XSD simulation terrain parser           |
 | `era-cli` | CLI tool for ERA archives               |
 | `pkg-cli` | CLI tool for PKG archives               |
 | `xmb-cli` | CLI tool for XMB files                  |

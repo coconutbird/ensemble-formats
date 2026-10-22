@@ -79,7 +79,7 @@ Follow the Cargo package layout:
 The crates of this repository are in four layers:
 
 1. Base crates: `bdt`, `binary-support`, `ecf`, `fxb`, `pkg`, `ufx` and `xml`.
-2. Format crates: `ddx`, `era`, `lgt`, `uax`, `ugx`, `xmb`, `xtd` and `xtt`.
+2. Format crates: `ddx`, `era`, `lgt`, `uax`, `ugx`, `xmb`, `xsd`, `xtd` and `xtt`.
 3. Adapter crates: `bdt-serde`, `xmb-serde` and `ugx-gltf`.
 4. Tool crates: the `*-cli` crates, `cli-support` and `test-utils`.
 

@@ -1,0 +1,17 @@
+[package]
+name = "xsd"
+description = "XSD simulation terrain format parser for Halo Wars"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ecf = { workspace = true }
+half.workspace = true
+thiserror = { workspace = true }
+zerocopy.workspace = true
