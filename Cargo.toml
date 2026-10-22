@@ -121,3 +121,8 @@ mod_module_files = "deny"
 
 [workspace.lints.rustdoc]
 all = { level = "warn", priority = -1 }
+
+# Optimize all dependencies in debug and test builds, so that the tests that decode the
+# installed game data run fast.
+[profile.dev.package."*"]
+opt-level = 3
