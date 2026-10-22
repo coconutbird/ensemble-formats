@@ -7,6 +7,7 @@ use ugx::{ReadOptions, Reader, UgxGeom, UgxVersion};
 use ugx_gltf::convert_ugx_version_to_bytes;
 
 use super::compare::{RoundtripResult, compare_converted_geometry};
+use super::evenly_spaced;
 
 const MAX_RETAIL_FILES: usize = 100;
 
@@ -88,10 +89,9 @@ fn checked_in_models_convert_in_both_directions() {
 }
 
 #[test]
+#[ignore = "requires HW1_GAME_DIR"]
 fn retail_hw1_samples_convert_to_hw2() {
-    let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
-        return;
-    };
+    let game_dir = require_game_dir("HW1_GAME_DIR");
     let entries = collect_hw1_entries(&game_dir);
     assert!(!entries.is_empty(), "no HW1 UGX entries found");
     let mut stats = ConversionStats::default();
@@ -126,10 +126,9 @@ fn retail_hw1_samples_convert_to_hw2() {
 }
 
 #[test]
+#[ignore = "requires HW2_GAME_DIR"]
 fn retail_hw2_samples_convert_to_hw1() {
-    let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
-        return;
-    };
+    let game_dir = require_game_dir("HW2_GAME_DIR");
     let files = find_files_by_ext(&game_dir, "ugx");
     assert!(!files.is_empty(), "no HW2 UGX files found");
     let mut stats = ConversionStats::default();
@@ -169,16 +168,4 @@ fn collect_hw1_entries(game_dir: &Path) -> Vec<EraEntry> {
         );
     }
     entries
-}
-
-fn evenly_spaced<T>(items: &[T], limit: usize) -> Vec<&T> {
-    if items.len() <= limit {
-        return items.iter().collect();
-    }
-    if limit <= 1 {
-        return items.first().into_iter().collect();
-    }
-    (0..limit)
-        .map(|index| &items[index * (items.len() - 1) / (limit - 1)])
-        .collect()
 }

@@ -63,8 +63,7 @@ fn audit_uax(data: &[u8], filename: &str, formats: &mut [usize; 19]) {
 #[test]
 #[ignore = "requires HW1_GAME_DIR and scans all installed ERA archives"]
 fn verifies_all_installed_hw1_uax_files() {
-    let game_dir =
-        load_game_dir("HW1_GAME_DIR").expect("HW1_GAME_DIR must name the game directory");
+    let game_dir = require_game_dir("HW1_GAME_DIR");
     let era_paths = find_files_flat(&game_dir, "era");
     assert!(!era_paths.is_empty(), "no ERA archives found");
 

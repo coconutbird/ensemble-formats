@@ -13,10 +13,9 @@ struct HoganStats {
 }
 
 #[test]
+#[ignore = "requires HW2_GAME_DIR"]
 fn hogan_named_constant_buffers_roundtrip() {
-    let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
-        return;
-    };
+    let game_dir = require_game_dir("HW2_GAME_DIR");
     let files = find_files_by_ext(&game_dir, "ugx");
     assert!(
         !files.is_empty(),

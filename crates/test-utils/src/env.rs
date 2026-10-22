@@ -20,18 +20,23 @@ pub fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
-/// Load a game directory from an environment variable.
-/// Returns `None` (and prints a skip message) if unset or not a directory.
+/// Read a game directory from an environment variable.
+///
+/// Use this function only in tests that have `#[ignore = "requires ..."]`. These tests run only
+/// when you request them, so a missing game directory is a configuration error.
+///
+/// # Panics
+///
+/// Panics if the variable is unset, empty or does not name a directory.
 #[must_use]
-pub fn load_game_dir(env_name: &str) -> Option<PathBuf> {
+pub fn require_game_dir(env_name: &str) -> PathBuf {
     let Some(val) = env_var(env_name) else {
-        eprintln!("{env_name} not set — skipping");
-        return None;
+        panic!(
+            "{env_name} is not set: set it in the environment or in the workspace `.env` file \
+             to the game directory"
+        );
     };
     let path = Path::new(&val).to_path_buf();
-    if !path.is_dir() {
-        eprintln!("{env_name}={val} is not a directory — skipping");
-        return None;
-    }
-    Some(path)
+    assert!(path.is_dir(), "{env_name}={val} is not a directory");
+    path
 }

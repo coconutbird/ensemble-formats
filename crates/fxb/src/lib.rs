@@ -431,16 +431,12 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    #[ignore = "requires HW1_GAME_DIR"]
     fn test_hw1_era_roundtrip() {
-        let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
-            return;
-        };
+        let game_dir = require_game_dir("HW1_GAME_DIR");
 
         let era_paths = find_files_flat(&game_dir, "era");
-        if era_paths.is_empty() {
-            eprintln!("No .era files — skipping");
-            return;
-        }
+        assert!(!era_paths.is_empty(), "no ERA archives found");
 
         let mut tested = 0usize;
         let mut errors = std::vec::Vec::new();

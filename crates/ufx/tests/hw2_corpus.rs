@@ -7,10 +7,9 @@ use test_utils::prelude::*;
 use ufx::ShaderStage;
 
 #[test]
+#[ignore = "requires HW2_GAME_DIR"]
 fn retail_hw2_stage_tables_match_all_dxbc_programs() {
-    let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
-        return;
-    };
+    let game_dir = require_game_dir("HW2_GAME_DIR");
     let files = find_files_by_ext(&game_dir, "ufx");
     assert!(
         !files.is_empty(),

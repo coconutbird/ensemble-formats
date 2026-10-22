@@ -304,16 +304,12 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    #[ignore = "requires HW1_GAME_DIR"]
     fn test_hw1_era_roundtrip() {
-        let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
-            return;
-        };
+        let game_dir = require_game_dir("HW1_GAME_DIR");
 
         let era_paths = find_files_flat(&game_dir, "era");
-        if era_paths.is_empty() {
-            eprintln!("No .era files — skipping");
-            return;
-        }
+        assert!(!era_paths.is_empty(), "no ERA archives found");
 
         let mut tested = 0usize;
         let mut errors = std::vec::Vec::new();
@@ -364,16 +360,12 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    #[ignore = "requires HW2_GAME_DIR"]
     fn test_hw2_loose_roundtrip() {
-        let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
-            return;
-        };
+        let game_dir = require_game_dir("HW2_GAME_DIR");
 
         let uax_files = find_files_by_ext(&game_dir, "uax");
-        if uax_files.is_empty() {
-            eprintln!("No .uax files — skipping");
-            return;
-        }
+        assert!(!uax_files.is_empty(), "no UAX files found");
 
         let mut tested = 0usize;
         let mut errors = std::vec::Vec::new();
@@ -413,33 +405,30 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    #[ignore = "requires HW2_GAME_DIR or HW1_GAME_DIR"]
     fn test_modify_duration() {
         // Try HW2 loose files first, then HW1 ERA
-        let data = if let Some(dir) = load_game_dir("HW2_GAME_DIR") {
-            let files = find_files_by_ext(&dir, "uax");
-            files.first().and_then(|p| std::fs::read(p).ok())
-        } else {
-            None
-        }
-        .or_else(|| {
-            let dir = load_game_dir("HW1_GAME_DIR")?;
-            let eras = find_files_flat(&dir, "era");
-            for era_path in &eras {
-                let mut archive = open_era(era_path).ok()?;
-                let entries = find_entries_in_era(&archive, ".uax");
-                for (idx, _) in &entries {
-                    if let Ok(d) = archive.read_entry(*idx) {
-                        return Some(d);
+        let data = env_var("HW2_GAME_DIR")
+            .and_then(|_| {
+                let dir = require_game_dir("HW2_GAME_DIR");
+                let files = find_files_by_ext(&dir, "uax");
+                files.first().and_then(|p| std::fs::read(p).ok())
+            })
+            .or_else(|| {
+                let dir = require_game_dir("HW1_GAME_DIR");
+                let eras = find_files_flat(&dir, "era");
+                for era_path in &eras {
+                    let mut archive = open_era(era_path).ok()?;
+                    let entries = find_entries_in_era(&archive, ".uax");
+                    for (idx, _) in &entries {
+                        if let Ok(d) = archive.read_entry(*idx) {
+                            return Some(d);
+                        }
                     }
                 }
-            }
-            None
-        });
-
-        let Some(data) = data else {
-            eprintln!("No UAX files available — skipping");
-            return;
-        };
+                None
+            })
+            .expect("no UAX files found in HW2_GAME_DIR or HW1_GAME_DIR");
 
         let mut uax = UaxFile::from_bytes(&data).expect("Failed to parse UAX");
 

@@ -104,10 +104,9 @@ fn checked_in_v4_and_v6_roundtrip_side_by_side() {
 }
 
 #[test]
+#[ignore = "requires HW2_GAME_DIR"]
 fn retail_hw2_loose_corpus_parses_as_v6() {
-    let Some(game_dir) = load_game_dir("HW2_GAME_DIR") else {
-        return;
-    };
+    let game_dir = require_game_dir("HW2_GAME_DIR");
     let files = find_files_by_ext(&game_dir, "ugx");
     assert!(
         !files.is_empty(),
@@ -150,10 +149,9 @@ fn retail_hw2_loose_corpus_parses_as_v6() {
 }
 
 #[test]
+#[ignore = "requires HW1_GAME_DIR"]
 fn retail_hw1_era_corpus_parses_as_v4() {
-    let Some(game_dir) = load_game_dir("HW1_GAME_DIR") else {
-        return;
-    };
+    let game_dir = require_game_dir("HW1_GAME_DIR");
     let archives = find_files_flat(&game_dir, "era");
     assert!(
         !archives.is_empty(),
