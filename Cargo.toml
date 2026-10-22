@@ -123,6 +123,8 @@ mod_module_files = "deny"
 all = { level = "warn", priority = -1 }
 
 # Optimize all dependencies in debug and test builds, so that the tests that decode the
-# installed game data run fast.
+# installed game data run fast. The dependencies have no debug information, which makes their
+# first build faster.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
