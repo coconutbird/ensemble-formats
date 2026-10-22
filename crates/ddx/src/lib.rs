@@ -22,13 +22,19 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod dds;
 mod decode;
 mod error;
 mod format;
 mod header;
 mod reader;
+mod subresource;
 mod writer;
 
+pub use dds::{
+    D3DFMT_A16B16G16R16F, DDPF_FOURCC, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXEL_FORMAT_SIZE,
+    DDSCAPS2_CUBEMAP, DDSCAPS2_CUBEMAP_ALL_FACES, DDSD_MIPMAPCOUNT, DdsHeader, DdsPixelFormat,
+};
 pub use decode::DecodedTexture;
 pub use error::{Error, Result};
 pub use format::DataFormat;
@@ -37,7 +43,8 @@ pub use header::{
     DDX_MIN_REQUIRED_VERSION, DDX_MIP0_CHUNK_ID, DDX_MIPCHAIN_CHUNK_ID, DdxHeader, Platform,
     ResourceType, flags,
 };
-pub use reader::{DdxTexture, Reader, TextureInfo};
+pub use reader::{DdxTexture, Reader, TextureInfo, TextureSource};
+pub use subresource::{SubresourceLayout, SubresourceOrder, mip_extent};
 pub use writer::Writer;
 
 #[cfg(test)]

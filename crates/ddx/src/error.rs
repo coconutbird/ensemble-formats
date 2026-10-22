@@ -71,6 +71,29 @@ pub enum Error {
     /// A calculated size cannot be represented by the DDX or DDS format.
     #[error("{0} is too large for the texture format")]
     SizeOverflow(&'static str),
+
+    /// Invalid DDS magic number.
+    #[error("Invalid DDS magic: expected 0x20534444, got 0x{0:08X}")]
+    InvalidDdsMagic(u32),
+
+    /// The texture format has no fixed subresource size.
+    #[error("Texture format {0:?} has no fixed subresource size")]
+    UnsupportedLayout(crate::format::DataFormat),
+
+    /// The texture payload ends before a subresource is complete.
+    #[error("texture payload is truncated at byte {offset}: need {needed}, have {available}")]
+    SubresourceTruncated {
+        /// Byte offset of the subresource in the payload.
+        offset: usize,
+        /// Size of the subresource in bytes.
+        needed: usize,
+        /// Number of payload bytes at and after `offset`.
+        available: usize,
+    },
+
+    /// Bytes follow the last subresource of the texture payload.
+    #[error("texture payload has {0} trailing bytes")]
+    TrailingData(usize),
 }
 
 /// Result type for DDX operations.

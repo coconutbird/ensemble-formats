@@ -8,15 +8,13 @@ use alloc::format;
 use alloc::vec::Vec;
 use nostdio::{Cursor, ReadBe, ReadLe};
 
+use crate::dds::{D3DFMT_A16B16G16R16F, DDS_MAGIC, DdsHeader};
 use crate::format::DataFormat;
 use crate::header::{
     DDX_ECF_FILE_ID, DDX_HEADER_CHUNK_ID, DDX_MIP0_CHUNK_ID, DDX_MIPCHAIN_CHUNK_ID, DdxHeader,
     Platform, ResourceType,
 };
 use crate::{Error, Result};
-
-/// DDS file magic number "DDS " (0x20534444 in little-endian)
-const DDS_MAGIC: u32 = 0x2053_4444;
 
 /// Read a little-endian u32 from a byte slice at the given offset.
 #[inline]
@@ -55,7 +53,20 @@ pub struct DdxTexture {
     /// Texture metadata.
     pub info: TextureInfo,
     /// Raw decompressed texture data for all mip levels and faces.
+    ///
+    /// [`DdxTexture::subresource_layout`] gives the order of the faces and mips.
     pub data: Vec<u8>,
+    /// Header of the source container.
+    pub source: TextureSource,
+}
+
+/// Header of the container that a [`DdxTexture`] comes from.
+#[derive(Debug, Clone)]
+pub enum TextureSource {
+    /// Standard DDS file (Definitive Edition).
+    Dds(DdsHeader),
+    /// ECF-wrapped DDX file (Xbox 360).
+    Ddx(DdxHeader),
 }
 
 /// DDX file reader.
@@ -103,47 +114,15 @@ impl DdxTexture {
 
     /// Parse a standard DDS file.
     fn from_dds(data: &[u8]) -> Result<Self> {
-        if data.len() < 128 {
-            return Err(Error::DecompressionError(
-                "DDS file too small for header".into(),
-            ));
-        }
-
-        // DDS_HEADER structure (124 bytes) starts at offset 4 (after magic)
-        let header_size = le_u32(data, 4)?;
-        if header_size != 124 {
-            return Err(Error::DecompressionError(format!(
-                "Invalid DDS header size: {header_size}"
-            )));
-        }
-
-        let flags = le_u32(data, 8)?;
-        let height = le_u32(data, 12)?;
-        let width = le_u32(data, 16)?;
-        // _pitch_or_linear_size at 20, _depth at 24
-        let mip_map_count = le_u32(data, 28)?;
-        // reserved[11] at 32..76
-
-        // DDS_PIXELFORMAT at offset 76 (32 bytes)
-        // _pf_size at 76
-        let pf_flags = le_u32(data, 80)?;
-        let four_cc: [u8; 4] = data
-            .get(84..88)
-            .ok_or(Error::HeaderTooShort {
-                expected: 88,
-                actual: data.len(),
-            })?
-            .try_into()
-            .map_err(|_| Error::HeaderTooShort {
-                expected: 88,
-                actual: data.len(),
-            })?;
-        // _rgb_bit_count at 88, _r_mask at 92, _g_mask at 96, _b_mask at 100
-        let a_mask = le_u32(data, 104)?;
-        // _caps at 108, _caps2 at 112, _caps3 at 116, _caps4 at 120, _reserved2 at 124
+        let header = DdsHeader::from_bytes(data)?;
+        let pixel_format = header.pixel_format;
+        let four_cc = pixel_format.four_cc;
+        let a_mask = pixel_format.a_mask;
 
         // Check for DX10 extended header
-        let (data_format, data_start, has_alpha) = if pf_flags & 0x4 != 0 && &four_cc == b"DX10" {
+        let (data_format, data_start, has_alpha) = if pixel_format.has_four_cc()
+            && &four_cc == b"DX10"
+        {
             if data.len() < 148 {
                 return Err(Error::DecompressionError(
                     "DDS file too small for DX10 header".into(),
@@ -171,12 +150,15 @@ impl DdxTexture {
                 DataFormat::Dxt3 | DataFormat::Dxt5 | DataFormat::Bc7 | DataFormat::A8R8G8B8
             );
             (format, 4 + 124 + 20, has_alpha)
-        } else if pf_flags & 0x4 != 0 {
+        } else if pixel_format.has_four_cc() {
             let format = match &four_cc {
                 b"DXT1" => DataFormat::Dxt1,
                 b"DXT3" => DataFormat::Dxt3,
                 b"DXT5" => DataFormat::Dxt5,
                 b"ATI2" | b"BC5U" => DataFormat::Dxn,
+                _ if pixel_format.four_cc_code() == D3DFMT_A16B16G16R16F => {
+                    DataFormat::A16B16G16R16F
+                }
                 _ => DataFormat::A8R8G8B8,
             };
             let has_alpha = a_mask != 0 || matches!(format, DataFormat::Dxt3 | DataFormat::Dxt5);
@@ -185,20 +167,20 @@ impl DdxTexture {
             (DataFormat::A8R8G8B8, 4 + 124, a_mask != 0)
         };
 
-        let num_mip_levels = if flags & 0x20000 != 0 && mip_map_count > 0 {
-            mip_map_count
+        let resource_type = if header.is_complete_cubemap() {
+            ResourceType::CubeMap
         } else {
-            1
+            ResourceType::RegularMap
         };
 
         let texture_data = data[data_start..].to_vec();
 
         let info = TextureInfo {
-            width,
-            height,
-            num_mip_levels,
+            width: header.width,
+            height: header.height,
+            num_mip_levels: header.mip_levels(),
             data_format,
-            resource_type: ResourceType::RegularMap,
+            resource_type,
             has_alpha,
             platform: Platform::None,
             hdr_scale: 1.0,
@@ -207,6 +189,7 @@ impl DdxTexture {
         Ok(Self {
             info,
             data: texture_data,
+            source: TextureSource::Dds(header),
         })
     }
 
@@ -250,6 +233,7 @@ impl DdxTexture {
         Ok(Self {
             info,
             data: texture_data,
+            source: TextureSource::Ddx(header),
         })
     }
 }

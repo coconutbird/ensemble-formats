@@ -214,6 +214,8 @@ DDX files come in two variants:
 
 Supported formats: A8R8G8B8, A8B8G8R8, A8, DXT1/3/5, DXN, DXT5N, DXT5Y, DXT5H, A16B16G16R16F, and DXTQ variants.
 
+DDS files can use the numeric D3D9 `FourCC` 113 for `A16B16G16R16F`. A DDS file whose `caps2` declares all six faces is a cubemap. `DdxTexture::subresources` splits the payload into faces and mips. DDS payloads are face-major. ECF payloads store mip 0 of each face first.
+
 ### XTD/XTT (Terrain)
 
 Terrain is split into two files:

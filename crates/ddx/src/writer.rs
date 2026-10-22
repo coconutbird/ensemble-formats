@@ -7,23 +7,21 @@ use alloc::vec::Vec;
 use nostdio::{Write, WriteLe};
 
 use crate::Result;
+use crate::dds::{
+    DDPF_FOURCC, DDS_HEADER_SIZE, DDS_MAGIC, DDS_PIXEL_FORMAT_SIZE, DDSD_MIPMAPCOUNT,
+};
 use crate::format::DataFormat;
 use crate::reader::{DdxTexture, TextureInfo};
-
-/// DDS file magic number "DDS " (0x20534444 in little-endian)
-const DDS_MAGIC: u32 = 0x2053_4444;
 
 // DDS header flags
 const DDSD_CAPS: u32 = 0x1;
 const DDSD_HEIGHT: u32 = 0x2;
 const DDSD_WIDTH: u32 = 0x4;
 const DDSD_PIXELFORMAT: u32 = 0x1000;
-const DDSD_MIPMAPCOUNT: u32 = 0x20000;
 const DDSD_LINEARSIZE: u32 = 0x80000;
 
 // DDS pixel format flags
 const DDPF_ALPHAPIXELS: u32 = 0x1;
-const DDPF_FOURCC: u32 = 0x4;
 const DDPF_RGB: u32 = 0x40;
 
 // DDS caps flags
@@ -80,7 +78,7 @@ impl DdxTexture {
         out.write_u32_le(DDS_MAGIC)?;
 
         // DDS_HEADER (124 bytes)
-        out.write_u32_le(124)?; // dwSize
+        out.write_u32_le(DDS_HEADER_SIZE)?; // dwSize
 
         // Flags
         let mut flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT;
@@ -162,7 +160,7 @@ fn calculate_linear_size(width: u32, height: u32, format: DataFormat) -> Result<
 
 /// Write `DDS_PIXELFORMAT` structure.
 fn write_pixel_format(out: &mut Vec<u8>, info: &TextureInfo) -> Result<()> {
-    out.write_u32_le(32)?; // dwSize
+    out.write_u32_le(DDS_PIXEL_FORMAT_SIZE)?; // dwSize
 
     match info.data_format {
         DataFormat::Dxt1 => {
