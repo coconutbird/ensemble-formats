@@ -68,19 +68,6 @@ pub struct AlbedoHeaderRaw {
 // Parsed types
 // ============================================================================
 
-/// Metadata about a chunk for ECF reconstruction.
-#[derive(Debug, Clone)]
-pub struct ChunkMeta {
-    /// Chunk ID.
-    pub id: u64,
-    /// Alignment as log2.
-    pub alignment_log2: u8,
-    /// Chunk flags.
-    pub flags: u8,
-    /// Resource flags.
-    pub resource_flags: u16,
-}
-
 /// Active texture information.
 ///
 /// From TerrainTexturing.h:
@@ -332,7 +319,7 @@ pub struct XttFile {
     /// ECF header flags (for round-trip).
     pub ecf_flags: u16,
     /// Chunk metadata in original order (for round-trip).
-    pub chunk_order: Vec<ChunkMeta>,
+    pub chunk_order: Vec<ecf::ChunkMetadata>,
     /// Main header.
     pub header: XttHeader,
     /// Unparsed bytes after the typed texture, decal, and instance tables.

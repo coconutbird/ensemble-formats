@@ -147,19 +147,6 @@ impl XtdVisualChunk {
     pub const SIZE: usize = 37;
 }
 
-/// Metadata about a chunk for ECF reconstruction.
-#[derive(Debug, Clone)]
-pub struct ChunkMeta {
-    /// Chunk ID.
-    pub id: u64,
-    /// Alignment as log2.
-    pub alignment_log2: u8,
-    /// Chunk flags.
-    pub flags: u8,
-    /// Resource flags.
-    pub resource_flags: u16,
-}
-
 /// Complete XTD file data.
 #[derive(Debug, Clone)]
 pub struct XtdFile {
@@ -168,7 +155,7 @@ pub struct XtdFile {
     /// ECF header flags (for round-trip).
     pub ecf_flags: u16,
     /// Chunk metadata in original order (for round-trip).
-    pub chunk_order: Vec<ChunkMeta>,
+    pub chunk_order: Vec<ecf::ChunkMetadata>,
     /// Main header.
     pub header: XtdHeader,
     /// Visual chunks (one per terrain tile).

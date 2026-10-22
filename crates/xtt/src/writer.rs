@@ -112,13 +112,7 @@ impl Writer {
                 id => return Err(Error::UnsupportedChunk(id)),
             };
 
-            ecf.add_chunk_with_metadata(
-                meta.id,
-                data,
-                meta.alignment_log2,
-                meta.flags,
-                meta.resource_flags,
-            )?;
+            ecf.add_chunk_with_metadata(*meta, data)?;
         }
 
         validate_chunk_inventory(
@@ -586,10 +580,11 @@ mod tests {
     use alloc::vec;
 
     use super::*;
-    use crate::{ActiveTextureInfo, ChunkMeta, XttHeader};
+    use crate::{ActiveTextureInfo, XttHeader};
+    use ecf::ChunkMetadata;
 
-    fn metadata(id: u64) -> ChunkMeta {
-        ChunkMeta {
+    fn metadata(id: u64) -> ChunkMetadata {
+        ChunkMetadata {
             id,
             alignment_log2: 4,
             flags: 0,

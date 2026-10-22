@@ -233,3 +233,31 @@ impl EcfChunkHeader {
         CompressionMethod::from_flags(self.flags)
     }
 }
+
+/// ECF metadata of one chunk, without its location, size and checksum.
+///
+/// Format crates keep this metadata to write a chunk again with the same
+/// ID, alignment and flags. [`crate::Writer::add_chunk_with_metadata`]
+/// accepts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkMetadata {
+    /// Chunk ID.
+    pub id: u64,
+    /// Alignment as log2.
+    pub alignment_log2: u8,
+    /// Chunk flags.
+    pub flags: u8,
+    /// Resource flags.
+    pub resource_flags: u16,
+}
+
+impl From<&EcfChunkHeader> for ChunkMetadata {
+    fn from(header: &EcfChunkHeader) -> Self {
+        Self {
+            id: header.id,
+            alignment_log2: header.alignment_log2,
+            flags: header.flags,
+            resource_flags: header.resource_flags,
+        }
+    }
+}

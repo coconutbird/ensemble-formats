@@ -62,7 +62,7 @@ pub use error::{Error, Result};
 pub mod io;
 
 mod header;
-pub use header::{EcfChunkHeader, EcfChunkHeaderRaw, EcfHeader, EcfHeaderRaw};
+pub use header::{ChunkMetadata, EcfChunkHeader, EcfChunkHeaderRaw, EcfHeader, EcfHeaderRaw};
 
 /// BDeflateStream compression/decompression.
 pub mod deflate_stream;
@@ -255,11 +255,13 @@ mod tests {
         writer.set_header_flags(0x1234);
         writer
             .add_chunk_with_metadata(
-                0x1111,
+                ChunkMetadata {
+                    id: 0x1111,
+                    alignment_log2: 5,
+                    flags: 0,
+                    resource_flags: resource_flags::CONTIGUOUS | resource_flags::IS_DEFLATE_STREAM,
+                },
                 payload.clone(),
-                5,
-                0,
-                resource_flags::CONTIGUOUS | resource_flags::IS_DEFLATE_STREAM,
             )
             .unwrap();
         let bytes = writer.finalize().unwrap();

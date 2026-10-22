@@ -375,8 +375,8 @@ mod tests {
             / denominator.to_f32().expect("denominator must fit f32")
     }
 
-    fn test_chunk_meta(id: u64) -> ChunkMeta {
-        ChunkMeta {
+    fn test_chunk_meta(id: u64) -> ecf::ChunkMetadata {
+        ecf::ChunkMetadata {
             id,
             alignment_log2: 4,
             flags: 0,

@@ -34,7 +34,15 @@ impl Writer {
     pub fn write(animation: &Animation) -> Result<Vec<u8>> {
         let file_info = build_file_info(animation)?;
         let mut ecf = ecf::Writer::new(UAX_FILE_ID);
-        ecf.add_chunk_with_metadata(UAX_CHUNK_ID, file_info, 4, 0, 0)?;
+        ecf.add_chunk_with_metadata(
+            ecf::ChunkMetadata {
+                id: UAX_CHUNK_ID,
+                alignment_log2: 4,
+                flags: 0,
+                resource_flags: 0,
+            },
+            file_info,
+        )?;
         Ok(ecf.finalize()?)
     }
 }

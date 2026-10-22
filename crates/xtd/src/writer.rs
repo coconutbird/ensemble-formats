@@ -87,13 +87,7 @@ impl Writer {
                 }
                 id => return Err(Error::UnsupportedChunk(id)),
             };
-            ecf.add_chunk_with_metadata(
-                meta.id,
-                data,
-                meta.alignment_log2,
-                meta.flags,
-                meta.resource_flags,
-            )?;
+            ecf.add_chunk_with_metadata(*meta, data)?;
         }
 
         validate_chunk_inventory(file, counts)?;

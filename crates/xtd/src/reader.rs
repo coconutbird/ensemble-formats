@@ -2,12 +2,12 @@
 
 use alloc::format;
 
+use ecf::ChunkMetadata;
 use zerocopy::{FromBytes, Immutable, KnownLayout, Ref};
 
 use crate::{
     CHUNK_ALPHA, CHUNK_AO, CHUNK_ATLAS, CHUNK_LIGHTING, CHUNK_TERRAIN, CHUNK_TESS,
-    CHUNK_XTD_HEADER, ChunkMeta, Error, Result, XTD_FILE_ID, XTD_VERSION, XtdFile, XtdHeader,
-    XtdVisualChunk,
+    CHUNK_XTD_HEADER, Error, Result, XTD_FILE_ID, XTD_VERSION, XtdFile, XtdHeader, XtdVisualChunk,
 };
 
 mod options;
@@ -116,12 +116,7 @@ impl XtdFile {
         for i in 0..ecf.chunks().len() {
             let chunk_header = ecf.chunks()[i].clone();
 
-            file.chunk_order.push(ChunkMeta {
-                id: chunk_header.id,
-                alignment_log2: chunk_header.alignment_log2,
-                flags: chunk_header.flags,
-                resource_flags: chunk_header.resource_flags,
-            });
+            file.chunk_order.push(ChunkMetadata::from(&chunk_header));
 
             let chunk_data = ecf.chunk_data(i)?;
 

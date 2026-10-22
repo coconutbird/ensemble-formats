@@ -15,7 +15,8 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    EcfChunkHeader, EcfHeader, Error, HEADER_MAGIC, Result, adler32, compress, resource_flags,
+    ChunkMetadata, EcfChunkHeader, EcfHeader, Error, HEADER_MAGIC, Result, adler32, compress,
+    resource_flags,
 };
 
 /// Default alignment for chunks (16-byte, log2 = 4).
@@ -71,25 +72,22 @@ impl Writer {
     /// represented by the ECF format.
     pub fn add_chunk_with_metadata(
         &mut self,
-        id: u64,
+        metadata: ChunkMetadata,
         data: Vec<u8>,
-        alignment_log2: u8,
-        flags: u8,
-        resource_flags: u16,
     ) -> Result<()> {
-        let stored = if (resource_flags & resource_flags::IS_DEFLATE_STREAM) != 0 {
+        let stored = if (metadata.resource_flags & resource_flags::IS_DEFLATE_STREAM) != 0 {
             compress(&data, true)?
         } else {
             data
         };
         let chunk = EcfChunkHeader {
-            id,
+            id: metadata.id,
             offset: 0,
             size: u32::try_from(stored.len()).map_err(|_| Error::SizeOverflow("chunk size"))?,
             adler32: adler32(&stored),
-            flags,
-            alignment_log2,
-            resource_flags,
+            flags: metadata.flags,
+            alignment_log2: metadata.alignment_log2,
+            resource_flags: metadata.resource_flags,
         };
         self.chunks.push((chunk, stored));
         Ok(())

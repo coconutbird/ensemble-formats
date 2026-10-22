@@ -4,15 +4,15 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use ecf::Reader as EcfReader;
+use ecf::{ChunkMetadata, Reader as EcfReader};
 use nostdio::{Cursor, ReadBe};
 use zerocopy::Ref;
 
 use crate::{
     ActiveDecalInfo, ActiveDecalInstance, ActiveTextureInfo, CHUNK_ATLAS_ALBEDO, CHUNK_ATLAS_LINK,
-    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, ChunkMeta, Error,
-    FoliageQNChunk, FoliageSetInfo, Result, XTT_FILE_ID, XTT_VERSION, XttFile, XttHeader,
-    XttHeaderRaw, XttLinker, XttLinkerHeaderRaw,
+    CHUNK_FOLIAGE_HEADER, CHUNK_FOLIAGE_QN, CHUNK_ROAD, CHUNK_XTT_HEADER, Error, FoliageQNChunk,
+    FoliageSetInfo, Result, XTT_FILE_ID, XTT_VERSION, XttFile, XttHeader, XttHeaderRaw, XttLinker,
+    XttLinkerHeaderRaw,
 };
 
 mod options;
@@ -164,12 +164,7 @@ impl XttFile {
         for i in 0..ecf.chunks().len() {
             let chunk_header = ecf.chunks()[i].clone();
 
-            file.chunk_order.push(ChunkMeta {
-                id: chunk_header.id,
-                alignment_log2: chunk_header.alignment_log2,
-                flags: chunk_header.flags,
-                resource_flags: chunk_header.resource_flags,
-            });
+            file.chunk_order.push(ChunkMetadata::from(&chunk_header));
 
             let chunk_data = ecf.chunk_data(i)?;
 
