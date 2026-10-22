@@ -1,0 +1,15 @@
+[package]
+name = "lgt"
+description = "LGT animated light-scene format parser for Halo Wars"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+nostdio.workspace = true
+thiserror = { workspace = true }

@@ -14,6 +14,7 @@ A Rust library for parsing Halo Wars Definitive Edition and Halo Wars 2 file for
 | `ufx`     | HW2 UFXS compiled-shader parser         |
 | `uax`     | UAX animation format parser             |
 | `ddx`     | DDX/DDS texture format reader/writer    |
+| `lgt`     | LGT animated light-scene parser         |
 | `bdt`     | BDT binary data tree (packed documents) |
 | `era-cli` | CLI tool for ERA archives               |
 | `pkg-cli` | CLI tool for PKG archives               |
@@ -91,6 +92,7 @@ and shared skeleton metadata are retained within the target packing precision.
 | **DDX** | `.ddx`    | `0x13CF5D01` | Texture format. DE uses standard DDS files; Xbox 360 uses ECF-wrapped format with deflate compression | ✅ Implemented                 |
 | **XTD** | `.xtd`    | —            | Terrain height/visual data (chunks, lighting, ambient occlusion)                                      | ⚠️ Untested (see below)       |
 | **XTT** | `.xtt`    | —            | Terrain texturing data (atlas, roads, foliage)                                                        | ✅ Implemented                 |
+| **LGT** | `.lgt`    | —            | Animated light scenes: timed frames of lights, objects and cameras from the 3ds Max light exporter    | ✅ Implemented                 |
 
 ### XML-Based Formats
 
