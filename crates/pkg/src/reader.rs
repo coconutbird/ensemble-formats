@@ -27,7 +27,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use nostdio::{Cursor, NoProgress, Progress, Read, Seek, SeekFrom};
+use nostdio::{Cursor, NoProgress, Progress, Read, ReadLe, Seek, SeekFrom};
 
 use crate::header::{MAGIC, MAX_FILENAME_LEN, MAX_VERSION};
 use crate::{Error, Result};
@@ -69,13 +69,6 @@ pub fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Read a little-endian u64 from a [`Read`] source.
-fn read_u64_le(r: &mut impl Read) -> Result<u64> {
-    let mut buf = [0u8; 8];
-    r.read_exact(&mut buf)?;
-    Ok(u64::from_le_bytes(buf))
-}
-
 impl<R: Read + Seek> Reader<R> {
     /// Parse a PKG archive from any [`Read`] + [`Seek`] source.
     ///
@@ -95,18 +88,18 @@ impl<R: Read + Seek> Reader<R> {
             return Err(Error::InvalidMagic { found: magic });
         }
 
-        let version = read_u64_le(&mut inner)?;
+        let version = inner.read_u64_le()?;
         if version == 0 || version > MAX_VERSION {
             return Err(Error::UnsupportedVersion(version));
         }
 
-        let entry_count = read_u64_le(&mut inner)?;
+        let entry_count = inner.read_u64_le()?;
 
         let entry_capacity =
             usize::try_from(entry_count).map_err(|_| Error::SizeOverflow("entry count"))?;
         let mut entries = Vec::with_capacity(entry_capacity);
         for _ in 0..entry_count {
-            let filename_len = read_u64_le(&mut inner)?;
+            let filename_len = inner.read_u64_le()?;
             if filename_len > MAX_FILENAME_LEN {
                 return Err(Error::FilenameTooLong(filename_len));
             }
@@ -132,8 +125,8 @@ impl<R: Read + Seek> Reader<R> {
             }
 
             let name_hash = fnv1a_64(name.as_bytes());
-            let data_offset = read_u64_le(&mut inner)?;
-            let data_size = read_u64_le(&mut inner)?;
+            let data_offset = inner.read_u64_le()?;
+            let data_size = inner.read_u64_le()?;
 
             entries.push(PkgEntry {
                 filename: name,
@@ -145,7 +138,7 @@ impl<R: Read + Seek> Reader<R> {
 
         // Version >= 2 has an alignment field.
         let alignment = if version >= 2 {
-            read_u64_le(&mut inner)?
+            inner.read_u64_le()?
         } else {
             0
         };
