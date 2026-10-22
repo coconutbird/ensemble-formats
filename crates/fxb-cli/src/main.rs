@@ -1,7 +1,8 @@
 //! Command-line inspection and conversion tools for FXB shader files.
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use cli_support::shader::{ShaderInfoOptions, write_shader_info};
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "fxb", about = "Inspect and extract HWDE FXB shader bundles")]
@@ -44,7 +45,11 @@ fn main() {
     }
 }
 
-fn read_fxb(path: &std::path::Path) -> Option<(&'static [u8], fxb::FxbFile<'static>)> {
+/// Reads and parses one FXB file, then calls `f` with the parsed file.
+///
+/// The input buffer lives only for the call. If the read or the parse fails,
+/// the function prints the error and returns `None`.
+fn with_fxb<T>(path: &Path, f: impl FnOnce(&fxb::FxbFile<'_>) -> T) -> Option<T> {
     let data = match std::fs::read(path) {
         Ok(d) => d,
         Err(e) => {
@@ -52,10 +57,8 @@ fn read_fxb(path: &std::path::Path) -> Option<(&'static [u8], fxb::FxbFile<'stat
             return None;
         }
     };
-    // Leak the data so the FxbFile can borrow it for 'static.
-    let leaked: &'static [u8] = Vec::leak(data);
-    match fxb::parse(leaked) {
-        Ok(f) => Some((leaked, f)),
+    match fxb::parse(&data) {
+        Ok(parsed) => Some(f(&parsed)),
         Err(e) => {
             eprintln!("{}: {e}", path.display());
             None
@@ -69,34 +72,35 @@ fn cmd_list(files: &[PathBuf]) {
         std::process::exit(1);
     }
     for path in files {
-        let Some((_, fxb)) = read_fxb(path) else {
-            continue;
-        };
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        println!("=== {name} ===");
-        println!(
-            "  version: {}  name_len: {}  entries: {}",
-            fxb.version,
-            fxb.name_len,
-            fxb.entries.len()
-        );
-        for (i, e) in fxb.entries.iter().enumerate() {
-            let sm = e
-                .shader
-                .as_ref()
-                .and_then(|s| s.program())
-                .map(|p| format!("SM {}.{}", p.major_version, p.minor_version));
-            println!(
-                "  [{i:3}] {:<14} {:>6} bytes @ 0x{:06X}  ann={:<5} {}",
-                e.name,
-                e.dxbc_size,
-                e.dxbc_offset,
-                e.annotation.len(),
-                sm.unwrap_or_default()
-            );
-        }
-        println!();
+        with_fxb(path, |fxb| print_list(path, fxb));
     }
+}
+
+fn print_list(path: &Path, fxb: &fxb::FxbFile<'_>) {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    println!("=== {name} ===");
+    println!(
+        "  version: {}  name_len: {}  entries: {}",
+        fxb.version,
+        fxb.name_len,
+        fxb.entries.len()
+    );
+    for (i, e) in fxb.entries.iter().enumerate() {
+        let sm = e
+            .shader
+            .as_ref()
+            .and_then(|s| s.program())
+            .map(|p| format!("SM {}.{}", p.major_version, p.minor_version));
+        println!(
+            "  [{i:3}] {:<14} {:>6} bytes @ 0x{:06X}  ann={:<5} {}",
+            e.name,
+            e.dxbc_size,
+            e.dxbc_offset,
+            e.annotation.len(),
+            sm.unwrap_or_default()
+        );
+    }
+    println!();
 }
 
 fn cmd_info(files: &[PathBuf], disasm: bool) {
@@ -104,31 +108,41 @@ fn cmd_info(files: &[PathBuf], disasm: bool) {
         eprintln!("No files specified.");
         std::process::exit(1);
     }
+    let options = ShaderInfoOptions {
+        variable_types: false,
+        constant_buffers_only: false,
+        disassembly: disasm,
+    };
     for path in files {
-        let Some((_, fxb)) = read_fxb(path) else {
-            continue;
-        };
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        println!("=== {name} ===");
-
-        for (i, e) in fxb.entries.iter().enumerate() {
-            println!(
-                "\n-- [{i}] {} (offset 0x{:06X}, {} bytes) --",
-                e.name, e.dxbc_offset, e.dxbc_size
-            );
-            if let Some(ref shader) = e.shader {
-                print_shader_info(shader, disasm);
-            }
-        }
-        println!();
+        with_fxb(path, |fxb| print_info(path, fxb, options));
     }
 }
 
-fn cmd_extract(file: &std::path::Path, output: Option<&std::path::Path>) {
-    let Some((_, fxb)) = read_fxb(file) else {
+fn print_info(path: &Path, fxb: &fxb::FxbFile<'_>, options: ShaderInfoOptions) {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    println!("=== {name} ===");
+
+    for (i, e) in fxb.entries.iter().enumerate() {
+        println!(
+            "\n-- [{i}] {} (offset 0x{:06X}, {} bytes) --",
+            e.name, e.dxbc_offset, e.dxbc_size
+        );
+        if let Some(shader) = &e.shader {
+            write_shader_info(&mut std::io::stdout().lock(), shader, options)
+                .expect("failed printing to stdout");
+        }
+    }
+    println!();
+}
+
+fn cmd_extract(file: &Path, output: Option<&Path>) {
+    if with_fxb(file, |fxb| extract_entries(file, fxb, output)).is_none() {
         std::process::exit(1);
-    };
-    let out_dir = output.unwrap_or_else(|| std::path::Path::new("."));
+    }
+}
+
+fn extract_entries(file: &Path, fxb: &fxb::FxbFile<'_>, output: Option<&Path>) {
+    let out_dir = output.unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(out_dir).unwrap();
 
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
@@ -144,44 +158,5 @@ fn cmd_extract(file: &std::path::Path, output: Option<&std::path::Path>) {
         let out_path = out_dir.join(&fname);
         std::fs::write(&out_path, e.dxbc_data).unwrap();
         println!("  {fname} ({} bytes)", e.dxbc_data.len());
-    }
-}
-
-fn print_shader_info(shader: &d3dasm::Shader<'_>, disasm: bool) {
-    if let Some(prog) = shader.program() {
-        println!("  SM {}.{}", prog.major_version, prog.minor_version);
-    }
-    if let Some(rd) = shader.resource_def() {
-        if !rd.creator.is_empty() {
-            println!("  compiler: {}", rd.creator);
-        }
-        for cb in &rd.constant_buffers {
-            println!("\n  cbuffer {} ({} bytes):", cb.name, cb.size);
-            for v in &cb.variables {
-                println!("    +{:<4} {:<32} ({} bytes)", v.offset, v.name, v.size);
-            }
-        }
-        if !rd.bindings.is_empty() {
-            println!("\n  bindings:");
-            for b in &rd.bindings {
-                println!("    {b}");
-            }
-        }
-    }
-    if let Some(sig) = shader.input_signature() {
-        println!("\n  inputs:");
-        for elem in &sig.elements {
-            println!("    {elem}");
-        }
-    }
-    if let Some(sig) = shader.output_signature() {
-        println!("\n  outputs:");
-        for elem in &sig.elements {
-            println!("    {elem}");
-        }
-    }
-    if disasm {
-        println!("\n  --- disassembly ---");
-        print!("{shader}");
     }
 }

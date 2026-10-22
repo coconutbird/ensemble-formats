@@ -16,5 +16,6 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+cli-support.workspace = true
 ufx = { workspace = true }
 clap = { workspace = true }

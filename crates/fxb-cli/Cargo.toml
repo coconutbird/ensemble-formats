@@ -16,6 +16,6 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+cli-support.workspace = true
 fxb = { workspace = true }
-d3dasm = { workspace = true }
 clap = { workspace = true }

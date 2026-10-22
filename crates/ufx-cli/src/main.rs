@@ -1,6 +1,7 @@
 //! Command-line inspection and constant-buffer inference for UFX shader files.
 
 use clap::{Args, Parser};
+use cli_support::shader::{ShaderInfoOptions, write_shader_info};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -248,7 +249,16 @@ fn main() {
                 shader.offset(),
                 shader.size()
             );
-            print_shader_info(shader, cli.display.cb_only, cli.display.disasm);
+            write_shader_info(
+                &mut std::io::stdout().lock(),
+                shader,
+                ShaderInfoOptions {
+                    variable_types: true,
+                    constant_buffers_only: cli.display.cb_only,
+                    disassembly: cli.display.disasm,
+                },
+            )
+            .expect("failed printing to stdout");
         }
 
         if cli.analysis.infer_params {
@@ -260,89 +270,5 @@ fn main() {
         }
 
         println!();
-    }
-}
-
-fn print_shader_info(shader: &ufx::Shader<'_>, cb_only: bool, disasm: bool) {
-    if let Some(prog) = shader.program() {
-        println!("  SM {}.{}", prog.major_version, prog.minor_version);
-    }
-
-    if let Some(rd) = shader.resource_def() {
-        if !rd.creator.is_empty() {
-            println!("  compiler: {}", rd.creator);
-        }
-
-        // Constant buffers
-        for cb in &rd.constant_buffers {
-            println!("\n  cbuffer {} ({} bytes):", cb.name, cb.size);
-            for v in &cb.variables {
-                let ty = format_type(&v.var_type);
-                println!(
-                    "    +{:<4} {:<32} {} ({} bytes)",
-                    v.offset, v.name, ty, v.size
-                );
-            }
-        }
-
-        if !cb_only {
-            // Resource bindings
-            if !rd.bindings.is_empty() {
-                println!("\n  bindings:");
-                for b in &rd.bindings {
-                    println!("    {b}");
-                }
-            }
-        }
-    }
-
-    if !cb_only {
-        if let Some(sig) = shader.input_signature() {
-            println!("\n  inputs:");
-            for e in &sig.elements {
-                println!("    {e}");
-            }
-        }
-        if let Some(sig) = shader.output_signature() {
-            println!("\n  outputs:");
-            for e in &sig.elements {
-                println!("    {e}");
-            }
-        }
-    }
-
-    if disasm {
-        println!("\n  --- disassembly ---");
-        print!("{shader}");
-    }
-}
-
-fn format_type(t: &ufx::dxbc::chunks::rdef::TypeDesc<'_>) -> String {
-    let base = match t.var_type {
-        0 => "void",
-        1 => "bool",
-        2 => "int",
-        3 => "float",
-        4 => "string",
-        5 => "texture",
-        6 => "texture1d",
-        7 => "texture2d",
-        8 => "texture3d",
-        9 => "texturecube",
-        10 => "sampler",
-        19 => "uint",
-        _ => "?",
-    };
-    let class = match t.class {
-        1 => "vec",     // vector
-        2 | 3 => "mat", // row-major or column-major matrix
-        _ => "",        // scalar or unknown class
-    };
-    if t.rows == 1 && t.columns == 1 {
-        base.to_string()
-    } else if t.rows == 1 {
-        format!("{base}{}{columns}", class, columns = t.columns)
-    } else {
-        format!("{base}{class}{r}x{c}", r = t.rows, c = t.columns)
     }
 }
