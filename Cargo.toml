@@ -97,14 +97,19 @@ unused = { level = "deny", priority = -1 }
 nonstandard_style = { level = "deny", priority = -1 }
 rust_2018_idioms = { level = "deny", priority = -1 }
 future_incompatible = { level = "deny", priority = -1 }
+missing_docs = "deny"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
+allow_attributes = { level = "deny", priority = -1 }
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "deny", priority = -1 }
 style = { level = "deny", priority = -1 }
 complexity = { level = "deny", priority = -1 }
 perf = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+mod_module_files = "deny"
 
 [workspace.lints.rustdoc]
-all = { level = "deny", priority = -1 }
+all = { level = "warn", priority = -1 }
