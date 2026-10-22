@@ -19,11 +19,21 @@ pub enum Error {
 
     /// Invalid XMB signature in the packed data header.
     #[error("invalid signature: expected 0x{expected:08X}, got 0x{actual:08X}")]
-    InvalidSignature { expected: u32, actual: u32 },
+    InvalidSignature {
+        /// Signature that the format requires.
+        expected: u32,
+        /// Signature that the data contains.
+        actual: u32,
+    },
 
     /// Invalid ECF file ID (header ID mismatch).
     #[error("invalid file ID: expected 0x{expected:08X}, got 0x{actual:08X}")]
-    InvalidFileId { expected: u32, actual: u32 },
+    InvalidFileId {
+        /// File ID that the format requires.
+        expected: u32,
+        /// File ID that the data contains.
+        actual: u32,
+    },
 
     /// Required ECF chunk not found.
     #[error("required chunk not found: 0x{0:016X}")]

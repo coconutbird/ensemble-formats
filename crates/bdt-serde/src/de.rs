@@ -30,6 +30,7 @@ pub struct NodeDeserializer<'a> {
 }
 
 impl<'a> NodeDeserializer<'a> {
+    /// Creates a deserializer for `node`, with optional diagnostics output.
     #[must_use]
     pub fn new(node: &'a Node, diag: Option<&'a Diagnostics>) -> Self {
         Self { node, diag }

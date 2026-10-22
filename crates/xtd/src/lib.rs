@@ -642,9 +642,9 @@ mod tests {
         let bytes = Writer::write(&file).expect("write failed");
         let read = Reader::read(&bytes).expect("read failed");
 
-        assert!(read.ao_data.is_empty());
-        assert!(read.alpha_data.is_empty());
-        assert!(read.lighting_data.is_empty());
+        assert_eq!(read.ao_data, Vec::<u8>::new());
+        assert_eq!(read.alpha_data, Vec::<u8>::new());
+        assert_eq!(read.lighting_data, Vec::<u8>::new());
         // Header and visual chunks should still survive
         assert_eq!(read.header.version, XTD_VERSION);
         assert_eq!(read.visual_chunks.len(), 4);

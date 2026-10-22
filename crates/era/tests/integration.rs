@@ -1,3 +1,5 @@
+//! Integration tests for ERA archive round trips, compression and TEA encryption.
+
 use era::crypto::tea::{tea_decrypt_block64, tea_encrypt_block64};
 use era::{Error, Reader, TeaKeys, Writer, compress_file_data};
 
@@ -190,7 +192,7 @@ fn read_entry_compressed() {
         archive.read_entry_compressed(1).expect("Failed to read");
 
     assert_eq!(decomp_size, 28);
-    assert!(!compressed.is_empty());
+    assert_ne!(compressed, Vec::<u8>::new());
     assert_ne!(tiger128, [0u8; 16]);
 
     let decompressed = archive.read_entry(1).expect("Failed to read");

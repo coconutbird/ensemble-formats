@@ -8,23 +8,41 @@ use thiserror::Error;
 pub enum Error {
     /// Invalid ECF magic number.
     #[error("invalid ECF magic: expected 0x{expected:08X}, found 0x{found:08X}")]
-    InvalidMagic { expected: u32, found: u32 },
+    InvalidMagic {
+        /// Magic number that the format requires.
+        expected: u32,
+        /// Magic number that the data contains.
+        found: u32,
+    },
 
     /// The encoded ECF header is smaller than the fixed header.
     #[error("invalid ECF header size: expected at least {minimum}, found {actual}")]
-    InvalidHeaderSize { minimum: usize, actual: usize },
+    InvalidHeaderSize {
+        /// Minimum header size in bytes.
+        minimum: usize,
+        /// Header size in bytes that the data declares.
+        actual: usize,
+    },
 
     /// Header adler32 checksum mismatch.
     #[error("ECF header checksum mismatch: expected 0x{expected:08X}, computed 0x{computed:08X}")]
-    HeaderChecksumMismatch { expected: u32, computed: u32 },
+    HeaderChecksumMismatch {
+        /// Checksum that the header stores.
+        expected: u32,
+        /// Checksum that the reader computes.
+        computed: u32,
+    },
 
     /// Chunk data adler32 checksum mismatch.
     #[error(
         "ECF chunk {index} checksum mismatch: expected 0x{expected:08X}, computed 0x{computed:08X}"
     )]
     ChunkChecksumMismatch {
+        /// Index of the chunk.
         index: usize,
+        /// Checksum that the chunk header stores.
         expected: u32,
+        /// Checksum that the reader computes.
         computed: u32,
     },
 

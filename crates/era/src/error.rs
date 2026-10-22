@@ -15,11 +15,21 @@ pub enum Error {
 
     /// Invalid archive magic number.
     #[error("invalid archive magic: expected 0x{expected:08X}, found 0x{found:08X}")]
-    InvalidArchiveMagic { expected: u32, found: u32 },
+    InvalidArchiveMagic {
+        /// Magic number that the format requires.
+        expected: u32,
+        /// Magic number that the data contains.
+        found: u32,
+    },
 
     /// Chunk index out of bounds.
     #[error("chunk index {index} out of bounds (count: {count})")]
-    ChunkIndexOutOfBounds { index: usize, count: usize },
+    ChunkIndexOutOfBounds {
+        /// Requested chunk index.
+        index: usize,
+        /// Number of chunks in the archive.
+        count: usize,
+    },
 
     /// Decompression error.
     #[error("decompression error: {0}")]
@@ -39,11 +49,19 @@ pub enum Error {
 
     /// Invalid signature magic.
     #[error("invalid signature magic: expected 0x{expected:08X}, found 0x{found:08X}")]
-    InvalidSignatureMagic { expected: u32, found: u32 },
+    InvalidSignatureMagic {
+        /// Magic number that the format requires.
+        expected: u32,
+        /// Magic number that the data contains.
+        found: u32,
+    },
 
     /// Invalid signature tree depth.
     #[error("invalid signature tree depth: {depth} (must be 2..=32)")]
-    InvalidTreeDepth { depth: u8 },
+    InvalidTreeDepth {
+        /// Tree depth that the signature declares.
+        depth: u8,
+    },
 
     /// Signature verification failed.
     #[error("signature verification failed")]

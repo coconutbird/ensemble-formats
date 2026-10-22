@@ -23,13 +23,20 @@ use zerocopy::{FromBytes, Immutable, KnownLayout};
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct XmxHeaderLe {
+    /// Unused padding bytes.
     pub padding: [u8; 4],
-    pub nodes_size: [u8; 4],   // u32 LE
-    pub nodes_pad: [u8; 4],    // u32 LE
-    pub nodes_ptr: [u8; 8],    // u64 LE
-    pub variant_size: [u8; 4], // u32 LE
-    pub variant_pad: [u8; 4],  // u32 LE
-    pub variant_ptr: [u8; 8],  // u64 LE
+    /// Number of nodes, as a little-endian `u32`.
+    pub nodes_size: [u8; 4],
+    /// Padding after `nodes_size`, as a little-endian `u32`.
+    pub nodes_pad: [u8; 4],
+    /// Absolute byte offset of the node array, as a little-endian `u64`.
+    pub nodes_ptr: [u8; 8],
+    /// Size of the variant data table in bytes, as a little-endian `u32`.
+    pub variant_size: [u8; 4],
+    /// Padding after `variant_size`, as a little-endian `u32`.
+    pub variant_pad: [u8; 4],
+    /// Absolute byte offset of the variant data table, as a little-endian `u64`.
+    pub variant_ptr: [u8; 8],
 }
 
 impl XmxHeaderLe {
@@ -62,49 +69,66 @@ impl XmxHeaderLe {
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct XmxNodeLe {
+    /// Index of the parent node, as a little-endian `u32`.
     pub parent_node: [u8; 4],
+    /// Variant value of the node name, as a little-endian `u32`.
     pub name_variant: [u8; 4],
+    /// Variant value of the node text, as a little-endian `u32`.
     pub text_variant: [u8; 4],
+    /// Unused padding bytes.
     pub padding: [u8; 4],
+    /// Number of attributes, as a little-endian `u32`.
     pub attrs_size: [u8; 4],
+    /// Padding after `attrs_size`.
     pub attrs_pad: [u8; 4],
+    /// Absolute byte offset of the attribute array, as a little-endian `u64`.
     pub attrs_ptr: [u8; 8],
+    /// Number of child nodes, as a little-endian `u32`.
     pub children_size: [u8; 4],
+    /// Padding after `children_size`.
     pub children_pad: [u8; 4],
+    /// Absolute byte offset of the child index array, as a little-endian `u64`.
     pub children_ptr: [u8; 8],
 }
 
 impl XmxNodeLe {
+    /// Returns the index of the parent node.
     #[must_use]
     pub fn parent_node(&self) -> u32 {
         u32::from_le_bytes(self.parent_node)
     }
 
+    /// Returns the variant value of the node name.
     #[must_use]
     pub fn name_variant(&self) -> u32 {
         u32::from_le_bytes(self.name_variant)
     }
 
+    /// Returns the variant value of the node text.
     #[must_use]
     pub fn text_variant(&self) -> u32 {
         u32::from_le_bytes(self.text_variant)
     }
 
+    /// Returns the number of attributes.
     #[must_use]
     pub fn attrs_size(&self) -> u32 {
         u32::from_le_bytes(self.attrs_size)
     }
 
+    /// Returns the absolute byte offset of the attribute array.
     #[must_use]
     pub fn attrs_ptr(&self) -> Option<usize> {
         usize::try_from(u64::from_le_bytes(self.attrs_ptr)).ok()
     }
 
+    /// Returns the number of child nodes.
     #[must_use]
     pub fn children_size(&self) -> u32 {
         u32::from_le_bytes(self.children_size)
     }
 
+    /// Returns the absolute byte offset of the child index array.
     #[must_use]
     pub fn children_ptr(&self) -> Option<usize> {
         usize::try_from(u64::from_le_bytes(self.children_ptr)).ok()
@@ -115,9 +139,13 @@ impl XmxNodeLe {
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct XmxHeaderBe {
+    /// Number of nodes, as a big-endian `u32`.
     pub nodes_size: [u8; 4],
+    /// Absolute byte offset of the node array, as a big-endian `u32`.
     pub nodes_ptr: [u8; 4],
+    /// Size of the variant data table in bytes, as a big-endian `u32`.
     pub variant_size: [u8; 4],
+    /// Absolute byte offset of the variant data table, as a big-endian `u32`.
     pub variant_ptr: [u8; 4],
 }
 
@@ -151,46 +179,60 @@ impl XmxHeaderBe {
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct XmxNodeBe {
+    /// Index of the parent node, as a big-endian `u32`.
     pub parent_node: [u8; 4],
+    /// Variant value of the node name, as a big-endian `u32`.
     pub name_variant: [u8; 4],
+    /// Variant value of the node text, as a big-endian `u32`.
     pub text_variant: [u8; 4],
+    /// Number of attributes, as a big-endian `u32`.
     pub attrs_size: [u8; 4],
+    /// Absolute byte offset of the attribute array, as a big-endian `u32`.
     pub attrs_ptr: [u8; 4],
+    /// Number of child nodes, as a big-endian `u32`.
     pub children_size: [u8; 4],
+    /// Absolute byte offset of the child index array, as a big-endian `u32`.
     pub children_ptr: [u8; 4],
 }
 
 impl XmxNodeBe {
+    /// Returns the index of the parent node.
     #[must_use]
     pub fn parent_node(&self) -> u32 {
         u32::from_be_bytes(self.parent_node)
     }
 
+    /// Returns the variant value of the node name.
     #[must_use]
     pub fn name_variant(&self) -> u32 {
         u32::from_be_bytes(self.name_variant)
     }
 
+    /// Returns the variant value of the node text.
     #[must_use]
     pub fn text_variant(&self) -> u32 {
         u32::from_be_bytes(self.text_variant)
     }
 
+    /// Returns the number of attributes.
     #[must_use]
     pub fn attrs_size(&self) -> u32 {
         u32::from_be_bytes(self.attrs_size)
     }
 
+    /// Returns the absolute byte offset of the attribute array.
     #[must_use]
     pub fn attrs_ptr(&self) -> usize {
         u32::from_be_bytes(self.attrs_ptr) as usize
     }
 
+    /// Returns the number of child nodes.
     #[must_use]
     pub fn children_size(&self) -> u32 {
         u32::from_be_bytes(self.children_size)
     }
 
+    /// Returns the absolute byte offset of the child index array.
     #[must_use]
     pub fn children_ptr(&self) -> usize {
         u32::from_be_bytes(self.children_ptr) as usize
@@ -201,7 +243,9 @@ impl XmxNodeBe {
 #[derive(FromBytes, KnownLayout, Immutable, Debug, Clone, Copy)]
 #[repr(C)]
 pub struct AttrPairRaw {
+    /// Variant value of the attribute name.
     pub name_var: [u8; 4],
+    /// Variant value of the attribute value.
     pub value_var: [u8; 4],
 }
 
@@ -209,15 +253,25 @@ pub struct AttrPairRaw {
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct BPackedHeader {
+    /// Format signature byte.
     pub signature: u8,
+    /// Format version.
     pub version: u8,
+    /// Header flags.
     pub flags: u8,
+    /// Number of user sections.
     pub num_user_sections: u8,
+    /// CRC of the data, as a `u32`.
     pub crc: [u8; 4],
+    /// Size of the data in bytes, as a `u32`.
     pub data_size: [u8; 4],
+    /// Size of the node section in bytes, as a `u32`.
     pub node_section_size: [u8; 4],
+    /// Size of the name-value section in bytes, as a `u32`.
     pub nv_section_size: [u8; 4],
+    /// Size of the name data section in bytes, as a `u32`.
     pub name_data_size: [u8; 4],
+    /// Size of the value data section in bytes, as a `u32`.
     pub value_data_size: [u8; 4],
 }
 
@@ -260,10 +314,15 @@ impl BPackedHeader {
 #[derive(FromBytes, KnownLayout, Immutable, Debug, Clone, Copy)]
 #[repr(C)]
 pub struct CompactNodeRaw {
+    /// Index of the parent node, as a `u16` (`0xFFFF` for the root).
     pub parent_index: [u8; 2],
+    /// Index of the first child node, as a `u16`.
     pub child_node_index: [u8; 2],
+    /// Index of the first name-value entry, as a `u16`.
     pub name_value_ofs: [u8; 2],
+    /// Number of name-value entries of the node.
     pub num_name_values: u8,
+    /// Number of child nodes.
     pub num_children: u8,
 }
 
@@ -303,8 +362,11 @@ impl CompactNodeRaw {
 #[derive(FromBytes, KnownLayout, Immutable, Debug, Clone, Copy)]
 #[repr(C)]
 pub struct CompactNvRaw {
+    /// Raw value, as a `u32`. The type flags set its meaning.
     pub value: [u8; 4],
+    /// Offset of the name string in the name data section, as a `u16`.
     pub name_ofs: [u8; 2],
+    /// Type and encoding flags, as a `u16`.
     pub flags: [u8; 2],
 }
 

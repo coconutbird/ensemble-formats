@@ -28,7 +28,12 @@ pub enum Error {
 
     /// Header too short.
     #[error("DDX header too short: expected at least {expected} bytes, got {actual}")]
-    HeaderTooShort { expected: usize, actual: usize },
+    HeaderTooShort {
+        /// Minimum header size in bytes.
+        expected: usize,
+        /// Size of the data in bytes.
+        actual: usize,
+    },
 
     /// Invalid data format.
     #[error("Invalid DDX data format: {0}")]
@@ -48,7 +53,12 @@ pub enum Error {
 
     /// Invalid checksum.
     #[error("Invalid checksum: expected 0x{expected:08X}, got 0x{actual:08X}")]
-    InvalidChecksum { expected: u32, actual: u32 },
+    InvalidChecksum {
+        /// Checksum that the file stores.
+        expected: u32,
+        /// Checksum that the reader computes.
+        actual: u32,
+    },
 
     /// Unsupported texture format for decoding.
     #[error("Unsupported texture format for decoding: {0:?}")]

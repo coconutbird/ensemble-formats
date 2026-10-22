@@ -60,15 +60,24 @@ const FXB0_HEADER_SIZE: usize = 16;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// The input is shorter than the minimum header.
-    TooShort { len: usize },
+    TooShort {
+        /// Length of the input in bytes.
+        len: usize,
+    },
     /// The first four bytes are not `fxb0`.
-    BadMagic { found: [u8; 4] },
+    BadMagic {
+        /// First four bytes of the input.
+        found: [u8; 4],
+    },
     /// A required field could not be read.
     Truncated,
     /// A DXBC blob's declared size exceeds the file bounds.
     BlobOutOfBounds {
+        /// Index of the entry.
         entry: usize,
+        /// Byte offset of the blob.
         offset: usize,
+        /// Declared size of the blob in bytes.
         size: usize,
     },
     /// A value cannot be represented by the on-disk format.

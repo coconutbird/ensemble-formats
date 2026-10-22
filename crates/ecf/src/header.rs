@@ -42,15 +42,25 @@ use crate::{CompressionMethod, Error, HEADER_MAGIC, Result};
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct EcfHeaderRaw {
+    /// Magic number (`0xDABA7737`), as a big-endian `u32`.
     pub magic: [u8; 4],
+    /// Total header size in bytes, as a big-endian `u32`.
     pub header_size: [u8; 4],
+    /// Adler-32 checksum of the header, as a big-endian `u32`.
     pub adler32: [u8; 4],
+    /// Total file size in bytes, as a big-endian `u32`.
     pub file_size: [u8; 4],
+    /// Number of chunks, as a big-endian `u16`.
     pub num_chunks: [u8; 2],
+    /// Header flags, as a big-endian `u16`.
     pub flags: [u8; 2],
+    /// User file type ID, as a big-endian `u32`.
     pub id: [u8; 4],
+    /// Size of the extra data of each chunk header, as a big-endian `u16`.
     pub chunk_extra_data_size: [u8; 2],
+    /// Padding bytes.
     pub pad0: [u8; 2],
+    /// Padding bytes.
     pub pad1: [u8; 4],
 }
 
@@ -58,12 +68,19 @@ pub struct EcfHeaderRaw {
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct EcfChunkHeaderRaw {
+    /// Chunk ID, as a big-endian `u64`.
     pub id: [u8; 8],
+    /// Byte offset of the chunk data in the file, as a big-endian `u32`.
     pub offset: [u8; 4],
+    /// Size of the chunk data in bytes, as a big-endian `u32`.
     pub size: [u8; 4],
+    /// Adler-32 checksum of the chunk data, as a big-endian `u32`.
     pub adler32: [u8; 4],
+    /// Chunk flags.
     pub flags: u8,
+    /// Base-2 logarithm of the chunk data alignment.
     pub alignment_log2: u8,
+    /// Resource flags, as a big-endian `u16`.
     pub resource_flags: [u8; 2],
 }
 

@@ -20,11 +20,21 @@ pub enum Error {
 
     /// Invalid XTT version.
     #[error("Invalid XTT version: expected {expected:#06X}, got {actual:#06X}")]
-    InvalidVersion { expected: i32, actual: i32 },
+    InvalidVersion {
+        /// Version that the reader supports.
+        expected: i32,
+        /// Version that the data contains.
+        actual: i32,
+    },
 
     /// Invalid XTT ECF file identifier.
     #[error("Invalid XTT file ID: expected {expected:#010X}, got {actual:#010X}")]
-    InvalidFileId { expected: u32, actual: u32 },
+    InvalidFileId {
+        /// File ID that the format requires.
+        expected: u32,
+        /// File ID that the data contains.
+        actual: u32,
+    },
 
     /// Missing required chunk.
     #[error("Missing required chunk: {0:#06X}")]
@@ -36,7 +46,12 @@ pub enum Error {
 
     /// Invalid header size.
     #[error("Invalid header size: expected {expected}, got {actual}")]
-    InvalidHeaderSize { expected: usize, actual: usize },
+    InvalidHeaderSize {
+        /// Header size in bytes that the format requires.
+        expected: usize,
+        /// Header size in bytes that the data contains.
+        actual: usize,
+    },
 
     /// A count, size, or offset cannot be represented by the on-disk format.
     #[error("{0} is too large for the XTT format")]
@@ -45,8 +60,11 @@ pub enum Error {
     /// A fixed-size filename does not fit without truncation.
     #[error("{context} is too long: maximum {max} bytes, got {actual}")]
     StringTooLong {
+        /// Name of the string field.
         context: &'static str,
+        /// Maximum length in bytes.
         max: usize,
+        /// Length of the string in bytes.
         actual: usize,
     },
 

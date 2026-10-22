@@ -120,8 +120,10 @@ pub enum MapType {
 }
 
 impl MapType {
+    /// Number of map types.
     pub const NUM_TYPES: usize = 13;
 
+    /// All map types in discriminant order.
     pub const ALL: [MapType; 13] = [
         MapType::Diffuse,
         MapType::Normal,

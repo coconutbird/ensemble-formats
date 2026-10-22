@@ -6,9 +6,13 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum DataFormat {
+    /// No valid format.
     Invalid = 0,
+    /// 32-bit ARGB, 8 bits for each channel.
     A8R8G8B8 = 1,
+    /// 32-bit ABGR, 8 bits for each channel.
     A8B8G8R8 = 2,
+    /// 8-bit alpha only.
     A8 = 3,
     /// DXT1 or DXT1A (1-bit alpha)
     Dxt1 = 4,

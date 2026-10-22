@@ -16,9 +16,13 @@ use zerocopy::{FromBytes, Immutable, KnownLayout};
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct XttHeaderRaw {
+    /// Format version, as a big-endian `u32`.
     pub version: [u8; 4],
+    /// Number of active textures, as a big-endian `u32`.
     pub num_active_textures: [u8; 4],
+    /// Number of active decals, as a big-endian `u32`.
     pub num_active_decals: [u8; 4],
+    /// Number of active decal instances, as a big-endian `u32`.
     pub num_active_decal_instances: [u8; 4],
 }
 
@@ -26,14 +30,23 @@ pub struct XttHeaderRaw {
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct XttLinkerHeaderRaw {
+    /// Number of grid cells on the X axis, as a big-endian `u32`.
     pub grid_x: [u8; 4],
+    /// Number of grid cells on the Z axis, as a big-endian `u32`.
     pub grid_z: [u8; 4],
+    /// Nonzero if the terrain needs a specular pass, as a big-endian `u32`.
     pub spec_pass_needed: [u8; 4],
+    /// Nonzero if the terrain needs a self-illumination pass, as a big-endian `u32`.
     pub self_pass_needed: [u8; 4],
+    /// Nonzero if the terrain needs an environment mask pass, as a big-endian `u32`.
     pub env_mask_pass_needed: [u8; 4],
+    /// Nonzero if the terrain needs an alpha pass, as a big-endian `u32`.
     pub alpha_pass_needed: [u8; 4],
+    /// Nonzero if the terrain is fully opaque, as a big-endian `u32`.
     pub is_fully_opaque: [u8; 4],
+    /// Number of splat layers, as a big-endian `u32`.
     pub num_splat_layers: [u8; 4],
+    /// Number of decal layers, as a big-endian `u32`.
     pub num_decal_layers: [u8; 4],
 }
 
@@ -41,9 +54,13 @@ pub struct XttLinkerHeaderRaw {
 #[derive(FromBytes, KnownLayout, Immutable, Debug)]
 #[repr(C)]
 pub struct AlbedoHeaderRaw {
+    /// Size of the atlas data in memory in bytes, as a big-endian `u32`.
     pub out_mem_size: [u8; 4],
+    /// Atlas width in pixels, as a big-endian `u32`.
     pub width: [u8; 4],
+    /// Atlas height in pixels, as a big-endian `u32`.
     pub height: [u8; 4],
+    /// Number of mip levels, as a big-endian `u32`.
     pub num_mips: [u8; 4],
 }
 

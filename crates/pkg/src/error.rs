@@ -9,11 +9,19 @@ use thiserror::Error;
 pub enum Error {
     /// Invalid PKG magic — expected `capack`.
     #[error("invalid PKG magic: expected \"capack\", found {found:?}")]
-    InvalidMagic { found: [u8; 6] },
+    InvalidMagic {
+        /// First six bytes of the data.
+        found: [u8; 6],
+    },
 
     /// Unexpected end of data (slice-based).
     #[error("unexpected end of data: need {need} bytes, have {have}")]
-    UnexpectedEof { need: usize, have: usize },
+    UnexpectedEof {
+        /// Number of bytes that the read requires.
+        need: usize,
+        /// Number of bytes that remain.
+        have: usize,
+    },
 
     /// IO error (streaming).
     #[error("io error: {0}")]
@@ -33,7 +41,12 @@ pub enum Error {
 
     /// Entry index out of bounds.
     #[error("entry index {index} out of bounds (archive has {count} entries)")]
-    EntryIndexOutOfBounds { index: usize, count: usize },
+    EntryIndexOutOfBounds {
+        /// Requested entry index.
+        index: usize,
+        /// Number of entries in the archive.
+        count: usize,
+    },
 
     /// Operation cancelled by progress callback.
     #[error("operation cancelled")]

@@ -20,15 +20,26 @@ use crate::escape;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// `<name` — start of an element (attributes follow).
-    ElementStart { name: String },
+    ElementStart {
+        /// Element name.
+        name: String,
+    },
     /// An attribute on the current element. Value is already unescaped.
-    Attribute { name: String, value: String },
+    Attribute {
+        /// Attribute name.
+        name: String,
+        /// Unescaped attribute value.
+        value: String,
+    },
     /// `>` — the element tag is open (children/text follow).
     ElementOpen,
     /// `/>` — self-closing element.
     ElementEmpty,
     /// `</name>` — closing tag.
-    ElementClose { name: String },
+    ElementClose {
+        /// Element name.
+        name: String,
+    },
     /// Text content (unescaped).
     Text(String),
     /// CDATA content (verbatim).
@@ -38,6 +49,7 @@ pub enum Event {
 /// Error from the XML reader.
 #[derive(Debug, Clone)]
 pub struct Error {
+    /// Description of the error.
     pub message: String,
 }
 

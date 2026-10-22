@@ -45,8 +45,11 @@ pub const ARCHIVE_PASSWORD: &str = "3zDdptN*rV=qOkRbE*NAuWM6";
 /// Three 64-bit keys derived from the password
 #[derive(Debug, Clone, Copy)]
 pub struct TeaKeys {
+    /// First key.
     pub k1: u64,
+    /// Second key.
     pub k2: u64,
+    /// Third key.
     pub k3: u64,
 }
 

@@ -355,110 +355,187 @@ pub struct CurveData {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CurvePayload {
     /// Format 0: dimension plus f32 keyframes.
-    DaKeyframes32f { dimension: i16, controls: Vec<f32> },
+    DaKeyframes32f {
+        /// Number of components in each keyframe.
+        dimension: i16,
+        /// Keyframe values, `dimension` values for each keyframe.
+        controls: Vec<f32>,
+    },
     /// Format 1: f32 knots and f32 controls.
     DaK32fC32f {
+        /// Padding value from the curve header.
         padding: i16,
+        /// Knot times.
         knots: Vec<f32>,
+        /// Control values.
         controls: Vec<f32>,
     },
     /// Format 2: identity curve.
-    Identity { dimension: i16 },
+    Identity {
+        /// Number of components of the curve.
+        dimension: i16,
+    },
     /// Format 3: dimension-agnostic f32 constant.
-    DaConstant32f { padding: i16, controls: Vec<f32> },
+    DaConstant32f {
+        /// Padding value from the curve header.
+        padding: i16,
+        /// Constant values.
+        controls: Vec<f32>,
+    },
     /// Format 4: three-component f32 constant.
-    D3Constant32f { padding: i16, controls: [f32; 3] },
+    D3Constant32f {
+        /// Padding value from the curve header.
+        padding: i16,
+        /// Constant value.
+        controls: [f32; 3],
+    },
     /// Format 5: four-component f32 constant.
-    D4Constant32f { padding: i16, controls: [f32; 4] },
+    D4Constant32f {
+        /// Padding value from the curve header.
+        padding: i16,
+        /// Constant value.
+        controls: [f32; 4],
+    },
     /// Format 6: arbitrary-dimensional u16 knots and controls.
     DaK16uC16u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scales and offsets for each component.
         control_scale_offsets: Vec<f32>,
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u16>,
     },
     /// Format 7: arbitrary-dimensional u8 knots and controls.
     DaK8uC8u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scales and offsets for each component.
         control_scale_offsets: Vec<f32>,
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u8>,
     },
     /// Format 8: normalized four-component u16 curve.
     D4nK16uC15u {
+        /// Packed scale-offset table entries.
         scale_offset_table_entries: u16,
+        /// Inverse knot scale.
         one_over_knot_scale: f32,
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u16>,
     },
     /// Format 9: normalized four-component u8 curve.
     D4nK8uC7u {
+        /// Packed scale-offset table entries.
         scale_offset_table_entries: u16,
+        /// Inverse knot scale.
         one_over_knot_scale: f32,
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u8>,
     },
     /// Format 10: three-component u16 curve.
     D3K16uC16u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for each component.
         control_scales: [f32; 3],
+        /// Control offset for each component.
         control_offsets: [f32; 3],
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u16>,
     },
     /// Format 11: three-component u8 curve.
     D3K8uC8u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for each component.
         control_scales: [f32; 3],
+        /// Control offset for each component.
         control_offsets: [f32; 3],
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u8>,
     },
     /// Format 12: nine-component curve with one scale/offset pair and u16 data.
     D9I1K16uC16u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for all components.
         control_scale: f32,
+        /// Control offset for all components.
         control_offset: f32,
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u16>,
     },
     /// Format 13: nine-component curve with three scale/offset pairs and u16 data.
     D9I3K16uC16u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for each of the three groups.
         control_scales: [f32; 3],
+        /// Control offset for each of the three groups.
         control_offsets: [f32; 3],
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u16>,
     },
     /// Format 14: nine-component curve with one scale/offset pair and u8 data.
     D9I1K8uC8u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for all components.
         control_scale: f32,
+        /// Control offset for all components.
         control_offset: f32,
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u8>,
     },
     /// Format 15: nine-component curve with three scale/offset pairs and u8 data.
     D9I3K8uC8u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for each of the three groups.
         control_scales: [f32; 3],
+        /// Control offset for each of the three groups.
         control_offsets: [f32; 3],
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u8>,
     },
     /// Format 16: three-component identity-interleaved f32 curve.
     D3I1K32fC32f {
+        /// Padding value from the curve header.
         padding: u16,
+        /// Control scale for each component.
         control_scales: [f32; 3],
+        /// Control offset for each component.
         control_offsets: [f32; 3],
+        /// Knots followed by controls.
         knots_controls: Vec<f32>,
     },
     /// Format 17: three-component identity-interleaved u16 curve.
     D3I1K16uC16u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for each component.
         control_scales: [f32; 3],
+        /// Control offset for each component.
         control_offsets: [f32; 3],
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u16>,
     },
     /// Format 18: three-component identity-interleaved u8 curve.
     D3I1K8uC8u {
+        /// Truncated `f32` bits of the inverse knot scale.
         one_over_knot_scale_trunc: u16,
+        /// Control scale for each component.
         control_scales: [f32; 3],
+        /// Control offset for each component.
         control_offsets: [f32; 3],
+        /// Quantized knots followed by quantized controls.
         knots_controls: Vec<u8>,
     },
     /// Opaque payload supplied by a caller for an unknown future format.
-    Unknown { raw: Vec<u8> },
+    Unknown {
+        /// Raw payload bytes.
+        raw: Vec<u8>,
+    },
 }
 
 impl CurvePayload {

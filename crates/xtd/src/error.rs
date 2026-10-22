@@ -20,11 +20,21 @@ pub enum Error {
 
     /// Invalid XTD version.
     #[error("Invalid XTD version: expected {expected:#06X}, got {actual:#06X}")]
-    InvalidVersion { expected: i32, actual: i32 },
+    InvalidVersion {
+        /// Version that the reader supports.
+        expected: i32,
+        /// Version that the data contains.
+        actual: i32,
+    },
 
     /// Invalid XTD ECF file identifier.
     #[error("Invalid XTD file ID: expected {expected:#010X}, got {actual:#010X}")]
-    InvalidFileId { expected: u32, actual: u32 },
+    InvalidFileId {
+        /// File ID that the format requires.
+        expected: u32,
+        /// File ID that the data contains.
+        actual: u32,
+    },
 
     /// Missing required chunk.
     #[error("Missing required chunk: {0:#06X}")]
@@ -36,7 +46,12 @@ pub enum Error {
 
     /// Invalid header size.
     #[error("Invalid header size: expected {expected}, got {actual}")]
-    InvalidHeaderSize { expected: usize, actual: usize },
+    InvalidHeaderSize {
+        /// Header size in bytes that the format requires.
+        expected: usize,
+        /// Header size in bytes that the data contains.
+        actual: usize,
+    },
 
     /// A count, size, or offset cannot be represented safely.
     #[error("{0} is too large for the XTD format")]

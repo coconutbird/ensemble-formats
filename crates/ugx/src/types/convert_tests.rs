@@ -28,7 +28,7 @@ fn test_legacy_to_hogan_produces_al_pattern() {
         "ps_cb_data should be populated from legacy properties"
     );
     // VS CB data stays empty (no height-blend or vertex-anim in standard perms)
-    assert!(hogan.vs_cb_data.is_empty());
+    assert_eq!(hogan.vs_cb_data, Vec::<u8>::new());
 }
 
 #[test]

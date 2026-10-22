@@ -32,6 +32,7 @@ pub struct GltfExportOptions {
 }
 
 impl GltfExportOptions {
+    /// Creates options that enable all export features.
     #[must_use]
     pub fn new() -> Self {
         Self {
